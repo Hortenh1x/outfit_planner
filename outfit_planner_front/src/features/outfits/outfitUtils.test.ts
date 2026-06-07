@@ -1,0 +1,45 @@
+import { describe, expect, it } from 'vitest';
+import { groupGarmentsByCategory, selectionLabel } from './outfitUtils';
+import type { GarmentItem } from '../../types';
+
+const garments: GarmentItem[] = [
+  {
+    id: 'top-1',
+    userId: 'demo-user',
+    name: 'White tee',
+    category: 'Top',
+    bodyZone: 'Torso',
+    imageUrl: '/white-tee.jpg',
+    thumbnailUrl: '/white-tee.jpg',
+    tags: ['cotton'],
+    createdAt: '2026-05-21T12:00:00Z'
+  },
+  {
+    id: 'bottom-1',
+    userId: 'demo-user',
+    name: 'Blue jeans',
+    category: 'Bottom',
+    bodyZone: 'Legs',
+    imageUrl: '/jeans.jpg',
+    thumbnailUrl: '/jeans.jpg',
+    tags: ['denim'],
+    createdAt: '2026-05-21T12:00:00Z'
+  }
+];
+
+describe('outfit builder utilities', () => {
+  it('groups garments into top and bottom slots', () => {
+    const grouped = groupGarmentsByCategory(garments);
+
+    expect(grouped.Top).toHaveLength(1);
+    expect(grouped.Bottom).toHaveLength(1);
+    expect(grouped.Top[0].bodyZone).toBe('Torso');
+    expect(grouped.Bottom[0].bodyZone).toBe('Legs');
+  });
+
+  it('describes incomplete and complete outfit selections', () => {
+    expect(selectionLabel({ topId: undefined, bottomId: undefined }, garments)).toBe('Choose a top and a bottom');
+    expect(selectionLabel({ topId: 'top-1', bottomId: undefined }, garments)).toBe('White tee + choose a bottom');
+    expect(selectionLabel({ topId: 'top-1', bottomId: 'bottom-1' }, garments)).toBe('White tee + Blue jeans');
+  });
+});
