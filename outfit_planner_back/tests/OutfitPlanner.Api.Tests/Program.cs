@@ -20,6 +20,13 @@ var tests = new List<(string Name, Action Test)>
     ("frontend docker config proxies api through same origin", TestFrontendDockerConfigProxiesApiThroughSameOrigin),
     ("postgres store implements application repository ports", TestPostgresStoreImplementsRepositoryPorts),
     ("postgres schema contains tables required by repository ports", TestPostgresSchemaContainsRepositoryTables),
+    ("postgres schema contains production auth tables and indexes", TestPostgresSchemaContainsAuthTables),
+    ("auth service registers email users with hashed passwords and sessions", TestAuthServiceRegistersEmailUsers),
+    ("auth service requires password length digit and letter only", TestAuthServicePasswordPolicy),
+    ("auth service rejects duplicate email registration", TestAuthServiceRejectsDuplicateEmailRegistration),
+    ("auth service signs in existing external accounts and auto-registers missing accounts", TestAuthServiceExternalLoginAutoRegisters),
+    ("auth service revokes session tokens by stored hash", TestAuthServiceRevokesSessionByHash),
+    ("api exposes secure auth endpoints and cookie settings", TestApiExposesSecureAuthEndpoints),
     ("maps garment category to body zone", TestCategoryMapping),
     ("outfit service rejects two garments for the same category", TestDuplicateCategoryRejected),
     ("try-on service requires explicit AI consent before provider call", TestTryOnConsentRequired),
@@ -158,6 +165,121 @@ static void TestPostgresSchemaContainsRepositoryTables()
     {
         AssertTrue(schema.Contains($"create table if not exists {table}", StringComparison.OrdinalIgnoreCase), $"schema should create {table}");
     }
+}
+
+static void TestPostgresSchemaContainsAuthTables()
+{
+    var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "schema.sql"));
+    var schema = File.ReadAllText(schemaPath);
+
+    AssertTrue(schema.Contains("normalized_email", StringComparison.OrdinalIgnoreCase), "users table should store normalized email for unique login lookup.");
+    AssertTrue(schema.Contains("password_hash", StringComparison.OrdinalIgnoreCase), "users table should store password hashes, not plaintext passwords.");
+    AssertTrue(schema.Contains("create table if not exists auth_external_logins", StringComparison.OrdinalIgnoreCase), "schema should store external provider account links.");
+    AssertTrue(schema.Contains("create table if not exists auth_sessions", StringComparison.OrdinalIgnoreCase), "schema should store revocable server-side sessions.");
+    AssertTrue(schema.Contains("token_hash", StringComparison.OrdinalIgnoreCase), "sessions should store a token hash, not raw cookie tokens.");
+    AssertTrue(schema.Contains("csrf_token_hash", StringComparison.OrdinalIgnoreCase), "sessions should bind a CSRF token hash to the session.");
+    AssertTrue(schema.Contains("unique (provider, provider_subject)", StringComparison.OrdinalIgnoreCase), "external logins should be unique per provider subject.");
+}
+
+static void TestAuthServiceRegistersEmailUsers()
+{
+    var store = new InMemoryOutfitStore();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+
+    var result = auth.RegisterWithPassword("Ada@Example.COM", "abc12345", "abc12345");
+
+    AssertEqual("ada@example.com", result.User.Email, "registration should normalize email addresses.");
+    AssertTrue(result.User.Id.StartsWith("usr_", StringComparison.Ordinal), "registered users should receive opaque user ids.");
+    AssertTrue(!string.IsNullOrWhiteSpace(result.SessionToken), "registration should issue a session token.");
+    AssertTrue(!string.IsNullOrWhiteSpace(result.CsrfToken), "registration should issue a CSRF token.");
+    AssertTrue(store.GetUserByNormalizedEmail("ada@example.com")?.PasswordHash?.StartsWith("hashed:", StringComparison.Ordinal) == true, "passwords should be hashed before storage.");
+    AssertTrue(store.GetActiveAuthSessionByTokenHash("hash:session-1", DateTimeOffset.UtcNow) is not null, "session lookup should use the token hash.");
+}
+
+static void TestAuthServicePasswordPolicy()
+{
+    var store = new InMemoryOutfitStore();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+
+    auth.RegisterWithPassword("short-valid@example.com", "abc12345", "abc12345");
+
+    AssertThrows<InvalidOperationException>(
+        () => auth.RegisterWithPassword("short@example.com", "abc1234", "abc1234"),
+        "passwords shorter than eight characters must be rejected");
+    AssertThrows<InvalidOperationException>(
+        () => auth.RegisterWithPassword("digits@example.com", "12345678", "12345678"),
+        "passwords without a letter must be rejected");
+    AssertThrows<InvalidOperationException>(
+        () => auth.RegisterWithPassword("letters@example.com", "abcdefgh", "abcdefgh"),
+        "passwords without a digit must be rejected");
+}
+
+static void TestAuthServiceRejectsDuplicateEmailRegistration()
+{
+    var store = new InMemoryOutfitStore();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+
+    auth.RegisterWithPassword("ada@example.com", "abc12345", "abc12345");
+
+    AssertThrows<InvalidOperationException>(
+        () => auth.RegisterWithPassword("ADA@example.com", "abc12345", "abc12345"),
+        "duplicate normalized emails must be rejected");
+}
+
+static void TestAuthServiceExternalLoginAutoRegisters()
+{
+    var store = new InMemoryOutfitStore();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+
+    var first = auth.SignInWithExternalAccount(new ExternalSignInCommand(
+        "google",
+        "google-subject-1",
+        "grace@example.com",
+        EmailVerified: true,
+        "Grace Hopper"));
+    var second = auth.SignInWithExternalAccount(new ExternalSignInCommand(
+        "google",
+        "google-subject-1",
+        "grace@example.com",
+        EmailVerified: true,
+        "Grace Hopper"));
+    var apple = auth.SignInWithExternalAccount(new ExternalSignInCommand(
+        "apple",
+        "apple-subject-1",
+        "grace@example.com",
+        EmailVerified: true,
+        "Grace Hopper"));
+
+    AssertEqual(first.User.Id, second.User.Id, "known external accounts should sign in to the existing user.");
+    AssertEqual(first.User.Id, apple.User.Id, "verified external email should link to an existing account instead of duplicating it.");
+    AssertTrue(store.GetExternalLogin("google", "google-subject-1") is not null, "google external login should be stored.");
+    AssertTrue(store.GetExternalLogin("apple", "apple-subject-1") is not null, "apple external login should be stored.");
+}
+
+static void TestAuthServiceRevokesSessionByHash()
+{
+    var store = new InMemoryOutfitStore();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+    var result = auth.RegisterWithPassword("session@example.com", "abc12345", "abc12345");
+
+    auth.RevokeSession(result.SessionToken);
+
+    AssertTrue(store.GetActiveAuthSessionByTokenHash("hash:session-1", DateTimeOffset.UtcNow) is null, "revoked sessions should no longer authenticate.");
+}
+
+static void TestApiExposesSecureAuthEndpoints()
+{
+    var programPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "OutfitPlanner.Api", "Program.cs"));
+    var program = File.ReadAllText(programPath);
+
+    AssertTrue(program.Contains("/auth/register", StringComparison.Ordinal), "api should expose email registration.");
+    AssertTrue(program.Contains("/auth/login", StringComparison.Ordinal), "api should expose email login.");
+    AssertTrue(program.Contains("/auth/logout", StringComparison.Ordinal), "api should expose logout.");
+    AssertTrue(program.Contains("/auth/me", StringComparison.Ordinal), "api should expose current user session.");
+    AssertTrue(program.Contains("/auth/external/{provider}/start", StringComparison.Ordinal), "api should expose OAuth/OIDC start endpoints.");
+    AssertTrue(program.Contains("HttpOnly = true", StringComparison.Ordinal), "session cookies should be HttpOnly.");
+    AssertTrue(program.Contains("SameSite = SameSiteMode.Lax", StringComparison.Ordinal), "auth cookies should use SameSite=Lax.");
+    AssertTrue(program.Contains("X-CSRF-Token", StringComparison.Ordinal), "mutating authenticated requests should require a CSRF header.");
 }
 
 static void TestDuplicateCategoryRejected()
@@ -582,6 +704,45 @@ sealed class CountingPhotoStorage : IPhotoStorage
     {
         Calls++;
         return new StoredPhoto("test.jpg", photo.ContentType, photo.Length, "/uploads/body-reference-photos/test.jpg");
+    }
+}
+
+sealed class TestPasswordHasher : IPasswordHasher
+{
+    public string HashPassword(string password)
+    {
+        return $"hashed:{password}";
+    }
+
+    public bool VerifyPassword(string passwordHash, string password)
+    {
+        return passwordHash == $"hashed:{password}";
+    }
+}
+
+sealed class TestAuthTokenService : IAuthTokenService
+{
+    private int _nextToken = 1;
+
+    public string CreateToken()
+    {
+        return _nextToken++ switch
+        {
+            1 => "session-1",
+            2 => "csrf-1",
+            3 => "session-2",
+            4 => "csrf-2",
+            5 => "session-3",
+            6 => "csrf-3",
+            7 => "session-4",
+            8 => "csrf-4",
+            _ => $"token-{_nextToken}"
+        };
+    }
+
+    public string HashToken(string token)
+    {
+        return $"hash:{token}";
     }
 }
 

@@ -13,7 +13,9 @@ The app is intentionally small, but it has a real backend/frontend split, local 
 - Clothes-only and generated person preview modes.
 - Calendar planning with one outfit per user and day.
 - Share links for saved outfits.
-- Demo identity through the `X-Demo-User` header.
+- Secure account registration and sign-in with email/password.
+- Google OAuth and Apple OIDC sign-in when provider credentials are configured.
+- Revocable server-side sessions with HttpOnly cookies and CSRF protection.
 - Mock AI try-on by default, optional FASHN `tryon-v1.6` integration.
 
 ## Tech Stack
@@ -62,8 +64,8 @@ The backend follows inward dependencies:
 
 - `OutfitPlanner.Domain` contains entities, enums, and domain rules.
 - `OutfitPlanner.Application` contains use-case services and repository/provider abstractions.
-- `OutfitPlanner.Infrastructure` implements PostgreSQL storage, local photo storage, clocks, share token generation, and try-on providers.
-- `OutfitPlanner.Api` wires dependencies, JSON/CORS/upload limits, routes, diagnostics, and the current demo-user header.
+- `OutfitPlanner.Infrastructure` implements PostgreSQL storage, local photo storage, clocks, password hashing, auth token hashing, share token generation, and try-on providers.
+- `OutfitPlanner.Api` wires dependencies, JSON/CORS/upload limits, routes, diagnostics, secure auth cookies, OAuth/OIDC callbacks, and CSRF enforcement.
 
 The API chooses storage at startup:
 
@@ -75,6 +77,14 @@ The frontend uses a same-origin API path by default:
 - `VITE_API_URL` defaults to `/api`.
 - Vite proxies `/api` and `/uploads` to `VITE_DEV_API_TARGET` or `http://localhost:5000`.
 - The production Docker frontend builds with `VITE_API_URL=/api` and nginx proxies `/api/` and `/uploads/` to the API service.
+
+Authentication is cookie-backed:
+
+- Email/password registration and sign-in create an opaque server-side session.
+- Session cookie `outfit_session` is HttpOnly, SameSite=Lax, and Secure outside development.
+- CSRF cookie `outfit_csrf` is readable by the frontend and must be echoed as `X-CSRF-Token` on mutating authenticated API requests.
+- Google and Apple sign-in start from backend challenge endpoints and complete through backend callbacks. If the external account is new, the API creates it automatically. If the provider returns a verified email that already exists, the external login is linked to that user.
+- All private `/api` routes require a valid session. `/api/health`, `/api/system/status`, `/api/auth/*`, and `/api/share/{token}` remain public.
 
 The frontend visual system is High-Fidelity Claymorphism:
 
@@ -181,6 +191,10 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `Fashn__PollIntervalSeconds` | `2` | Delay between status polls. |
 | `Fashn__TimeoutSeconds` | `180` | HTTP client timeout. |
 | `DetailedErrors` | environment-dependent | Enables structured exception details in dev/test diagnostics. |
+| `Authentication__Google__ClientId` | empty | Enables Google OAuth when paired with `Authentication__Google__ClientSecret`. |
+| `Authentication__Google__ClientSecret` | empty | Google OAuth client secret. |
+| `Authentication__Apple__ClientId` | empty | Enables Apple OIDC when paired with `Authentication__Apple__ClientSecret`. |
+| `Authentication__Apple__ClientSecret` | empty | Apple OIDC client secret JWT generated from Apple developer credentials. |
 
 Frontend configuration:
 
@@ -207,15 +221,23 @@ The FASHN provider submits to `/run` and polls `/status/{id}`. A single-garment 
 
 All API routes below are under `/api` unless noted. JSON enum values are serialized as strings.
 
+Private routes require the `outfit_session` cookie. Mutating private routes also require the `X-CSRF-Token` header matching the `outfit_csrf` cookie.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/health` | Basic API health check. |
 | `GET` | `/system/status` | API, storage, PostgreSQL, and AI provider status. |
-| `GET` | `/auth/providers` | Demo auth capability metadata. |
-| `GET` | `/body-reference-photos` | List body reference photos for the current demo user. |
+| `GET` | `/auth/providers` | Email, Google, and Apple auth provider metadata. |
+| `POST` | `/auth/register` | Create an email/password account and issue auth cookies. |
+| `POST` | `/auth/login` | Sign in with email/password and issue auth cookies. |
+| `POST` | `/auth/logout` | Revoke the current session and clear auth cookies. |
+| `GET` | `/auth/me` | Read the current authenticated user session. |
+| `GET` | `/auth/external/{provider}/start` | Start Google or Apple auth with `returnUrl`. |
+| `GET` | `/auth/external/{provider}/callback` | Complete backend OAuth/OIDC callback and issue auth cookies. |
+| `GET` | `/body-reference-photos` | List body reference photos for the current user. |
 | `POST` | `/body-reference-photos` | Register an already uploaded body reference photo URL. |
 | `DELETE` | `/body-reference-photos/{photoId}` | Delete a body reference photo and its stored file when local. |
-| `GET` | `/garments` | List garments for the current demo user. |
+| `GET` | `/garments` | List garments for the current user. |
 | `POST` | `/garments` | Create a garment. |
 | `DELETE` | `/garments/{garmentId}` | Delete a garment and its stored file when local. |
 | `POST` | `/uploads/garment-photo` | Multipart garment photo upload. |
@@ -231,7 +253,7 @@ All API routes below are under `/api` unless noted. JSON enum values are seriali
 | `GET` | `/uploads/garments/{fileName}` | Serve uploaded garment files. This route is outside `/api`. |
 | `GET` | `/uploads/body-reference-photos/{fileName}` | Serve uploaded body reference files. This route is outside `/api`. |
 
-The current user is selected from `X-Demo-User`. Missing or invalid values fall back to `demo-user`.
+The current user is resolved from the server-side auth session, not from a browser-supplied user header.
 
 ## Verification
 
@@ -262,10 +284,10 @@ docker compose -f docker-compose.dev.yml up -d --build
 Invoke-RestMethod http://localhost:5000/api/health
 ```
 
-## Current Demo Boundaries
+## Current Boundaries
 
-- Google OAuth is represented as an API capability placeholder; real auth is not implemented.
-- Demo identity uses a sanitized `X-Demo-User` header.
+- Google and Apple auth require provider credentials. Email/password auth works without external secrets.
+- Password registration requires at least 8 characters, at least one letter, and at least one digit.
 - Uploaded files are stored on local disk, not MinIO. MinIO is present as an infrastructure placeholder.
 - PostgreSQL schema creation is startup-time schema initialization, not a full migration system.
 - Only `Top` and `Bottom` garment categories are supported.

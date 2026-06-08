@@ -58,3 +58,30 @@ public sealed record ShareLink(
     Guid OutfitId,
     DateTimeOffset CreatedAt,
     DateTimeOffset? RevokedAt);
+
+public sealed record UserAccount(
+    string Id,
+    string? Email,
+    string? NormalizedEmail,
+    string DisplayName,
+    string? PasswordHash,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? LastLoginAt);
+
+public sealed record ExternalAuthLogin(
+    string Provider,
+    string ProviderSubject,
+    string UserId,
+    string? Email,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset LastLoginAt);
+
+public sealed record AuthSession(
+    Guid Id,
+    string UserId,
+    string TokenHash,
+    string CsrfTokenHash,
+    DateTimeOffset ExpiresAt,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? RevokedAt);

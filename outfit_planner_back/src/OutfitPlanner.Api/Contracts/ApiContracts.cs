@@ -20,3 +20,13 @@ public sealed record StartTryOnRequest(string BodyReferencePhotoUrl, bool Consen
 public sealed record ShareLinkResponse(string Token, string Url);
 
 public sealed record UploadedPhotoResponse(string FileName, string ContentType, long Length, string Url);
+
+public sealed record RegisterRequest(string Email, string Password, string RepeatPassword);
+
+public sealed record LoginRequest(string Email, string Password);
+
+public sealed record AuthUserResponse(string Id, string? Email, string DisplayName);
+
+public sealed record AuthSessionResponse(AuthUserResponse User, DateTimeOffset ExpiresAt);
+
+public sealed record AuthProviderResponse(string Id, string Label, bool Configured, string Flow);

@@ -1,51 +1,56 @@
 import { type ChangeEvent, type CSSProperties, type ReactNode, useEffect, useMemo, useState } from 'react';
-import { Link, NavLink, Route, Routes, useParams } from 'react-router-dom';
+import { Link, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addMonths, format, isToday, subMonths } from 'date-fns';
 import {
-  Activity,
-  BadgeCheck,
   CalendarDays,
   Camera,
   Check,
   ChevronLeft,
   ChevronRight,
-  Database,
   Eye,
   GitBranch,
   Heart,
   ImagePlus,
   Layers3,
   Link2,
+  LogIn,
+  LogOut,
   Plus,
+  ShieldCheck,
   ScanFace,
   Shirt,
   Sparkles,
   Trash2,
+  UserPlus,
   Upload,
   Wand2
 } from 'lucide-react';
 import {
+  buildExternalAuthUrl,
   createBodyReferencePhoto,
   createGarment,
   createOutfit,
   deleteBodyReferencePhoto,
   deleteGarment,
+  getCurrentSession,
   getAuthProviders,
-  getHealth,
   getSharedOutfit,
-  getSystemStatus,
   getTryOnJob,
   listBodyReferencePhotos,
   listGarments,
   listOutfits,
   listSchedule,
+  login,
+  logout,
+  register,
   scheduleOutfit,
   shareOutfit,
   startTryOn,
   uploadBodyReferencePhoto,
   uploadGarmentPhoto
 } from './api/client';
+import type { AuthProvider, AuthUser } from './api/client';
 import { ModeToggle } from './components/ModeToggle';
 import { ThemeToggle, type ThemeMode } from './components/ThemeToggle';
 import { buildMonthCalendar, weekDayLabels } from './features/calendar/calendarUtils';
@@ -56,13 +61,20 @@ import type { BodyReferencePhoto, GarmentCategory, GarmentItem, Outfit, OutfitSe
 const headingStyle: CSSProperties = { fontFamily: 'Nunito, sans-serif' };
 
 function App() {
+  const queryClient = useQueryClient();
   const [theme, setTheme] = useState<ThemeMode>(() => {
     const storedTheme = localStorage.getItem('outfit-planner-theme');
     return storedTheme === 'dark' ? 'dark' : 'light';
   });
-  const healthQuery = useQuery({ queryKey: ['health'], queryFn: getHealth, retry: 1 });
-  const systemQuery = useQuery({ queryKey: ['system-status'], queryFn: getSystemStatus, retry: 1 });
   const authProvidersQuery = useQuery({ queryKey: ['auth-providers'], queryFn: getAuthProviders, retry: 1 });
+  const sessionQuery = useQuery({ queryKey: ['auth-session'], queryFn: getCurrentSession, retry: false });
+  const logoutMutation = useMutation({
+    mutationFn: logout,
+    onSuccess: () => {
+      queryClient.setQueryData(['auth-session'], null);
+      void queryClient.invalidateQueries();
+    }
+  });
 
   useEffect(() => {
     localStorage.setItem('outfit-planner-theme', theme);
@@ -93,17 +105,18 @@ function App() {
             <span>Calendar</span>
           </NavLink>
         </nav>
-        <SystemRibbon
-          healthStatus={healthQuery.data?.status}
-          storage={systemQuery.data?.storage}
-          aiProvider={systemQuery.data?.aiProvider}
-          authLabel={authProvidersQuery.data?.[0]?.label}
+        <AuthActions
+          user={sessionQuery.data?.user}
+          isSigningOut={logoutMutation.isPending}
+          onLogout={() => logoutMutation.mutate()}
         />
         <ThemeToggle theme={theme} onChange={setTheme} />
       </aside>
       <main className="main-panel">
         <Routes>
           <Route path="/" element={<BuilderPage />} />
+          <Route path="/signin" element={<AuthPage mode="signin" providers={authProvidersQuery.data ?? []} />} />
+          <Route path="/register" element={<AuthPage mode="register" providers={authProvidersQuery.data ?? []} />} />
           <Route path="/wardrobe" element={<WardrobePage />} />
           <Route path="/builder" element={<BuilderPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
@@ -125,46 +138,152 @@ function ClayBlobs() {
   );
 }
 
-function SystemRibbon({
-  healthStatus,
-  storage,
-  aiProvider,
-  authLabel
+function AuthActions({
+  user,
+  isSigningOut,
+  onLogout
 }: {
-  healthStatus?: string;
-  storage?: string;
-  aiProvider?: string;
-  authLabel?: string;
+  user?: AuthUser | null;
+  isSigningOut: boolean;
+  onLogout: () => void;
 }) {
+  if (user) {
+    return (
+      <section className="auth-actions signed-in" aria-label="Account">
+        <div className="auth-user-pill">
+          <span>
+            <ShieldCheck size={17} />
+          </span>
+          <div>
+            <small style={headingStyle}>Signed in</small>
+            <strong style={headingStyle}>{user.email ?? user.displayName}</strong>
+          </div>
+        </div>
+        <button type="button" className="auth-nav-action" disabled={isSigningOut} onClick={onLogout}>
+          <LogOut size={17} />
+          <span>{isSigningOut ? 'Signing out' : 'Sign out'}</span>
+        </button>
+      </section>
+    );
+  }
+
   return (
-    <section className="system-ribbon" aria-label="System status">
-      <StatusChip icon={<Activity size={15} />} label="API" value={healthStatus ?? 'checking'} tone="violet" />
-      <StatusChip icon={<Database size={15} />} label="Store" value={storage ?? 'loading'} tone="blue" />
-      <StatusChip icon={<Sparkles size={15} />} label="AI" value={aiProvider ?? 'mock'} tone="pink" />
-      <StatusChip icon={<BadgeCheck size={15} />} label="Auth" value={authLabel ?? 'demo'} tone="green" />
+    <section className="auth-actions" aria-label="Authentication">
+      <NavLink to="/signin" className="auth-nav-action">
+        <LogIn size={17} />
+        <span>Sign in</span>
+      </NavLink>
+      <NavLink to="/register" className="auth-nav-action register-action">
+        <UserPlus size={17} />
+        <span>Register</span>
+      </NavLink>
     </section>
   );
 }
 
-function StatusChip({
-  icon,
-  label,
-  value,
-  tone
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  tone: 'violet' | 'blue' | 'pink' | 'green';
-}) {
+function AuthPage({ mode, providers }: { mode: 'signin' | 'register'; providers: AuthProvider[] }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState({ email: '', password: '', repeatPassword: '' });
+  const authMutation = useMutation({
+    mutationFn: () => mode === 'register'
+      ? register({ email: form.email, password: form.password, repeatPassword: form.repeatPassword })
+      : login({ email: form.email, password: form.password }),
+    onSuccess: (session) => {
+      queryClient.setQueryData(['auth-session'], session);
+      void queryClient.invalidateQueries();
+      navigate('/builder');
+    }
+  });
+  const title = mode === 'register' ? 'Register' : 'Sign in';
+  const alternate = mode === 'register'
+    ? { to: '/signin', label: 'Sign in' }
+    : { to: '/register', label: 'Register' };
+  const googleProvider = providers.find((provider) => provider.id === 'google');
+  const appleProvider = providers.find((provider) => provider.id === 'apple');
+
   return (
-    <div className={`status-chip ${tone}`}>
-      <span>{icon}</span>
-      <div>
-        <small style={headingStyle}>{label}</small>
-        <strong style={headingStyle}>{value}</strong>
+    <section className="auth-page">
+      <div className="auth-card">
+        <PanelTitle icon={mode === 'register' ? <UserPlus size={19} /> : <LogIn size={19} />} title={title} />
+        <form
+          className="stack"
+          onSubmit={(event) => {
+            event.preventDefault();
+            authMutation.mutate();
+          }}
+        >
+          <label>
+            <span>Email</span>
+            <input
+              type="email"
+              autoComplete="email"
+              value={form.email}
+              onChange={(event) => setForm({ ...form, email: event.target.value })}
+              required
+            />
+          </label>
+          <label>
+            <span>Password</span>
+            <input
+              type="password"
+              autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+              minLength={8}
+              pattern={mode === 'register' ? '^(?=.*[A-Za-z])(?=.*\\d).{8,}$' : undefined}
+              title={mode === 'register' ? 'Use at least 8 characters with at least one letter and one digit.' : undefined}
+              value={form.password}
+              onChange={(event) => setForm({ ...form, password: event.target.value })}
+              required
+            />
+          </label>
+          {mode === 'register' ? (
+            <label>
+              <span>Repeat password</span>
+              <input
+                type="password"
+                autoComplete="new-password"
+                minLength={8}
+                pattern="^(?=.*[A-Za-z])(?=.*\d).{8,}$"
+                title="Use at least 8 characters with at least one letter and one digit."
+                value={form.repeatPassword}
+                onChange={(event) => setForm({ ...form, repeatPassword: event.target.value })}
+                required
+              />
+            </label>
+          ) : null}
+          <button type="submit" className="clay-button primary-action" disabled={authMutation.isPending}>
+            {mode === 'register' ? <UserPlus size={16} /> : <LogIn size={16} />}
+            {authMutation.isPending ? 'Working' : title}
+          </button>
+          {authMutation.error ? <p className="error">{authMutation.error.message}</p> : null}
+        </form>
+
+        <div className="external-auth-actions">
+          <button
+            type="button"
+            className="oauth-button"
+            disabled={!googleProvider?.configured}
+            onClick={() => window.location.assign(buildExternalAuthUrl('google', '/builder'))}
+          >
+            <span>G</span>
+            Google
+          </button>
+          <button
+            type="button"
+            className="oauth-button"
+            disabled={!appleProvider?.configured}
+            onClick={() => window.location.assign(buildExternalAuthUrl('apple', '/builder'))}
+          >
+            <span>A</span>
+            Apple
+          </button>
+        </div>
+
+        <Link className="auth-switch-link" to={alternate.to}>
+          {alternate.label}
+        </Link>
       </div>
-    </div>
+    </section>
   );
 }
 

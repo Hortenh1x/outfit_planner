@@ -5,12 +5,23 @@ using OutfitPlanner.Infrastructure.Diagnostics;
 using OutfitPlanner.Infrastructure.Security;
 using OutfitPlanner.Infrastructure.Storage;
 using OutfitPlanner.Infrastructure.TryOn;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.OAuth;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Http.Features;
 using Npgsql;
+using System.Net.Http.Headers;
+using System.Security.Claims;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 const long MaxUploadRequestBytes = PhotoUploadService.MaxPhotoBytes * 2;
+const string SessionCookieName = "outfit_session";
+const string CsrfCookieName = "outfit_csrf";
+const string ExternalAuthCookieScheme = "outfit_external";
+const string CurrentUserItemKey = "outfit.current_user_id";
+const string CsrfHeaderName = "X-CSRF-Token";
 
 builder.WebHost.ConfigureKestrel(options =>
 {
@@ -36,12 +47,82 @@ builder.Services.AddCors(options =>
                 "http://127.0.0.1:5173",
                 "http://localhost:4173",
                 "http://127.0.0.1:4173")
+            .AllowCredentials()
             .AllowAnyHeader()
             .AllowAnyMethod());
 });
 
-builder.Services.AddSingleton<IClock, SystemClock>();
+builder.Services.AddSingleton<IClock, OutfitPlanner.Infrastructure.Security.SystemClock>();
 builder.Services.AddSingleton<IShareTokenGenerator, SecureShareTokenGenerator>();
+builder.Services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
+builder.Services.AddSingleton<IAuthTokenService, SecureAuthTokenService>();
+var authenticationBuilder = builder.Services.AddAuthentication();
+authenticationBuilder.AddCookie(ExternalAuthCookieScheme, options =>
+{
+    options.Cookie.Name = ExternalAuthCookieScheme;
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SameSite = SameSiteMode.Lax;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+    options.ExpireTimeSpan = TimeSpan.FromMinutes(10);
+});
+
+var googleClientId = builder.Configuration["Authentication:Google:ClientId"];
+var googleClientSecret = builder.Configuration["Authentication:Google:ClientSecret"];
+var googleConfigured = !string.IsNullOrWhiteSpace(googleClientId) && !string.IsNullOrWhiteSpace(googleClientSecret);
+if (googleConfigured)
+{
+    authenticationBuilder.AddOAuth("google", options =>
+    {
+        options.ClientId = googleClientId!;
+        options.ClientSecret = googleClientSecret!;
+        options.SignInScheme = ExternalAuthCookieScheme;
+        options.CallbackPath = "/api/auth/external/google/callback";
+        options.AuthorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
+        options.TokenEndpoint = "https://oauth2.googleapis.com/token";
+        options.UserInformationEndpoint = "https://openidconnect.googleapis.com/v1/userinfo";
+        options.Scope.Add("openid");
+        options.Scope.Add("email");
+        options.Scope.Add("profile");
+        options.ClaimActions.MapJsonKey(ClaimTypes.NameIdentifier, "sub");
+        options.ClaimActions.MapJsonKey(ClaimTypes.Email, "email");
+        options.ClaimActions.MapJsonKey(ClaimTypes.Name, "name");
+        options.ClaimActions.MapJsonKey("email_verified", "email_verified");
+        options.Events = new OAuthEvents
+        {
+            OnCreatingTicket = async context =>
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, context.Options.UserInformationEndpoint);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", context.AccessToken);
+                using var response = await context.Backchannel.SendAsync(request, context.HttpContext.RequestAborted);
+                response.EnsureSuccessStatusCode();
+                using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync(context.HttpContext.RequestAborted));
+                context.RunClaimActions(payload.RootElement);
+            }
+        };
+    });
+}
+
+var appleClientId = builder.Configuration["Authentication:Apple:ClientId"];
+var appleClientSecret = builder.Configuration["Authentication:Apple:ClientSecret"];
+var appleConfigured = !string.IsNullOrWhiteSpace(appleClientId) && !string.IsNullOrWhiteSpace(appleClientSecret);
+if (appleConfigured)
+{
+    authenticationBuilder.AddOpenIdConnect("apple", options =>
+    {
+        options.Authority = "https://appleid.apple.com";
+        options.ClientId = appleClientId!;
+        options.ClientSecret = appleClientSecret!;
+        options.SignInScheme = ExternalAuthCookieScheme;
+        options.CallbackPath = "/api/auth/external/apple/callback";
+        options.ResponseType = "code";
+        options.Scope.Clear();
+        options.Scope.Add("openid");
+        options.Scope.Add("email");
+        options.Scope.Add("name");
+        options.SaveTokens = false;
+        options.GetClaimsFromUserInfoEndpoint = false;
+    });
+}
 builder.Services.AddHttpClient("fashn", client =>
 {
     client.BaseAddress = new Uri(builder.Configuration["Fashn:BaseUrl"] ?? "https://api.fashn.ai/v1/");
@@ -85,6 +166,7 @@ if (storageProvider == "Postgres")
     builder.Services.AddSingleton<IOutfitScheduleRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
     builder.Services.AddSingleton<ITryOnJobRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
     builder.Services.AddSingleton<IShareLinkRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
+    builder.Services.AddSingleton<IUserAccountRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
 }
 else
 {
@@ -95,6 +177,7 @@ else
     builder.Services.AddSingleton<IOutfitScheduleRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
     builder.Services.AddSingleton<ITryOnJobRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
     builder.Services.AddSingleton<IShareLinkRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
+    builder.Services.AddSingleton<IUserAccountRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
 }
 builder.Services.AddSingleton<WardrobeService>();
 builder.Services.AddSingleton<PhotoUploadService>();
@@ -102,6 +185,7 @@ builder.Services.AddSingleton<OutfitService>();
 builder.Services.AddSingleton<ScheduleService>();
 builder.Services.AddSingleton<TryOnService>();
 builder.Services.AddSingleton<ShareService>();
+builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<PostgresConnectionProbe>();
 
 var app = builder.Build();
@@ -151,6 +235,40 @@ app.Use(async (context, next) =>
 });
 
 app.UseCors();
+app.UseAuthentication();
+app.Use(async (context, next) =>
+{
+    if (!RequiresAuthenticatedUser(context))
+    {
+        await next(context);
+        return;
+    }
+
+    var auth = context.RequestServices.GetRequiredService<AuthService>();
+    var sessionToken = context.Request.Cookies[SessionCookieName];
+    var requireCsrf = RequiresCsrfToken(context.Request);
+    var session = auth.AuthenticateSession(
+        sessionToken,
+        requireCsrf ? context.Request.Headers[CsrfHeaderName].ToString() : null,
+        requireCsrf);
+
+    if (session is null)
+    {
+        if (requireCsrf && auth.AuthenticateSession(sessionToken, null, requireCsrf: false) is not null)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await Results.Json(new { error = "CSRF token is required for this request." }).ExecuteAsync(context);
+            return;
+        }
+
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await Results.Json(new { error = "Authentication is required." }).ExecuteAsync(context);
+        return;
+    }
+
+    context.Items[CurrentUserItemKey] = session.User.Id;
+    await next(context);
+});
 
 var api = app.MapGroup("/api");
 
@@ -170,8 +288,107 @@ api.MapGet("/system/status", async (PostgresConnectionProbe postgres, Cancellati
 
 api.MapGet("/auth/providers", () => Results.Ok(new[]
 {
-    new { id = "google", label = "Google OAuth", configured = false, demoHeader = "X-Demo-User" }
+    new AuthProviderResponse("email", "Email", true, "password"),
+    new AuthProviderResponse("google", "Google", googleConfigured, "oauth"),
+    new AuthProviderResponse("apple", "Apple", appleConfigured, "oidc")
 }));
+
+api.MapPost("/auth/register", (RegisterRequest request, AuthService auth, HttpContext context) =>
+{
+    try
+    {
+        var result = auth.RegisterWithPassword(request.Email, request.Password, request.RepeatPassword);
+        IssueAuthCookies(context, result, app.Environment);
+        return Results.Ok(ToAuthSessionResponse(result));
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+api.MapPost("/auth/login", (LoginRequest request, AuthService auth, HttpContext context) =>
+{
+    try
+    {
+        var result = auth.SignInWithPassword(request.Email, request.Password);
+        IssueAuthCookies(context, result, app.Environment);
+        return Results.Ok(ToAuthSessionResponse(result));
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+api.MapPost("/auth/logout", (AuthService auth, HttpContext context) =>
+{
+    auth.RevokeSession(context.Request.Cookies[SessionCookieName]);
+    ClearAuthCookies(context, app.Environment);
+    return Results.Ok(new { status = "signed-out" });
+});
+
+api.MapGet("/auth/me", (AuthService auth, HttpContext context) =>
+{
+    var session = auth.AuthenticateSession(context.Request.Cookies[SessionCookieName], null, requireCsrf: false);
+    return session is null ? Results.Unauthorized() : Results.Ok(ToAuthSessionResponseFromSession(session));
+});
+
+api.MapGet("/auth/external/{provider}/start", (string provider, string? returnUrl) =>
+{
+    if (!TryNormalizeExternalProvider(provider, out var normalizedProvider))
+    {
+        return Results.BadRequest(new { error = "Unsupported external auth provider." });
+    }
+
+    if (!IsExternalProviderConfigured(normalizedProvider, googleConfigured, appleConfigured))
+    {
+        return Results.BadRequest(new { error = $"{normalizedProvider} authentication is not configured." });
+    }
+
+    var safeReturnUrl = NormalizeReturnUrl(returnUrl);
+    var properties = new AuthenticationProperties
+    {
+        RedirectUri = $"/api/auth/external/{normalizedProvider}/callback?returnUrl={Uri.EscapeDataString(safeReturnUrl)}"
+    };
+
+    return Results.Challenge(properties, new[] { normalizedProvider });
+});
+
+api.MapGet("/auth/external/{provider}/callback", async (string provider, string? returnUrl, AuthService auth, HttpContext context) =>
+{
+    if (!TryNormalizeExternalProvider(provider, out var normalizedProvider))
+    {
+        return Results.BadRequest(new { error = "Unsupported external auth provider." });
+    }
+
+    var external = await context.AuthenticateAsync(ExternalAuthCookieScheme);
+    if (!external.Succeeded || external.Principal is null)
+    {
+        return Results.BadRequest(new { error = "External authentication did not complete." });
+    }
+
+    var subject = external.Principal.FindFirstValue(ClaimTypes.NameIdentifier)
+        ?? external.Principal.FindFirstValue("sub");
+    if (string.IsNullOrWhiteSpace(subject))
+    {
+        return Results.BadRequest(new { error = "External authentication did not return a stable subject." });
+    }
+
+    var email = external.Principal.FindFirstValue(ClaimTypes.Email);
+    var displayName = external.Principal.FindFirstValue(ClaimTypes.Name);
+    var emailVerified = IsExternalEmailVerified(external.Principal);
+    var result = auth.SignInWithExternalAccount(new ExternalSignInCommand(
+        normalizedProvider,
+        subject,
+        email,
+        emailVerified,
+        displayName));
+
+    await context.SignOutAsync(ExternalAuthCookieScheme);
+    IssueAuthCookies(context, result, app.Environment);
+    return Results.Redirect(NormalizeReturnUrl(returnUrl));
+});
 
 api.MapPost("/body-reference-photos", (CreateBodyReferencePhotoRequest request, WardrobeService wardrobe, HttpContext context) =>
 {
@@ -400,20 +617,120 @@ static async Task<IResult> UploadPhoto(HttpRequest request, ILogger logger, stri
 
 static string CurrentUser(HttpContext context)
 {
-    if (!context.Request.Headers.TryGetValue("X-Demo-User", out var header))
+    return context.Items.TryGetValue(CurrentUserItemKey, out var userId) && userId is string value
+        ? value
+        : throw new InvalidOperationException("Authenticated user was not resolved for this request.");
+}
+
+static bool RequiresAuthenticatedUser(HttpContext context)
+{
+    if (!context.Request.Path.StartsWithSegments("/api", out var remaining))
     {
-        return "demo-user";
+        return false;
     }
 
-    var candidate = header.ToString().Trim();
-    if (candidate.Length is < 1 or > 100)
+    var path = remaining.Value ?? "";
+    return !path.Equals("/health", StringComparison.OrdinalIgnoreCase)
+        && !path.Equals("/system/status", StringComparison.OrdinalIgnoreCase)
+        && !path.StartsWith("/auth/", StringComparison.OrdinalIgnoreCase)
+        && !path.StartsWith("/share/", StringComparison.OrdinalIgnoreCase);
+}
+
+static bool RequiresCsrfToken(HttpRequest request)
+{
+    return !HttpMethods.IsGet(request.Method)
+        && !HttpMethods.IsHead(request.Method)
+        && !HttpMethods.IsOptions(request.Method);
+}
+
+static void IssueAuthCookies(HttpContext context, AuthResult result, IWebHostEnvironment environment)
+{
+    context.Response.Cookies.Append(SessionCookieName, result.SessionToken, SessionCookieOptions(result.ExpiresAt, environment));
+    context.Response.Cookies.Append(CsrfCookieName, result.CsrfToken, CsrfCookieOptions(result.ExpiresAt, environment));
+}
+
+static void ClearAuthCookies(HttpContext context, IWebHostEnvironment environment)
+{
+    context.Response.Cookies.Delete(SessionCookieName, SessionCookieOptions(DateTimeOffset.UnixEpoch, environment));
+    context.Response.Cookies.Delete(CsrfCookieName, CsrfCookieOptions(DateTimeOffset.UnixEpoch, environment));
+}
+
+static CookieOptions SessionCookieOptions(DateTimeOffset expiresAt, IWebHostEnvironment environment)
+{
+    return new CookieOptions
     {
-        return "demo-user";
+        HttpOnly = true,
+        Secure = !environment.IsDevelopment(),
+        SameSite = SameSiteMode.Lax,
+        Expires = expiresAt,
+        Path = "/"
+    };
+}
+
+static CookieOptions CsrfCookieOptions(DateTimeOffset expiresAt, IWebHostEnvironment environment)
+{
+    return new CookieOptions
+    {
+        HttpOnly = false,
+        Secure = !environment.IsDevelopment(),
+        SameSite = SameSiteMode.Lax,
+        Expires = expiresAt,
+        Path = "/"
+    };
+}
+
+static AuthSessionResponse ToAuthSessionResponse(AuthResult result)
+{
+    return new AuthSessionResponse(ToAuthUserResponse(result.User), result.ExpiresAt);
+}
+
+static AuthSessionResponse ToAuthSessionResponseFromSession(AuthenticatedSession session)
+{
+    return new AuthSessionResponse(ToAuthUserResponse(session.User), session.ExpiresAt);
+}
+
+static AuthUserResponse ToAuthUserResponse(PublicUser user)
+{
+    return new AuthUserResponse(user.Id, user.Email, user.DisplayName);
+}
+
+static bool TryNormalizeExternalProvider(string provider, out string normalizedProvider)
+{
+    normalizedProvider = provider.Trim().ToLowerInvariant();
+    if (normalizedProvider is not ("google" or "apple"))
+    {
+        return false;
     }
 
-    return candidate.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.' or '@')
-        ? candidate
-        : "demo-user";
+    return true;
+}
+
+static bool IsExternalProviderConfigured(string provider, bool googleConfigured, bool appleConfigured)
+{
+    return provider switch
+    {
+        "google" => googleConfigured,
+        "apple" => appleConfigured,
+        _ => false
+    };
+}
+
+static string NormalizeReturnUrl(string? returnUrl)
+{
+    if (string.IsNullOrWhiteSpace(returnUrl))
+    {
+        return "/";
+    }
+
+    return returnUrl.StartsWith('/') && !returnUrl.StartsWith("//", StringComparison.Ordinal)
+        ? returnUrl
+        : "/";
+}
+
+static bool IsExternalEmailVerified(ClaimsPrincipal principal)
+{
+    var claim = principal.FindFirst("email_verified")?.Value;
+    return string.Equals(claim, "true", StringComparison.OrdinalIgnoreCase) || claim == "1";
 }
 
 public partial class Program;

@@ -10,11 +10,14 @@ public sealed class PostgresOutfitStore :
     IOutfitRepository,
     IOutfitScheduleRepository,
     ITryOnJobRepository,
-    IShareLinkRepository
+    IShareLinkRepository,
+    IUserAccountRepository
 {
     public static readonly IReadOnlyList<string> RequiredTables = new[]
     {
         "users",
+        "auth_external_logins",
+        "auth_sessions",
         "body_reference_photos",
         "garment_items",
         "outfits",
@@ -387,6 +390,138 @@ public sealed class PostgresOutfitStore :
             : null;
     }
 
+    public void AddUser(UserAccount user)
+    {
+        using var command = _dataSource.CreateCommand("""
+            insert into users (id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at)
+            values (@id, @email, @normalized_email, @display_name, @password_hash, @created_at, @updated_at, @last_login_at)
+            """);
+        AddUserParameters(command, user);
+        command.ExecuteNonQuery();
+    }
+
+    public void UpdateUser(UserAccount user)
+    {
+        using var command = _dataSource.CreateCommand("""
+            update users
+            set email = @email,
+                normalized_email = @normalized_email,
+                display_name = @display_name,
+                password_hash = @password_hash,
+                updated_at = @updated_at,
+                last_login_at = @last_login_at
+            where id = @id
+            """);
+        AddUserParameters(command, user);
+        command.ExecuteNonQuery();
+    }
+
+    public UserAccount? GetUserById(string userId)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at
+            from users
+            where id = @id
+            """);
+        command.Parameters.AddWithValue("id", userId);
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadUser(reader) : null;
+    }
+
+    public UserAccount? GetUserByNormalizedEmail(string normalizedEmail)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at
+            from users
+            where normalized_email = @normalized_email
+            """);
+        command.Parameters.AddWithValue("normalized_email", normalizedEmail);
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadUser(reader) : null;
+    }
+
+    public void AddExternalLogin(ExternalAuthLogin login)
+    {
+        using var command = _dataSource.CreateCommand("""
+            insert into auth_external_logins (provider, provider_subject, user_id, email, created_at, last_login_at)
+            values (@provider, @provider_subject, @user_id, @email, @created_at, @last_login_at)
+            """);
+        AddExternalLoginParameters(command, login);
+        command.ExecuteNonQuery();
+    }
+
+    public ExternalAuthLogin? GetExternalLogin(string provider, string providerSubject)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select provider, provider_subject, user_id, email, created_at, last_login_at
+            from auth_external_logins
+            where provider = @provider and provider_subject = @provider_subject
+            """);
+        command.Parameters.AddWithValue("provider", provider.ToLowerInvariant());
+        command.Parameters.AddWithValue("provider_subject", providerSubject);
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadExternalLogin(reader) : null;
+    }
+
+    public void UpdateExternalLogin(ExternalAuthLogin login)
+    {
+        using var command = _dataSource.CreateCommand("""
+            update auth_external_logins
+            set email = @email,
+                last_login_at = @last_login_at
+            where provider = @provider and provider_subject = @provider_subject
+            """);
+        AddExternalLoginParameters(command, login);
+        command.ExecuteNonQuery();
+    }
+
+    public void AddAuthSession(AuthSession session)
+    {
+        using var command = _dataSource.CreateCommand("""
+            insert into auth_sessions (id, user_id, token_hash, csrf_token_hash, expires_at, created_at, revoked_at)
+            values (@id, @user_id, @token_hash, @csrf_token_hash, @expires_at, @created_at, @revoked_at)
+            """);
+        command.Parameters.AddWithValue("id", session.Id);
+        command.Parameters.AddWithValue("user_id", session.UserId);
+        command.Parameters.AddWithValue("token_hash", session.TokenHash);
+        command.Parameters.AddWithValue("csrf_token_hash", session.CsrfTokenHash);
+        command.Parameters.AddWithValue("expires_at", session.ExpiresAt);
+        command.Parameters.AddWithValue("created_at", session.CreatedAt);
+        command.Parameters.AddWithValue("revoked_at", DbValue(session.RevokedAt));
+        command.ExecuteNonQuery();
+    }
+
+    public AuthSession? GetActiveAuthSessionByTokenHash(string tokenHash, DateTimeOffset now)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select id, user_id, token_hash, csrf_token_hash, expires_at, created_at, revoked_at
+            from auth_sessions
+            where token_hash = @token_hash
+                and revoked_at is null
+                and expires_at > @now
+            """);
+        command.Parameters.AddWithValue("token_hash", tokenHash);
+        command.Parameters.AddWithValue("now", now);
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadAuthSession(reader) : null;
+    }
+
+    public void RevokeAuthSessionByTokenHash(string tokenHash, DateTimeOffset revokedAt)
+    {
+        using var command = _dataSource.CreateCommand("""
+            update auth_sessions
+            set revoked_at = @revoked_at
+            where token_hash = @token_hash and revoked_at is null
+            """);
+        command.Parameters.AddWithValue("token_hash", tokenHash);
+        command.Parameters.AddWithValue("revoked_at", revokedAt);
+        command.ExecuteNonQuery();
+    }
+
     private Outfit? GetOutfit(string whereClause, Action<NpgsqlCommand> addParameters)
     {
         using var command = _dataSource.CreateCommand($"""
@@ -432,14 +567,73 @@ public sealed class PostgresOutfitStore :
         return items;
     }
 
+    private static void AddUserParameters(NpgsqlCommand command, UserAccount user)
+    {
+        command.Parameters.AddWithValue("id", user.Id);
+        command.Parameters.AddWithValue("email", DbValue(user.Email));
+        command.Parameters.AddWithValue("normalized_email", DbValue(user.NormalizedEmail));
+        command.Parameters.AddWithValue("display_name", user.DisplayName);
+        command.Parameters.AddWithValue("password_hash", DbValue(user.PasswordHash));
+        command.Parameters.AddWithValue("created_at", user.CreatedAt);
+        command.Parameters.AddWithValue("updated_at", user.UpdatedAt);
+        command.Parameters.AddWithValue("last_login_at", DbValue(user.LastLoginAt));
+    }
+
+    private static void AddExternalLoginParameters(NpgsqlCommand command, ExternalAuthLogin login)
+    {
+        command.Parameters.AddWithValue("provider", login.Provider.ToLowerInvariant());
+        command.Parameters.AddWithValue("provider_subject", login.ProviderSubject);
+        command.Parameters.AddWithValue("user_id", login.UserId);
+        command.Parameters.AddWithValue("email", DbValue(login.Email));
+        command.Parameters.AddWithValue("created_at", login.CreatedAt);
+        command.Parameters.AddWithValue("last_login_at", login.LastLoginAt);
+    }
+
+    private static UserAccount ReadUser(NpgsqlDataReader reader)
+    {
+        return new UserAccount(
+            reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetString(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2),
+            reader.GetString(3),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.GetFieldValue<DateTimeOffset>(5),
+            reader.GetFieldValue<DateTimeOffset>(6),
+            reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7));
+    }
+
+    private static ExternalAuthLogin ReadExternalLogin(NpgsqlDataReader reader)
+    {
+        return new ExternalAuthLogin(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.IsDBNull(3) ? null : reader.GetString(3),
+            reader.GetFieldValue<DateTimeOffset>(4),
+            reader.GetFieldValue<DateTimeOffset>(5));
+    }
+
+    private static AuthSession ReadAuthSession(NpgsqlDataReader reader)
+    {
+        return new AuthSession(
+            reader.GetGuid(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetFieldValue<DateTimeOffset>(4),
+            reader.GetFieldValue<DateTimeOffset>(5),
+            reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6));
+    }
+
     private static void EnsureUser(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId)
     {
         using var command = new NpgsqlCommand("""
-            insert into users (id)
-            values (@id)
+            insert into users (id, display_name, created_at, updated_at)
+            values (@id, @display_name, now(), now())
             on conflict (id) do nothing
             """, connection, transaction);
         command.Parameters.AddWithValue("id", userId);
+        command.Parameters.AddWithValue("display_name", userId);
         command.ExecuteNonQuery();
     }
 
