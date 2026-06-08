@@ -101,6 +101,15 @@ describe('BuilderPage', () => {
     });
   });
 
+  it('does not show the AI try-on consent checkbox in builder controls', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse([]));
+
+    renderApp();
+
+    expect(await screen.findAllByRole('button', { name: /save outfit/i })).not.toHaveLength(0);
+    expect(screen.queryByText(/I consent to AI try-on processing/i)).not.toBeInTheDocument();
+  });
+
   it('deletes garment photos from wardrobe cards', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -133,6 +142,40 @@ describe('BuilderPage', () => {
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/garments\/garment-1$/), expect.objectContaining({ method: 'DELETE' }));
     });
+  });
+});
+
+describe('CalendarPage', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('uses a custom clay date picker instead of the native date input', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/outfits')) {
+        return jsonResponse([
+          {
+            id: 'outfit-1',
+            name: 'Weekend clay',
+            items: [],
+            createdAt: '2026-06-07T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.includes('/schedule?')) {
+        return jsonResponse([]);
+      }
+
+      return jsonResponse([]);
+    });
+
+    const { container } = renderApp('/calendar');
+
+    expect(await screen.findByRole('button', { name: /choose date/i })).toBeInTheDocument();
+    expect(container.querySelector('input[type="date"]')).not.toBeInTheDocument();
   });
 });
 

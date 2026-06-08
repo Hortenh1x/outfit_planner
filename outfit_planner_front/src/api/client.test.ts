@@ -1,5 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createBodyReferencePhoto, deleteBodyReferencePhoto, deleteGarment, listGarments, startTryOn, uploadBodyReferencePhoto } from './client';
+import {
+  createBodyReferencePhoto,
+  deleteBodyReferencePhoto,
+  deleteGarment,
+  getAuthProviders,
+  getHealth,
+  getSystemStatus,
+  getTryOnJob,
+  listGarments,
+  startTryOn,
+  uploadBodyReferencePhoto
+} from './client';
 
 describe('api client', () => {
   afterEach(() => {
@@ -96,5 +107,35 @@ describe('api client', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/garments/garment-1', expect.objectContaining({ method: 'DELETE' }));
     expect(fetchMock).toHaveBeenCalledWith('/api/body-reference-photos/body-1', expect.objectContaining({ method: 'DELETE' }));
+  });
+
+  it('covers service metadata and try-on status endpoints', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'ok', service: 'outfit-planner-api' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ api: 'running', storage: 'InMemory', postgres: null, aiProvider: 'Mock' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 'google', label: 'Google OAuth', configured: false, demoHeader: 'X-Demo-User' }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'job-1', status: 'Succeeded' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+
+    await getHealth();
+    await getSystemStatus();
+    await getAuthProviders();
+    await getTryOnJob('job-1');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({ headers: expect.any(Object) }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/system/status', expect.objectContaining({ headers: expect.any(Object) }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/providers', expect.objectContaining({ headers: expect.any(Object) }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/try-on-jobs/job-1', expect.objectContaining({ headers: expect.any(Object) }));
   });
 });

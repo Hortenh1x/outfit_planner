@@ -25,6 +25,7 @@ yarn-error.log*
 
 *.log
 *.tmp
+front-clay-*.png
 .DS_Store
 Thumbs.db
 

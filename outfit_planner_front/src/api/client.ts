@@ -9,6 +9,25 @@ interface ApiErrorBody {
   traceId?: string;
 }
 
+export interface HealthStatus {
+  status: string;
+  service: string;
+}
+
+export interface SystemStatus {
+  api: string;
+  storage: string;
+  postgres: unknown;
+  aiProvider: string;
+}
+
+export interface AuthProvider {
+  id: string;
+  label: string;
+  configured: boolean;
+  demoHeader?: string;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET';
   const url = `${apiBaseUrl}${path}`;
@@ -34,6 +53,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function listGarments(): Promise<GarmentItem[]> {
   return request<GarmentItem[]>('/garments');
+}
+
+export function getHealth(): Promise<HealthStatus> {
+  return request<HealthStatus>('/health');
+}
+
+export function getSystemStatus(): Promise<SystemStatus> {
+  return request<SystemStatus>('/system/status');
+}
+
+export function getAuthProviders(): Promise<AuthProvider[]> {
+  return request<AuthProvider[]>('/auth/providers');
 }
 
 export function listBodyReferencePhotos(): Promise<BodyReferencePhoto[]> {
@@ -188,6 +219,10 @@ export function startTryOn(input: {
       sequentialFlowEnabled: input.sequentialFlowEnabled
     })
   });
+}
+
+export function getTryOnJob(jobId: string): Promise<TryOnJob> {
+  return request<TryOnJob>(`/try-on-jobs/${jobId}`);
 }
 
 export function scheduleOutfit(input: { date: string; outfitId: string }): Promise<ScheduledOutfit> {

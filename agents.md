@@ -29,6 +29,8 @@ This file is durable working context for Codex agents in this project.
 - Frontend is React + TypeScript + Vite under `outfit_planner_front/`.
 - Frontend state/data uses TanStack Query; routing uses React Router.
 - Main UI surfaces are Wardrobe, Builder, Calendar, and shared outfit view.
+- Frontend visual system is High-Fidelity Claymorphism in `src/styles.css`: Nunito headings, DM Sans body, lavender canvas, animated blobs, large rounded clay panels, recessed inputs, convex gradient buttons, and 4-layer shadows.
+- `src/App.tsx` should preserve Wardrobe, Builder, Calendar, and Share routes while keeping service metadata endpoints available in the shell and try-on job status available after generation.
 - Demo identity uses `X-Demo-User`; invalid or missing values fall back to `demo-user`.
 - Try-on defaults to `MockTryOnProvider`. FASHN is opt-in with `TryOn__Provider=Fashn` and `Fashn__ApiKey`.
 - Multi-garment FASHN generation needs the Builder page `Sequential flow` toggle.

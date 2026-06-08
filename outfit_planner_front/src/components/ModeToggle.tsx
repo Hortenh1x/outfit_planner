@@ -8,7 +8,7 @@ interface ModeToggleProps {
 
 export function ModeToggle({ mode, onChange }: ModeToggleProps) {
   return (
-    <div className="mode-toggle" aria-label="Preview mode">
+    <div className="mode-toggle" data-mode={mode} aria-label="Preview mode">
       <button
         type="button"
         className={mode === 'clothes' ? 'active' : ''}

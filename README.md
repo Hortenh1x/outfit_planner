@@ -76,6 +76,12 @@ The frontend uses a same-origin API path by default:
 - Vite proxies `/api` and `/uploads` to `VITE_DEV_API_TARGET` or `http://localhost:5000`.
 - The production Docker frontend builds with `VITE_API_URL=/api` and nginx proxies `/api/` and `/uploads/` to the API service.
 
+The frontend visual system is High-Fidelity Claymorphism:
+
+- Global tokens live in `outfit_planner_front/src/styles.css`.
+- The interface uses Nunito for display text, DM Sans for body copy, lavender canvas color `#F4F1FA`, animated ambient blobs, large rounded panels, recessed inputs, convex gradient buttons, and 4-layer clay shadow stacks.
+- `outfit_planner_front/src/App.tsx` keeps the existing routes and flows while surfacing service metadata endpoints in the shell and try-on job status after generation.
+
 ## Prerequisites
 
 - .NET 10 SDK.
