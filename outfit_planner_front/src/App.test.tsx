@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -108,6 +108,21 @@ describe('BuilderPage', () => {
 
     expect(await screen.findAllByRole('button', { name: /save outfit/i })).not.toHaveLength(0);
     expect(screen.queryByText(/I consent to AI try-on processing/i)).not.toBeInTheDocument();
+  });
+
+  it('renders real animated indicators for the segmented toggles', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse([]));
+
+    const wardrobe = renderApp('/wardrobe');
+
+    expect(await screen.findByRole('radiogroup', { name: /garment type/i })).toBeInTheDocument();
+    expect(wardrobe.container.querySelector('.segmented-control .toggle-motion-indicator')).toBeInTheDocument();
+    wardrobe.unmount();
+
+    const builder = renderApp('/builder');
+
+    expect(await within(builder.container).findByRole('button', { name: /clothes only/i })).toBeInTheDocument();
+    expect(builder.container.querySelector('.mode-toggle .toggle-motion-indicator')).toBeInTheDocument();
   });
 
   it('deletes garment photos from wardrobe cards', async () => {

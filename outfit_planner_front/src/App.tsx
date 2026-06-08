@@ -847,6 +847,7 @@ function CategorySegmentedControl({
     <fieldset className="segmented-field">
       <legend>Type</legend>
       <div className="segmented-control" data-value={value.toLowerCase()} role="radiogroup" aria-label="Garment type">
+        <span className="toggle-motion-indicator" aria-hidden="true" />
         {(['Top', 'Bottom'] as const).map((category) => (
           <button
             type="button"
@@ -854,6 +855,7 @@ function CategorySegmentedControl({
             className={value === category ? 'selected' : ''}
             role="radio"
             aria-checked={value === category}
+            onPointerDown={() => onChange(category)}
             onClick={() => onChange(category)}
           >
             <GarmentCategoryIcon category={category} size={16} />

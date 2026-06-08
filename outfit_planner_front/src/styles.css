@@ -28,6 +28,7 @@
   --radius-hero: 60px;
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.83, 0, 0.17, 1);
+  --ease-toggle: cubic-bezier(0.38, 0, 0.22, 1);
   --shadow-deep:
     30px 30px 60px #cdc6d9,
     -30px -30px 60px #fbf9ff,
@@ -53,6 +54,16 @@
     -10px -10px 20px rgba(251, 249, 255, 0.52),
     inset 5px 5px 9px rgba(251, 249, 255, 0.5),
     inset -5px -5px 9px rgba(51, 47, 58, 0.11);
+  --shadow-button-pressed:
+    7px 7px 14px rgba(139, 92, 246, 0.18),
+    -5px -5px 12px rgba(251, 249, 255, 0.36),
+    inset 8px 8px 16px rgba(160, 150, 180, 0.26),
+    inset -8px -8px 16px rgba(251, 249, 255, 0.88);
+  --shadow-selected:
+    8px 8px 18px rgba(160, 150, 180, 0.12),
+    -6px -6px 16px rgba(251, 249, 255, 0.72),
+    inset 8px 8px 16px rgba(160, 150, 180, 0.22),
+    inset -8px -8px 16px rgba(251, 249, 255, 0.92);
   --shadow-pressed:
     inset 10px 10px 20px #d9d4e3,
     inset -10px -10px 20px #fbf9ff;
@@ -95,6 +106,16 @@
     -10px -10px 20px rgba(251, 249, 255, 0.1),
     inset 5px 5px 9px rgba(251, 249, 255, 0.18),
     inset -5px -5px 9px rgba(10, 7, 16, 0.28);
+  --shadow-button-pressed:
+    7px 7px 14px rgba(124, 58, 237, 0.2),
+    -5px -5px 12px rgba(251, 249, 255, 0.06),
+    inset 8px 8px 16px rgba(12, 9, 18, 0.42),
+    inset -8px -8px 16px rgba(251, 249, 255, 0.08);
+  --shadow-selected:
+    8px 8px 18px rgba(12, 9, 18, 0.3),
+    -6px -6px 16px rgba(91, 76, 117, 0.12),
+    inset 8px 8px 16px rgba(12, 9, 18, 0.42),
+    inset -8px -8px 16px rgba(251, 249, 255, 0.07);
   --shadow-pressed:
     inset 10px 10px 20px rgba(12, 9, 18, 0.58),
     inset -10px -10px 20px rgba(251, 249, 255, 0.07);
@@ -140,15 +161,15 @@ button {
   transition:
     background-color 320ms var(--ease-out),
     border-color 320ms var(--ease-out),
-    box-shadow 320ms var(--ease-out),
+    box-shadow 420ms var(--ease-out),
     color 320ms var(--ease-out),
     opacity 320ms var(--ease-out),
     transform 260ms var(--ease-out);
 }
 
 button:active {
-  box-shadow: var(--shadow-pressed);
-  transform: scale(0.97);
+  box-shadow: var(--shadow-button-pressed);
+  transform: translate3d(0, 1px, 0) scale(0.985);
 }
 
 button:disabled {
@@ -339,7 +360,7 @@ h3 {
   transition:
     background-color 320ms var(--ease-out),
     border-color 320ms var(--ease-out),
-    box-shadow 320ms var(--ease-out),
+    box-shadow 420ms var(--ease-out),
     color 320ms var(--ease-out),
     transform 260ms var(--ease-out);
 }
@@ -347,7 +368,7 @@ h3 {
 .sidebar nav a.active {
   background: linear-gradient(135deg, rgba(167, 139, 250, 0.28), rgba(219, 39, 119, 0.12));
   border-color: rgba(124, 58, 237, 0.25);
-  box-shadow: var(--shadow-pressed);
+  box-shadow: var(--shadow-selected);
   color: var(--foreground);
 }
 
@@ -764,7 +785,7 @@ h3 {
 .garment-button.selected {
   background: linear-gradient(135deg, rgba(167, 139, 250, 0.28), rgba(14, 165, 233, 0.12));
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-pressed);
+  box-shadow: var(--shadow-selected);
 }
 
 .garment-button img {
@@ -800,7 +821,7 @@ h3 {
     background-color 320ms var(--ease-out),
     border-color 320ms var(--ease-out),
     color 320ms var(--ease-out),
-    box-shadow 320ms var(--ease-out),
+    box-shadow 420ms var(--ease-out),
     transform 260ms var(--ease-out);
 }
 
@@ -858,7 +879,7 @@ select {
   padding: 0 1.05rem;
   transition:
     background-color 320ms var(--ease-out),
-    box-shadow 320ms var(--ease-out),
+    box-shadow 420ms var(--ease-out),
     transform 260ms var(--ease-out);
   width: 100%;
 }
@@ -906,29 +927,28 @@ input[type="file"] {
   position: relative;
 }
 
-.segmented-control::before,
-.mode-toggle::before {
-  background: linear-gradient(135deg, rgba(167, 139, 250, 0.28), rgba(219, 39, 119, 0.1));
-  border: 1px solid var(--border);
+.toggle-motion-indicator {
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.38), rgba(219, 39, 119, 0.16));
+  border: 1px solid var(--border-strong);
   border-radius: 22px;
   bottom: 0.35rem;
-  box-shadow: var(--shadow-pressed);
-  content: "";
+  box-shadow: var(--shadow-selected);
   left: 0.35rem;
   pointer-events: none;
   position: absolute;
   top: 0.35rem;
-  transform: translateX(0);
+  transform: translate3d(0, 0, 0);
   transition:
-    box-shadow 420ms var(--ease-out),
-    transform 420ms var(--ease-out);
+    box-shadow 760ms var(--ease-toggle),
+    transform 760ms var(--ease-toggle);
+  will-change: transform;
   width: calc((100% - 1.05rem) / 2);
   z-index: 0;
 }
 
-.segmented-control[data-value="bottom"]::before,
-.mode-toggle[data-mode="person"]::before {
-  transform: translateX(calc(100% + 0.35rem));
+.segmented-control[data-value="bottom"] > .toggle-motion-indicator,
+.mode-toggle[data-mode="person"] > .toggle-motion-indicator {
+  transform: translate3d(calc(100% + 0.35rem), 0, 0);
 }
 
 .segmented-control button,
@@ -975,7 +995,7 @@ input[type="file"] {
 .choice-list button.selected {
   background: linear-gradient(135deg, rgba(167, 139, 250, 0.28), rgba(219, 39, 119, 0.1));
   border-color: transparent;
-  box-shadow: var(--shadow-pressed);
+  box-shadow: var(--shadow-selected);
 }
 
 .segmented-control button.selected {
@@ -1028,6 +1048,11 @@ input[type="file"] {
   grid-template-columns: auto minmax(0, 1fr);
   min-height: 3.85rem;
   padding: 0.45rem;
+  transition:
+    background-color 320ms var(--ease-out),
+    border-color 320ms var(--ease-out),
+    box-shadow 420ms var(--ease-out),
+    transform 260ms var(--ease-out);
 }
 
 .file-picker-action {
@@ -1042,6 +1067,11 @@ input[type="file"] {
   justify-content: center;
   min-height: 2.9rem;
   padding: 0 0.75rem;
+  transition:
+    background-color 320ms var(--ease-out),
+    border-color 320ms var(--ease-out),
+    box-shadow 420ms var(--ease-out),
+    transform 260ms var(--ease-out);
   white-space: nowrap;
 }
 
@@ -1182,7 +1212,7 @@ input[type="file"] {
     color-mix(in oklch, var(--accent-light) 28%, var(--surface)),
     color-mix(in oklch, var(--accent-alt) 12%, var(--surface))
   );
-  box-shadow: var(--shadow-pressed);
+  box-shadow: var(--shadow-selected);
   color: var(--foreground);
 }
 
@@ -1248,7 +1278,7 @@ select:focus {
 .flow-toggle.active {
   background: linear-gradient(135deg, rgba(167, 139, 250, 0.28), rgba(16, 185, 129, 0.12));
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-pressed);
+  box-shadow: var(--shadow-selected);
 }
 
 .flow-toggle.active svg,
@@ -1315,7 +1345,7 @@ select:focus {
 .body-reference-option.selected {
   background: linear-gradient(135deg, rgba(167, 139, 250, 0.3), rgba(219, 39, 119, 0.12));
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-pressed);
+  box-shadow: var(--shadow-selected);
 }
 
 .icon-action {
@@ -1371,6 +1401,7 @@ select:focus {
   transition:
     background-color 320ms var(--ease-out),
     border-color 320ms var(--ease-out),
+    box-shadow 420ms var(--ease-out),
     color 320ms var(--ease-out),
     transform 260ms var(--ease-out);
 }
@@ -1682,7 +1713,7 @@ select:focus {
 }
 
 .calendar-day.selected-day {
-  box-shadow: var(--shadow-pressed);
+  box-shadow: var(--shadow-selected);
 }
 
 .shared-view {
@@ -1745,24 +1776,14 @@ select:focus {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .sidebar nav a:hover,
-  .garment-button:hover,
-  .inline-empty:hover,
-  .body-reference-empty:hover,
-  .body-reference-option:hover,
-  .icon-action:hover,
-  .saved-list button:hover,
-  .theme-toggle:hover,
   .calendar-nav button:hover,
-  .calendar-day:hover,
-  .clay-button:hover,
-  .flow-toggle:hover {
+  .calendar-day:hover {
     transform: translateY(-2px);
   }
 
   .garment-card:hover {
     box-shadow: var(--shadow-card-hover);
-    transform: translateY(-2px);
+    transform: none;
   }
 
   .inventory-panel:hover,
@@ -1791,6 +1812,46 @@ select:focus {
   .theme-toggle:hover {
     border-color: var(--border-strong);
   }
+}
+
+button:active,
+.sidebar nav a:active,
+.inline-empty:active,
+.body-reference-empty:active,
+.body-reference-option:active,
+.saved-list button:active,
+.theme-toggle:active,
+.calendar-nav button:active,
+.calendar-day:active,
+.clay-button:active,
+.primary-action:active,
+.secondary-action:active,
+.flow-toggle:active,
+.icon-action:active {
+  box-shadow: var(--shadow-button-pressed);
+  transform: translate3d(0, 1px, 0) scale(0.985);
+}
+
+.file-picker:active .file-picker-control,
+.file-picker:active .file-picker-action {
+  box-shadow: var(--shadow-button-pressed);
+  transform: translate3d(0, 1px, 0) scale(0.985);
+}
+
+.mode-toggle button:active,
+.segmented-control button:active {
+  box-shadow: none;
+  transform: none;
+}
+
+.date-trigger:active,
+.date-popover-header button:active,
+.date-today-action:active,
+.date-day:active,
+.calendar-nav button:active,
+.calendar-day:active {
+  box-shadow: var(--shadow-pressed);
+  transform: scale(0.97);
 }
 
 @keyframes shimmer {
@@ -1991,5 +2052,9 @@ select:focus {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 1ms !important;
+  }
+
+  .toggle-motion-indicator {
+    transition-duration: 420ms !important;
   }
 }
