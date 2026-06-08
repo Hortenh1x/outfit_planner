@@ -45,3 +45,17 @@ public interface IShareLinkRepository
     void AddShareLink(ShareLink link);
     ShareLink? GetActiveShareLink(string token);
 }
+
+public interface IUserAccountRepository
+{
+    void AddUser(UserAccount user);
+    void UpdateUser(UserAccount user);
+    UserAccount? GetUserById(string userId);
+    UserAccount? GetUserByNormalizedEmail(string normalizedEmail);
+    void AddExternalLogin(ExternalAuthLogin login);
+    ExternalAuthLogin? GetExternalLogin(string provider, string providerSubject);
+    void UpdateExternalLogin(ExternalAuthLogin login);
+    void AddAuthSession(AuthSession session);
+    AuthSession? GetActiveAuthSessionByTokenHash(string tokenHash, DateTimeOffset now);
+    void RevokeAuthSessionByTokenHash(string tokenHash, DateTimeOffset revokedAt);
+}

@@ -1,13 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  buildExternalAuthUrl,
   createBodyReferencePhoto,
   deleteBodyReferencePhoto,
   deleteGarment,
+  getCurrentSession,
   getAuthProviders,
   getHealth,
   getSystemStatus,
   getTryOnJob,
   listGarments,
+  login,
+  logout,
+  register,
   startTryOn,
   uploadBodyReferencePhoto
 } from './client';
@@ -34,6 +39,7 @@ describe('api client', () => {
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('/api/outfits/outfit-1/try-on');
+    expect(init).toMatchObject({ credentials: 'include' });
     expect(JSON.parse(init?.body as string)).toMatchObject({
       bodyReferencePhotoUrl: 'https://example.com/body.jpg',
       consentAccepted: true,
@@ -60,7 +66,9 @@ describe('api client', () => {
     await createBodyReferencePhoto(uploaded.url);
 
     expect(fetchMock.mock.calls[0][0]).toContain('/uploads/body-reference-photo');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ credentials: 'include' });
     expect(fetchMock.mock.calls[1][0]).toContain('/body-reference-photos');
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ credentials: 'include' });
     expect(JSON.parse(fetchMock.mock.calls[1][1]?.body as string)).toMatchObject({
       imageUrl: 'http://localhost:5000/uploads/body-reference-photos/body.png'
     });
@@ -119,7 +127,7 @@ describe('api client', () => {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       }))
-      .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 'google', label: 'Google OAuth', configured: false, demoHeader: 'X-Demo-User' }]), {
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ id: 'google', label: 'Google', configured: false, flow: 'oauth' }]), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       }))
@@ -133,9 +141,45 @@ describe('api client', () => {
     await getAuthProviders();
     await getTryOnJob('job-1');
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({ headers: expect.any(Object) }));
-    expect(fetchMock).toHaveBeenCalledWith('/api/system/status', expect.objectContaining({ headers: expect.any(Object) }));
-    expect(fetchMock).toHaveBeenCalledWith('/api/auth/providers', expect.objectContaining({ headers: expect.any(Object) }));
-    expect(fetchMock).toHaveBeenCalledWith('/api/try-on-jobs/job-1', expect.objectContaining({ headers: expect.any(Object) }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({ credentials: 'include', headers: expect.any(Object) }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/system/status', expect.objectContaining({ credentials: 'include', headers: expect.any(Object) }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/providers', expect.objectContaining({ credentials: 'include', headers: expect.any(Object) }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/try-on-jobs/job-1', expect.objectContaining({ credentials: 'include', headers: expect.any(Object) }));
+  });
+
+  it('uses secure cookie-backed auth endpoints', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ user: { id: 'usr_1', email: 'ada@example.com', displayName: 'ada' }, expiresAt: '2026-06-22T12:00:00Z' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ user: { id: 'usr_1', email: 'ada@example.com', displayName: 'ada' }, expiresAt: '2026-06-22T12:00:00Z' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ user: { id: 'usr_1', email: 'ada@example.com', displayName: 'ada' }, expiresAt: '2026-06-22T12:00:00Z' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'signed-out' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+
+    await register({ email: 'ada@example.com', password: 'correct horse battery', repeatPassword: 'correct horse battery' });
+    await login({ email: 'ada@example.com', password: 'correct horse battery' });
+    await getCurrentSession();
+    await logout();
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/register', expect.objectContaining({ method: 'POST', credentials: 'include' }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/login', expect.objectContaining({ method: 'POST', credentials: 'include' }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/me', expect.objectContaining({ credentials: 'include' }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', expect.objectContaining({ method: 'POST', credentials: 'include' }));
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toMatchObject({
+      email: 'ada@example.com',
+      password: 'correct horse battery',
+      repeatPassword: 'correct horse battery'
+    });
+    expect(buildExternalAuthUrl('google', '/builder')).toBe('/api/auth/external/google/start?returnUrl=%2Fbuilder');
   });
 });

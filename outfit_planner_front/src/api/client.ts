@@ -1,7 +1,7 @@
 import type { BodyReferencePhoto, GarmentCategory, GarmentItem, Outfit, ScheduledOutfit, TryOnJob } from '../types';
 
 const apiBaseUrl = import.meta.env.VITE_API_URL ?? '/api';
-const demoUser = 'demo-user';
+const csrfCookieName = 'outfit_csrf';
 
 interface ApiErrorBody {
   error?: string;
@@ -25,19 +25,37 @@ export interface AuthProvider {
   id: string;
   label: string;
   configured: boolean;
-  demoHeader?: string;
+  flow: 'password' | 'oauth' | 'oidc';
+}
+
+export interface AuthUser {
+  id: string;
+  email?: string | null;
+  displayName: string;
+}
+
+export interface AuthSession {
+  user: AuthUser;
+  expiresAt: string;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET';
   const url = `${apiBaseUrl}${path}`;
+  const headers = new Headers(init?.headers);
+  if (!headers.has('Content-Type') && init?.body && !(init.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  const csrfToken = readCookie(csrfCookieName);
+  if (requiresCsrf(method) && csrfToken && !headers.has('X-CSRF-Token')) {
+    headers.set('X-CSRF-Token', csrfToken);
+  }
+
   const response = await fetchWithDiagnostics(url, {
     ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Demo-User': demoUser,
-      ...init?.headers
-    }
+    credentials: 'include',
+    headers
   }, method, path);
 
   if (!response.ok) {
@@ -65,6 +83,34 @@ export function getSystemStatus(): Promise<SystemStatus> {
 
 export function getAuthProviders(): Promise<AuthProvider[]> {
   return request<AuthProvider[]>('/auth/providers');
+}
+
+export function register(input: { email: string; password: string; repeatPassword: string }): Promise<AuthSession> {
+  return request<AuthSession>('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  });
+}
+
+export function login(input: { email: string; password: string }): Promise<AuthSession> {
+  return request<AuthSession>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  });
+}
+
+export function logout(): Promise<void> {
+  return request<void>('/auth/logout', {
+    method: 'POST'
+  });
+}
+
+export function getCurrentSession(): Promise<AuthSession> {
+  return request<AuthSession>('/auth/me');
+}
+
+export function buildExternalAuthUrl(provider: 'google' | 'apple', returnUrl = '/builder'): string {
+  return `${apiBaseUrl}/auth/external/${provider}/start?returnUrl=${encodeURIComponent(returnUrl)}`;
 }
 
 export function listBodyReferencePhotos(): Promise<BodyReferencePhoto[]> {
@@ -105,11 +151,16 @@ async function uploadPhoto(path: string, file: File): Promise<UploadedPhotoRespo
 
   const method = 'POST';
   const url = `${apiBaseUrl}${path}`;
+  const headers = new Headers();
+  const csrfToken = readCookie(csrfCookieName);
+  if (csrfToken) {
+    headers.set('X-CSRF-Token', csrfToken);
+  }
+
   const response = await fetchWithDiagnostics(url, {
     method: 'POST',
-    headers: {
-      'X-Demo-User': demoUser
-    },
+    credentials: 'include',
+    headers,
     body: formData
   }, method, path);
 
@@ -155,6 +206,24 @@ function logApiRequest(url: string, init: RequestInit, method: string, path: str
     fileSize: file instanceof File ? file.size : undefined,
     fileType: file instanceof File ? file.type : undefined
   });
+}
+
+function requiresCsrf(method: string): boolean {
+  return !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase());
+}
+
+function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+
+  const prefix = `${name}=`;
+  const cookie = document.cookie
+    .split(';')
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix));
+
+  return cookie ? decodeURIComponent(cookie.slice(prefix.length)) : null;
 }
 
 async function createApiError(response: Response, method: string, path: string): Promise<Error> {

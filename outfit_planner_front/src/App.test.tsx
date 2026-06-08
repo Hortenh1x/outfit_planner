@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -25,7 +25,18 @@ function renderApp(initialEntry = '/builder') {
 
 describe('BuilderPage', () => {
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
+  });
+
+  it('replaces service status chips with sign in and register actions in the sidebar', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse([]));
+
+    renderApp();
+
+    expect(screen.queryByLabelText(/system status/i)).not.toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /sign in/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /register/i })).toBeInTheDocument();
   });
 
   it('uploads missing wardrobe pieces directly from builder empty slots', async () => {
@@ -162,6 +173,7 @@ describe('BuilderPage', () => {
 
 describe('CalendarPage', () => {
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 

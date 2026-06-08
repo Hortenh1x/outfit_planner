@@ -11,9 +11,13 @@ public sealed class InMemoryOutfitStore :
     IOutfitRepository,
     IOutfitScheduleRepository,
     ITryOnJobRepository,
-    IShareLinkRepository
+    IShareLinkRepository,
+    IUserAccountRepository
 {
     private readonly object _lock = new();
+    private readonly Dictionary<string, UserAccount> _users = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ExternalAuthLogin> _externalLogins = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AuthSession> _authSessions = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, BodyReferencePhoto> _bodyPhotos = new();
     private readonly Dictionary<Guid, GarmentItem> _garments = new();
     private readonly Dictionary<Guid, Outfit> _outfits = new();
@@ -224,5 +228,97 @@ public sealed class InMemoryOutfitStore :
                 ? link
                 : null;
         }
+    }
+
+    public void AddUser(UserAccount user)
+    {
+        lock (_lock)
+        {
+            _users[user.Id] = user;
+        }
+    }
+
+    public void UpdateUser(UserAccount user)
+    {
+        lock (_lock)
+        {
+            _users[user.Id] = user;
+        }
+    }
+
+    public UserAccount? GetUserById(string userId)
+    {
+        lock (_lock)
+        {
+            return _users.GetValueOrDefault(userId);
+        }
+    }
+
+    public UserAccount? GetUserByNormalizedEmail(string normalizedEmail)
+    {
+        lock (_lock)
+        {
+            return _users.Values.FirstOrDefault(user => string.Equals(user.NormalizedEmail, normalizedEmail, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    public void AddExternalLogin(ExternalAuthLogin login)
+    {
+        lock (_lock)
+        {
+            _externalLogins[ExternalLoginKey(login.Provider, login.ProviderSubject)] = login;
+        }
+    }
+
+    public ExternalAuthLogin? GetExternalLogin(string provider, string providerSubject)
+    {
+        lock (_lock)
+        {
+            return _externalLogins.GetValueOrDefault(ExternalLoginKey(provider, providerSubject));
+        }
+    }
+
+    public void UpdateExternalLogin(ExternalAuthLogin login)
+    {
+        lock (_lock)
+        {
+            _externalLogins[ExternalLoginKey(login.Provider, login.ProviderSubject)] = login;
+        }
+    }
+
+    public void AddAuthSession(AuthSession session)
+    {
+        lock (_lock)
+        {
+            _authSessions[session.TokenHash] = session;
+        }
+    }
+
+    public AuthSession? GetActiveAuthSessionByTokenHash(string tokenHash, DateTimeOffset now)
+    {
+        lock (_lock)
+        {
+            return _authSessions.TryGetValue(tokenHash, out var session)
+                && session.RevokedAt is null
+                && session.ExpiresAt > now
+                ? session
+                : null;
+        }
+    }
+
+    public void RevokeAuthSessionByTokenHash(string tokenHash, DateTimeOffset revokedAt)
+    {
+        lock (_lock)
+        {
+            if (_authSessions.TryGetValue(tokenHash, out var session))
+            {
+                _authSessions[tokenHash] = session with { RevokedAt = revokedAt };
+            }
+        }
+    }
+
+    private static string ExternalLoginKey(string provider, string providerSubject)
+    {
+        return $"{provider.ToLowerInvariant()}:{providerSubject}";
     }
 }

@@ -11,4 +11,7 @@
   <ItemGroup>
     <Content Include="..\..\database\schema.sql" Link="database\schema.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.2" />
+  </ItemGroup>
 </Project>
