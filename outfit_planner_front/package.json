@@ -8,6 +8,9 @@
     "dev:http": "vite --host 127.0.0.1",
     "dev:https": "vite --host localhost --mode https",
     "dev:docker": "vite --host 0.0.0.0 --mode https",
+    "generate:api": "node scripts/generate-api-client.mjs",
+    "pretest": "npm run generate:api",
+    "prebuild": "npm run generate:api",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run"
@@ -29,6 +32,7 @@
     "@types/react-dom": "latest",
     "@vitejs/plugin-react": "latest",
     "jsdom": "latest",
+    "openapi-typescript": "^7.13.0",
     "typescript": "latest",
     "vite": "latest",
     "vite-plugin-mkcert": "^2.1.0",
