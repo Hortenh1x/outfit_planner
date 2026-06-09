@@ -39,4 +39,9 @@ public sealed class ScheduleService
 
         return _schedule.ListScheduleByUser(InputGuard.NormalizeUserId(userId), from, to);
     }
+
+    public bool UnscheduleOutfit(string userId, DateOnly date)
+    {
+        return _schedule.DeleteScheduledOutfitByUserDate(InputGuard.NormalizeUserId(userId), date);
+    }
 }

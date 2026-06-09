@@ -28,6 +28,13 @@ services:
     volumes:
       - minio_data:/data
 
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
   api:
     image: mcr.microsoft.com/dotnet/sdk:10.0
     command: dotnet watch --project src/OutfitPlanner.Api/OutfitPlanner.Api.csproj run --urls http://+:8080
@@ -38,6 +45,7 @@ services:
       DetailedErrors: "true"
       DOTNET_USE_POLLING_FILE_WATCHER: "1"
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=outfit_planner;Username=outfit;Password=outfit;GSS Encryption Mode=Disable
+      ConnectionStrings__Redis: redis:6379
     ports:
       - "5000:8080"
     volumes:
@@ -47,6 +55,8 @@ services:
       postgres:
         condition: service_healthy
       minio:
+        condition: service_started
+      redis:
         condition: service_started
 
   frontend:
@@ -67,5 +77,6 @@ services:
 volumes:
   postgres_data:
   minio_data:
+  redis_data:
   api_storage:
   frontend_node_modules:

@@ -8,5 +8,7 @@ public sealed record TryOnOptions(bool SequentialFlowEnabled);
 
 public interface ITryOnProvider
 {
+    string Name => GetType().Name;
+
     TryOnGeneration Generate(string userId, Outfit outfit, string bodyReferencePhotoUrl, TryOnOptions options);
 }

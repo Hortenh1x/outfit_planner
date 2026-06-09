@@ -15,6 +15,22 @@ public sealed record GarmentItem(
     string ImageUrl,
     string ThumbnailUrl,
     IReadOnlyList<string> Tags,
+    string? PrimaryColor,
+    IReadOnlyList<string> SecondaryColors,
+    string? Material,
+    string? Brand,
+    string? Size,
+    IReadOnlyList<string> Season,
+    int? WeatherMinTemp,
+    int? WeatherMaxTemp,
+    IReadOnlyList<string> Occasion,
+    int? FormalityScore,
+    int? WarmthScore,
+    int? ComfortScore,
+    bool IsFavorite,
+    bool IsArchived,
+    DateTimeOffset? LastWornAt,
+    string LaundryStatus,
     DateTimeOffset CreatedAt);
 
 public sealed record OutfitItem(
@@ -29,6 +45,10 @@ public sealed record Outfit(
     string UserId,
     string Name,
     IReadOnlyList<OutfitItem> Items,
+    IReadOnlyList<string> Tags,
+    IReadOnlyList<string> Occasion,
+    bool IsFavorite,
+    bool IsArchived,
     string? ClothesOnlyPreviewUrl,
     string? PersonPreviewUrl,
     DateTimeOffset CreatedAt);
@@ -45,12 +65,21 @@ public sealed record TryOnJob(
     string UserId,
     Guid OutfitId,
     string BodyReferencePhotoUrl,
+    bool SequentialFlowEnabled,
     TryOnStatus Status,
     string? ProviderJobId,
     string? OutputImageUrl,
     string? Error,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt)
+{
+    public DateTimeOffset? ConsentAcceptedAt { get; init; }
+    public string? ProviderName { get; init; }
+    public string? ProviderRequestId { get; init; }
+    public Guid? SourceBodyPhotoId { get; init; }
+    public DateTimeOffset? RetentionUntil { get; init; }
+    public bool IsDeleted { get; init; }
+}
 
 public sealed record ShareLink(
     string Token,
@@ -67,7 +96,25 @@ public sealed record UserAccount(
     string? PasswordHash,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    DateTimeOffset? LastLoginAt);
+    DateTimeOffset? LastLoginAt)
+{
+    public DateTimeOffset? EmailVerifiedAt { get; init; }
+    public bool TwoFactorEnabled { get; init; }
+}
+
+public sealed record AuthEmailVerificationToken(
+    string TokenHash,
+    string UserId,
+    DateTimeOffset ExpiresAt,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? UsedAt);
+
+public sealed record AuthPasswordResetToken(
+    string TokenHash,
+    string UserId,
+    DateTimeOffset ExpiresAt,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? UsedAt);
 
 public sealed record ExternalAuthLogin(
     string Provider,

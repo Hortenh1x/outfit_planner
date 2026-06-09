@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:https": "vite --host localhost --mode https",
     "dev:docker": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
@@ -29,6 +30,7 @@
     "jsdom": "latest",
     "typescript": "latest",
     "vite": "latest",
+    "vite-plugin-mkcert": "^2.1.0",
     "vitest": "latest"
   }
 }

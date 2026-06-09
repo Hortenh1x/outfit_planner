@@ -114,8 +114,16 @@ public sealed class PostgresOutfitStore :
         EnsureUser(connection, transaction, garment.UserId);
 
         using var command = new NpgsqlCommand("""
-            insert into garment_items (id, user_id, name, category, body_zone, image_url, thumbnail_url, tags, created_at)
-            values (@id, @user_id, @name, @category, @body_zone, @image_url, @thumbnail_url, @tags, @created_at)
+            insert into garment_items (
+                id, user_id, name, category, body_zone, image_url, thumbnail_url, tags,
+                primary_color, secondary_colors, material, brand, size, season,
+                weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
+                comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at)
+            values (
+                @id, @user_id, @name, @category, @body_zone, @image_url, @thumbnail_url, @tags,
+                @primary_color, @secondary_colors, @material, @brand, @size, @season,
+                @weather_min_temp, @weather_max_temp, @occasion, @formality_score, @warmth_score,
+                @comfort_score, @is_favorite, @is_archived, @last_worn_at, @laundry_status, @created_at)
             """, connection, transaction);
         AddGarmentParameters(command, garment);
         command.ExecuteNonQuery();
@@ -125,7 +133,10 @@ public sealed class PostgresOutfitStore :
     public GarmentItem? GetGarmentByUser(string userId, Guid garmentId)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, user_id, name, category, body_zone, image_url, thumbnail_url, tags, created_at
+            select id, user_id, name, category, body_zone, image_url, thumbnail_url, tags,
+                primary_color, secondary_colors, material, brand, size, season,
+                weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
+                comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at
             from garment_items
             where user_id = @user_id and id = @id
             """);
@@ -138,13 +149,27 @@ public sealed class PostgresOutfitStore :
 
     public IReadOnlyList<GarmentItem> ListGarmentsByUser(string userId)
     {
-        using var command = _dataSource.CreateCommand("""
-            select id, user_id, name, category, body_zone, image_url, thumbnail_url, tags, created_at
-            from garment_items
-            where user_id = @user_id
-            order by category, name
-            """);
+        return ListGarmentsByUser(userId, new GarmentQuery());
+    }
+
+    public IReadOnlyList<GarmentItem> ListGarmentsByUser(string userId, GarmentQuery query)
+    {
+        var where = new List<string> { "user_id = @user_id" };
+        using var command = _dataSource.CreateCommand();
         command.Parameters.AddWithValue("user_id", userId);
+
+        AddGarmentQueryFilters(command, where, query);
+        command.CommandText = $"""
+            select id, user_id, name, category, body_zone, image_url, thumbnail_url, tags,
+                primary_color, secondary_colors, material, brand, size, season,
+                weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
+                comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at
+            from garment_items
+            where {string.Join(" and ", where)}
+            {GarmentOrderBy(query.Sort)}
+            {LimitOffsetClause(query.Limit, query.Offset)}
+            """;
+        AddLimitOffsetParameters(command, query.Limit, query.Offset);
 
         using var reader = command.ExecuteReader();
         var garments = new List<GarmentItem>();
@@ -167,6 +192,36 @@ public sealed class PostgresOutfitStore :
         return command.ExecuteNonQuery() > 0;
     }
 
+    public void UpdateGarment(GarmentItem garment)
+    {
+        using var command = _dataSource.CreateCommand("""
+            update garment_items
+            set name = @name,
+                category = @category,
+                body_zone = @body_zone,
+                tags = @tags,
+                primary_color = @primary_color,
+                secondary_colors = @secondary_colors,
+                material = @material,
+                brand = @brand,
+                size = @size,
+                season = @season,
+                weather_min_temp = @weather_min_temp,
+                weather_max_temp = @weather_max_temp,
+                occasion = @occasion,
+                formality_score = @formality_score,
+                warmth_score = @warmth_score,
+                comfort_score = @comfort_score,
+                is_favorite = @is_favorite,
+                is_archived = @is_archived,
+                last_worn_at = @last_worn_at,
+                laundry_status = @laundry_status
+            where id = @id and user_id = @user_id
+            """);
+        AddGarmentParameters(command, garment);
+        command.ExecuteNonQuery();
+    }
+
     public void AddOutfit(Outfit outfit)
     {
         using var connection = _dataSource.OpenConnection();
@@ -174,8 +229,8 @@ public sealed class PostgresOutfitStore :
         EnsureUser(connection, transaction, outfit.UserId);
 
         using var outfitCommand = new NpgsqlCommand("""
-            insert into outfits (id, user_id, name, clothes_only_preview_url, person_preview_url, created_at)
-            values (@id, @user_id, @name, @clothes_only_preview_url, @person_preview_url, @created_at)
+            insert into outfits (id, user_id, name, tags, occasion, is_favorite, is_archived, clothes_only_preview_url, person_preview_url, created_at)
+            values (@id, @user_id, @name, @tags, @occasion, @is_favorite, @is_archived, @clothes_only_preview_url, @person_preview_url, @created_at)
             """, connection, transaction);
         AddOutfitParameters(outfitCommand, outfit);
         outfitCommand.ExecuteNonQuery();
@@ -211,13 +266,23 @@ public sealed class PostgresOutfitStore :
 
     public IReadOnlyList<Outfit> ListOutfitsByUser(string userId)
     {
-        using var command = _dataSource.CreateCommand("""
-            select id, user_id, name, clothes_only_preview_url, person_preview_url, created_at
-            from outfits
-            where user_id = @user_id
-            order by created_at desc
-            """);
+        return ListOutfitsByUser(userId, new OutfitQuery());
+    }
+
+    public IReadOnlyList<Outfit> ListOutfitsByUser(string userId, OutfitQuery query)
+    {
+        var where = new List<string> { "user_id = @user_id" };
+        using var command = _dataSource.CreateCommand();
         command.Parameters.AddWithValue("user_id", userId);
+        AddOutfitQueryFilters(command, where, query);
+        command.CommandText = $"""
+            select id, user_id, name, tags, occasion, is_favorite, is_archived, clothes_only_preview_url, person_preview_url, created_at
+            from outfits
+            where {string.Join(" and ", where)}
+            {OutfitOrderBy(query.Sort)}
+            {LimitOffsetClause(query.Limit, query.Offset)}
+            """;
+        AddLimitOffsetParameters(command, query.Limit, query.Offset);
 
         using var reader = command.ExecuteReader();
         var outfits = new List<Outfit>();
@@ -237,6 +302,10 @@ public sealed class PostgresOutfitStore :
         using var outfitCommand = new NpgsqlCommand("""
             update outfits
             set name = @name,
+                tags = @tags,
+                occasion = @occasion,
+                is_favorite = @is_favorite,
+                is_archived = @is_archived,
                 clothes_only_preview_url = @clothes_only_preview_url,
                 person_preview_url = @person_preview_url
             where id = @id and user_id = @user_id
@@ -244,11 +313,45 @@ public sealed class PostgresOutfitStore :
         outfitCommand.Parameters.AddWithValue("id", outfit.Id);
         outfitCommand.Parameters.AddWithValue("user_id", outfit.UserId);
         outfitCommand.Parameters.AddWithValue("name", outfit.Name);
+        outfitCommand.Parameters.AddWithValue("tags", outfit.Tags.ToArray());
+        outfitCommand.Parameters.AddWithValue("occasion", outfit.Occasion.ToArray());
+        outfitCommand.Parameters.AddWithValue("is_favorite", outfit.IsFavorite);
+        outfitCommand.Parameters.AddWithValue("is_archived", outfit.IsArchived);
         outfitCommand.Parameters.AddWithValue("clothes_only_preview_url", DbValue(outfit.ClothesOnlyPreviewUrl));
         outfitCommand.Parameters.AddWithValue("person_preview_url", DbValue(outfit.PersonPreviewUrl));
         outfitCommand.ExecuteNonQuery();
 
+        using var deleteItemsCommand = new NpgsqlCommand("""
+            delete from outfit_items
+            where outfit_id = @outfit_id
+            """, connection, transaction);
+        deleteItemsCommand.Parameters.AddWithValue("outfit_id", outfit.Id);
+        deleteItemsCommand.ExecuteNonQuery();
+
+        foreach (var item in outfit.Items)
+        {
+            using var itemCommand = new NpgsqlCommand("""
+                insert into outfit_items (outfit_id, garment_id, category)
+                values (@outfit_id, @garment_id, @category)
+                """, connection, transaction);
+            itemCommand.Parameters.AddWithValue("outfit_id", outfit.Id);
+            itemCommand.Parameters.AddWithValue("garment_id", item.GarmentId);
+            itemCommand.Parameters.AddWithValue("category", item.Category.ToString());
+            itemCommand.ExecuteNonQuery();
+        }
+
         transaction.Commit();
+    }
+
+    public bool DeleteOutfitByUser(string userId, Guid outfitId)
+    {
+        using var command = _dataSource.CreateCommand("""
+            delete from outfits
+            where user_id = @user_id and id = @id
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("id", outfitId);
+        return command.ExecuteNonQuery() > 0;
     }
 
     public void UpsertScheduledOutfit(ScheduledOutfit scheduled)
@@ -301,6 +404,17 @@ public sealed class PostgresOutfitStore :
         return scheduled;
     }
 
+    public bool DeleteScheduledOutfitByUserDate(string userId, DateOnly date)
+    {
+        using var command = _dataSource.CreateCommand("""
+            delete from scheduled_outfits
+            where user_id = @user_id and date = @date
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("date", date);
+        return command.ExecuteNonQuery() > 0;
+    }
+
     public void AddTryOnJob(TryOnJob job)
     {
         using var connection = _dataSource.OpenConnection();
@@ -308,8 +422,8 @@ public sealed class PostgresOutfitStore :
         EnsureUser(connection, transaction, job.UserId);
 
         using var command = new NpgsqlCommand("""
-            insert into try_on_jobs (id, user_id, outfit_id, body_reference_photo_url, status, provider_job_id, output_image_url, error, created_at, updated_at)
-            values (@id, @user_id, @outfit_id, @body_reference_photo_url, @status, @provider_job_id, @output_image_url, @error, @created_at, @updated_at)
+            insert into try_on_jobs (id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status, provider_job_id, output_image_url, error, created_at, updated_at)
+            values (@id, @user_id, @outfit_id, @body_reference_photo_url, @sequential_flow_enabled, @status, @provider_job_id, @output_image_url, @error, @created_at, @updated_at)
             """, connection, transaction);
         AddTryOnJobParameters(command, job);
         command.ExecuteNonQuery();
@@ -319,11 +433,24 @@ public sealed class PostgresOutfitStore :
     public TryOnJob? GetTryOnJobByUser(string userId, Guid jobId)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, user_id, outfit_id, body_reference_photo_url, status, provider_job_id, output_image_url, error, created_at, updated_at
+            select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status, provider_job_id, output_image_url, error, created_at, updated_at
             from try_on_jobs
             where user_id = @user_id and id = @id
             """);
         command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("id", jobId);
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadTryOnJob(reader) : null;
+    }
+
+    public TryOnJob? GetTryOnJobById(Guid jobId)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status, provider_job_id, output_image_url, error, created_at, updated_at
+            from try_on_jobs
+            where id = @id
+            """);
         command.Parameters.AddWithValue("id", jobId);
 
         using var reader = command.ExecuteReader();
@@ -388,6 +515,19 @@ public sealed class PostgresOutfitStore :
                 reader.GetFieldValue<DateTimeOffset>(3),
                 reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4))
             : null;
+    }
+
+    public bool RevokeShareLinkByUser(string userId, string token, DateTimeOffset revokedAt)
+    {
+        using var command = _dataSource.CreateCommand("""
+            update share_links
+            set revoked_at = @revoked_at
+            where user_id = @user_id and token = @token and revoked_at is null
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("token", token);
+        command.Parameters.AddWithValue("revoked_at", revokedAt);
+        return command.ExecuteNonQuery() > 0;
     }
 
     public void AddUser(UserAccount user)
@@ -522,10 +662,161 @@ public sealed class PostgresOutfitStore :
         command.ExecuteNonQuery();
     }
 
+    private static void AddGarmentQueryFilters(NpgsqlCommand command, List<string> where, GarmentQuery query)
+    {
+        if (query.Category is not null)
+        {
+            where.Add("category = @category");
+            command.Parameters.AddWithValue("category", query.Category.Value.ToString());
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Color))
+        {
+            where.Add("(primary_color = @color or secondary_colors @> @color_values)");
+            command.Parameters.AddWithValue("color", query.Color);
+            command.Parameters.AddWithValue("color_values", new[] { query.Color });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Season))
+        {
+            where.Add("season @> @season_values");
+            command.Parameters.AddWithValue("season_values", new[] { query.Season });
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Occasion))
+        {
+            where.Add("occasion @> @occasion_values");
+            command.Parameters.AddWithValue("occasion_values", new[] { query.Occasion });
+        }
+
+        if (query.Favorite is not null)
+        {
+            where.Add("is_favorite = @is_favorite");
+            command.Parameters.AddWithValue("is_favorite", query.Favorite.Value);
+        }
+
+        if (query.Archived is not null)
+        {
+            where.Add("is_archived = @is_archived");
+            command.Parameters.AddWithValue("is_archived", query.Archived.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Brand))
+        {
+            where.Add("brand ilike @brand");
+            command.Parameters.AddWithValue("brand", LikePattern(query.Brand));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Material))
+        {
+            where.Add("material ilike @material");
+            command.Parameters.AddWithValue("material", LikePattern(query.Material));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            where.Add("""
+                (name ilike @search
+                    or primary_color ilike @search
+                    or material ilike @search
+                    or brand ilike @search
+                    or size ilike @search
+                    or exists (select 1 from unnest(tags) as tag where tag ilike @search))
+                """);
+            command.Parameters.AddWithValue("search", LikePattern(query.Search));
+        }
+    }
+
+    private static void AddOutfitQueryFilters(NpgsqlCommand command, List<string> where, OutfitQuery query)
+    {
+        if (!string.IsNullOrWhiteSpace(query.Occasion))
+        {
+            where.Add("occasion @> @occasion_values");
+            command.Parameters.AddWithValue("occasion_values", new[] { query.Occasion });
+        }
+
+        if (query.Favorite is not null)
+        {
+            where.Add("is_favorite = @is_favorite");
+            command.Parameters.AddWithValue("is_favorite", query.Favorite.Value);
+        }
+
+        if (query.Archived is not null)
+        {
+            where.Add("is_archived = @is_archived");
+            command.Parameters.AddWithValue("is_archived", query.Archived.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            where.Add("""
+                (name ilike @search
+                    or exists (select 1 from unnest(tags) as tag where tag ilike @search)
+                    or exists (select 1 from unnest(occasion) as occasion_item where occasion_item ilike @search))
+                """);
+            command.Parameters.AddWithValue("search", LikePattern(query.Search));
+        }
+    }
+
+    private static string GarmentOrderBy(string? sort)
+    {
+        return sort switch
+        {
+            "recent" => "order by created_at desc",
+            "oldest" => "order by created_at asc",
+            "name" => "order by name asc",
+            _ => "order by category asc, name asc"
+        };
+    }
+
+    private static string OutfitOrderBy(string? sort)
+    {
+        return sort switch
+        {
+            "oldest" => "order by created_at asc",
+            "name" => "order by name asc",
+            _ => "order by created_at desc"
+        };
+    }
+
+    private static string LimitOffsetClause(int? limit, int? offset)
+    {
+        var clauses = new List<string>();
+        if (limit is not null)
+        {
+            clauses.Add("limit @limit");
+        }
+
+        if (offset is not null)
+        {
+            clauses.Add("offset @offset");
+        }
+
+        return string.Join(Environment.NewLine, clauses);
+    }
+
+    private static void AddLimitOffsetParameters(NpgsqlCommand command, int? limit, int? offset)
+    {
+        if (limit is not null)
+        {
+            command.Parameters.AddWithValue("limit", limit.Value);
+        }
+
+        if (offset is not null)
+        {
+            command.Parameters.AddWithValue("offset", offset.Value);
+        }
+    }
+
+    private static string LikePattern(string value)
+    {
+        return $"%{value}%";
+    }
+
     private Outfit? GetOutfit(string whereClause, Action<NpgsqlCommand> addParameters)
     {
         using var command = _dataSource.CreateCommand($"""
-            select id, user_id, name, clothes_only_preview_url, person_preview_url, created_at
+            select id, user_id, name, tags, occasion, is_favorite, is_archived, clothes_only_preview_url, person_preview_url, created_at
             from outfits
             {whereClause}
             """);
@@ -647,6 +938,22 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("image_url", garment.ImageUrl);
         command.Parameters.AddWithValue("thumbnail_url", garment.ThumbnailUrl);
         command.Parameters.AddWithValue("tags", garment.Tags.ToArray());
+        command.Parameters.AddWithValue("primary_color", DbValue(garment.PrimaryColor));
+        command.Parameters.AddWithValue("secondary_colors", garment.SecondaryColors.ToArray());
+        command.Parameters.AddWithValue("material", DbValue(garment.Material));
+        command.Parameters.AddWithValue("brand", DbValue(garment.Brand));
+        command.Parameters.AddWithValue("size", DbValue(garment.Size));
+        command.Parameters.AddWithValue("season", garment.Season.ToArray());
+        command.Parameters.AddWithValue("weather_min_temp", DbValue(garment.WeatherMinTemp));
+        command.Parameters.AddWithValue("weather_max_temp", DbValue(garment.WeatherMaxTemp));
+        command.Parameters.AddWithValue("occasion", garment.Occasion.ToArray());
+        command.Parameters.AddWithValue("formality_score", DbValue(garment.FormalityScore));
+        command.Parameters.AddWithValue("warmth_score", DbValue(garment.WarmthScore));
+        command.Parameters.AddWithValue("comfort_score", DbValue(garment.ComfortScore));
+        command.Parameters.AddWithValue("is_favorite", garment.IsFavorite);
+        command.Parameters.AddWithValue("is_archived", garment.IsArchived);
+        command.Parameters.AddWithValue("last_worn_at", DbValue(garment.LastWornAt));
+        command.Parameters.AddWithValue("laundry_status", garment.LaundryStatus);
         command.Parameters.AddWithValue("created_at", garment.CreatedAt);
     }
 
@@ -655,6 +962,10 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("id", outfit.Id);
         command.Parameters.AddWithValue("user_id", outfit.UserId);
         command.Parameters.AddWithValue("name", outfit.Name);
+        command.Parameters.AddWithValue("tags", outfit.Tags.ToArray());
+        command.Parameters.AddWithValue("occasion", outfit.Occasion.ToArray());
+        command.Parameters.AddWithValue("is_favorite", outfit.IsFavorite);
+        command.Parameters.AddWithValue("is_archived", outfit.IsArchived);
         command.Parameters.AddWithValue("clothes_only_preview_url", DbValue(outfit.ClothesOnlyPreviewUrl));
         command.Parameters.AddWithValue("person_preview_url", DbValue(outfit.PersonPreviewUrl));
         command.Parameters.AddWithValue("created_at", outfit.CreatedAt);
@@ -666,6 +977,7 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("user_id", job.UserId);
         command.Parameters.AddWithValue("outfit_id", job.OutfitId);
         command.Parameters.AddWithValue("body_reference_photo_url", job.BodyReferencePhotoUrl);
+        command.Parameters.AddWithValue("sequential_flow_enabled", job.SequentialFlowEnabled);
         command.Parameters.AddWithValue("status", job.Status.ToString());
         command.Parameters.AddWithValue("provider_job_id", DbValue(job.ProviderJobId));
         command.Parameters.AddWithValue("output_image_url", DbValue(job.OutputImageUrl));
@@ -685,7 +997,23 @@ public sealed class PostgresOutfitStore :
             reader.GetString(5),
             reader.GetString(6),
             reader.GetFieldValue<string[]>(7),
-            reader.GetFieldValue<DateTimeOffset>(8));
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.GetFieldValue<string[]>(9),
+            reader.IsDBNull(10) ? null : reader.GetString(10),
+            reader.IsDBNull(11) ? null : reader.GetString(11),
+            reader.IsDBNull(12) ? null : reader.GetString(12),
+            reader.GetFieldValue<string[]>(13),
+            reader.IsDBNull(14) ? null : reader.GetInt32(14),
+            reader.IsDBNull(15) ? null : reader.GetInt32(15),
+            reader.GetFieldValue<string[]>(16),
+            reader.IsDBNull(17) ? null : reader.GetInt32(17),
+            reader.IsDBNull(18) ? null : reader.GetInt32(18),
+            reader.IsDBNull(19) ? null : reader.GetInt32(19),
+            reader.GetBoolean(20),
+            reader.GetBoolean(21),
+            reader.IsDBNull(22) ? null : reader.GetFieldValue<DateTimeOffset>(22),
+            reader.GetString(23),
+            reader.GetFieldValue<DateTimeOffset>(24));
     }
 
     private static Outfit ReadOutfitShell(NpgsqlDataReader reader)
@@ -695,9 +1023,13 @@ public sealed class PostgresOutfitStore :
             reader.GetString(1),
             reader.GetString(2),
             Array.Empty<OutfitItem>(),
-            reader.IsDBNull(3) ? null : reader.GetString(3),
-            reader.IsDBNull(4) ? null : reader.GetString(4),
-            reader.GetFieldValue<DateTimeOffset>(5));
+            reader.GetFieldValue<string[]>(3),
+            reader.GetFieldValue<string[]>(4),
+            reader.GetBoolean(5),
+            reader.GetBoolean(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.GetFieldValue<DateTimeOffset>(9));
     }
 
     private static TryOnJob ReadTryOnJob(NpgsqlDataReader reader)
@@ -707,12 +1039,13 @@ public sealed class PostgresOutfitStore :
             reader.GetString(1),
             reader.GetGuid(2),
             reader.GetString(3),
-            Enum.Parse<TryOnStatus>(reader.GetString(4)),
-            reader.IsDBNull(5) ? null : reader.GetString(5),
+            reader.GetBoolean(4),
+            Enum.Parse<TryOnStatus>(reader.GetString(5)),
             reader.IsDBNull(6) ? null : reader.GetString(6),
             reader.IsDBNull(7) ? null : reader.GetString(7),
-            reader.GetFieldValue<DateTimeOffset>(8),
-            reader.GetFieldValue<DateTimeOffset>(9));
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.GetFieldValue<DateTimeOffset>(9),
+            reader.GetFieldValue<DateTimeOffset>(10));
     }
 
     private static object DbValue<T>(T? value)

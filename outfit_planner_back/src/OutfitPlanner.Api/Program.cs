@@ -1,15 +1,22 @@
 using OutfitPlanner.Application.Abstractions;
 using OutfitPlanner.Application.Services;
+using OutfitPlanner.Api;
+using OutfitPlanner.Api.Authentication;
 using OutfitPlanner.Api.Contracts;
+using OutfitPlanner.Domain;
 using OutfitPlanner.Infrastructure.Diagnostics;
 using OutfitPlanner.Infrastructure.Security;
 using OutfitPlanner.Infrastructure.Storage;
 using OutfitPlanner.Infrastructure.TryOn;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.WebUtilities;
 using Npgsql;
+using StackExchange.Redis;
 using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text.Json;
@@ -38,6 +45,19 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor
+        | ForwardedHeaders.XForwardedHost
+        | ForwardedHeaders.XForwardedProto;
+
+    if (builder.Environment.IsDevelopment())
+    {
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+    }
+});
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -46,7 +66,11 @@ builder.Services.AddCors(options =>
                 "http://localhost:5173",
                 "http://127.0.0.1:5173",
                 "http://localhost:4173",
-                "http://127.0.0.1:4173")
+                "http://127.0.0.1:4173",
+                "https://localhost:5173",
+                "https://127.0.0.1:5173",
+                "https://localhost:4173",
+                "https://127.0.0.1:4173")
             .AllowCredentials()
             .AllowAnyHeader()
             .AllowAnyMethod());
@@ -57,6 +81,7 @@ builder.Services.AddSingleton<IShareTokenGenerator, SecureShareTokenGenerator>()
 builder.Services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
 builder.Services.AddSingleton<IAuthTokenService, SecureAuthTokenService>();
 var authenticationBuilder = builder.Services.AddAuthentication();
+var externalAuthPublicOrigin = NormalizePublicOrigin(builder.Configuration["Authentication:PublicOrigin"]);
 authenticationBuilder.AddCookie(ExternalAuthCookieScheme, options =>
 {
     options.Cookie.Name = ExternalAuthCookieScheme;
@@ -71,7 +96,7 @@ var googleClientSecret = builder.Configuration["Authentication:Google:ClientSecr
 var googleConfigured = !string.IsNullOrWhiteSpace(googleClientId) && !string.IsNullOrWhiteSpace(googleClientSecret);
 if (googleConfigured)
 {
-    authenticationBuilder.AddOAuth("google", options =>
+    authenticationBuilder.AddOAuth<GoogleOptions, CanonicalGoogleHandler>("google", options =>
     {
         options.ClientId = googleClientId!;
         options.ClientSecret = googleClientSecret!;
@@ -89,14 +114,17 @@ if (googleConfigured)
         options.ClaimActions.MapJsonKey("email_verified", "email_verified");
         options.Events = new OAuthEvents
         {
-            OnCreatingTicket = async context =>
+            OnRedirectToAuthorizationEndpoint = context =>
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, context.Options.UserInformationEndpoint);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", context.AccessToken);
-                using var response = await context.Backchannel.SendAsync(request, context.HttpContext.RequestAborted);
-                response.EnsureSuccessStatusCode();
-                using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync(context.HttpContext.RequestAborted));
-                context.RunClaimActions(payload.RootElement);
+                context.Response.Redirect(BuildOAuthAuthorizationRedirectUri(context, externalAuthPublicOrigin));
+                return Task.CompletedTask;
+            },
+            OnRemoteFailure = context =>
+            {
+                var message = context.Failure?.Message ?? "External authentication failed.";
+                context.Response.Redirect($"/api/auth/external/google/complete?externalError={Uri.EscapeDataString(message)}");
+                context.HandleResponse();
+                return Task.CompletedTask;
             }
         };
     });
@@ -121,6 +149,20 @@ if (appleConfigured)
         options.Scope.Add("name");
         options.SaveTokens = false;
         options.GetClaimsFromUserInfoEndpoint = false;
+        options.Events = new OpenIdConnectEvents
+        {
+            OnRedirectToIdentityProvider = context =>
+            {
+                if (externalAuthPublicOrigin is not null)
+                {
+                    context.ProtocolMessage.RedirectUri = BuildExternalCallbackUri(
+                        externalAuthPublicOrigin,
+                        context.Options.CallbackPath);
+                }
+
+                return Task.CompletedTask;
+            }
+        };
     });
 }
 builder.Services.AddHttpClient("fashn", client =>
@@ -128,23 +170,21 @@ builder.Services.AddHttpClient("fashn", client =>
     client.BaseAddress = new Uri(builder.Configuration["Fashn:BaseUrl"] ?? "https://api.fashn.ai/v1/");
     client.Timeout = TimeSpan.FromSeconds(builder.Configuration.GetValue("Fashn:TimeoutSeconds", 180));
 });
-builder.Services.AddSingleton<ITryOnProvider>(provider =>
+builder.Services.AddHttpClient("local-vton");
+builder.Services.AddHttpClient("local-cat-vton");
+builder.Services.AddHttpClient("replicate");
+builder.Services.AddHttpClient("fal");
+builder.Services.AddSingleton<ITryOnProvider>(provider => CreateTryOnProvider(provider, builder.Configuration));
+var redisConnectionString = builder.Configuration["ConnectionStrings:Redis"] ?? builder.Configuration.GetConnectionString("Redis");
+if (string.IsNullOrWhiteSpace(redisConnectionString))
 {
-    var configuredProvider = builder.Configuration["TryOn:Provider"];
-    if (!string.Equals(configuredProvider, "Fashn", StringComparison.OrdinalIgnoreCase))
-    {
-        return new MockTryOnProvider();
-    }
-
-    var http = provider.GetRequiredService<IHttpClientFactory>().CreateClient("fashn");
-    var settings = new FashnTryOnSettings(
-        builder.Configuration["Fashn:ApiKey"] ?? "",
-        builder.Configuration["Fashn:ModelName"] ?? "tryon-v1.6",
-        builder.Configuration["Fashn:Mode"] ?? "balanced",
-        builder.Configuration.GetValue("Fashn:MaxPollingAttempts", 30),
-        TimeSpan.FromSeconds(builder.Configuration.GetValue("Fashn:PollIntervalSeconds", 2)));
-    return new FashnTryOnProvider(http, settings);
-});
+    builder.Services.AddSingleton<ITryOnJobQueue, InMemoryTryOnJobQueue>();
+}
+else
+{
+    builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnectionString));
+    builder.Services.AddSingleton<ITryOnJobQueue>(provider => new RedisTryOnJobQueue(provider.GetRequiredService<IConnectionMultiplexer>()));
+}
 builder.Services.AddSingleton(_ => new LocalPhotoStorage(Path.Combine(builder.Environment.ContentRootPath, "storage", "garment-photos")));
 builder.Services.AddSingleton<IPhotoStorage>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IStoredPhotoReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
@@ -187,6 +227,7 @@ builder.Services.AddSingleton<TryOnService>();
 builder.Services.AddSingleton<ShareService>();
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<PostgresConnectionProbe>();
+builder.Services.AddHostedService<TryOnBackgroundWorker>();
 
 var app = builder.Build();
 
@@ -234,6 +275,7 @@ app.Use(async (context, next) =>
     }
 });
 
+app.UseForwardedHeaders();
 app.UseCors();
 app.UseAuthentication();
 app.Use(async (context, next) =>
@@ -349,22 +391,44 @@ api.MapGet("/auth/external/{provider}/start", (string provider, string? returnUr
     var safeReturnUrl = NormalizeReturnUrl(returnUrl);
     var properties = new AuthenticationProperties
     {
-        RedirectUri = $"/api/auth/external/{normalizedProvider}/callback?returnUrl={Uri.EscapeDataString(safeReturnUrl)}"
+        RedirectUri = $"/api/auth/external/{normalizedProvider}/complete?returnUrl={Uri.EscapeDataString(safeReturnUrl)}"
     };
 
     return Results.Challenge(properties, new[] { normalizedProvider });
 });
 
-api.MapGet("/auth/external/{provider}/callback", async (string provider, string? returnUrl, AuthService auth, HttpContext context) =>
+api.MapGet("/auth/external/{provider}/complete", async (
+    string provider,
+    string? returnUrl,
+    string? externalError,
+    AuthService auth,
+    HttpContext context,
+    ILogger<Program> logger) =>
 {
     if (!TryNormalizeExternalProvider(provider, out var normalizedProvider))
     {
         return Results.BadRequest(new { error = "Unsupported external auth provider." });
     }
 
+    if (!string.IsNullOrWhiteSpace(externalError))
+    {
+        logger.LogWarning("External authentication failed for {Provider}: {Error}", normalizedProvider, externalError);
+        return Results.BadRequest(new { error = "External authentication failed.", detail = externalError });
+    }
+
     var external = await context.AuthenticateAsync(ExternalAuthCookieScheme);
     if (!external.Succeeded || external.Principal is null)
     {
+        if (external.Failure is not null)
+        {
+            logger.LogWarning(external.Failure, "External authentication cookie was not valid for {Provider}", normalizedProvider);
+            return Results.BadRequest(new
+            {
+                error = "External authentication did not complete.",
+                detail = detailedErrorsEnabled ? external.Failure.Message : null
+            });
+        }
+
         return Results.BadRequest(new { error = "External authentication did not complete." });
     }
 
@@ -378,16 +442,28 @@ api.MapGet("/auth/external/{provider}/callback", async (string provider, string?
     var email = external.Principal.FindFirstValue(ClaimTypes.Email);
     var displayName = external.Principal.FindFirstValue(ClaimTypes.Name);
     var emailVerified = IsExternalEmailVerified(external.Principal);
-    var result = auth.SignInWithExternalAccount(new ExternalSignInCommand(
-        normalizedProvider,
-        subject,
-        email,
-        emailVerified,
-        displayName));
+    try
+    {
+        var result = auth.SignInWithExternalAccount(new ExternalSignInCommand(
+            normalizedProvider,
+            subject,
+            email,
+            emailVerified,
+            displayName));
 
-    await context.SignOutAsync(ExternalAuthCookieScheme);
-    IssueAuthCookies(context, result, app.Environment);
-    return Results.Redirect(NormalizeReturnUrl(returnUrl));
+        await context.SignOutAsync(ExternalAuthCookieScheme);
+        IssueAuthCookies(context, result, app.Environment);
+        return Results.Redirect(NormalizeReturnUrl(returnUrl));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "External authentication callback failed for {Provider}", normalizedProvider);
+        return Results.BadRequest(new
+        {
+            error = "External authentication callback failed.",
+            detail = detailedErrorsEnabled ? ex.Message : null
+        });
+    }
 });
 
 api.MapPost("/body-reference-photos", (CreateBodyReferencePhotoRequest request, WardrobeService wardrobe, HttpContext context) =>
@@ -409,8 +485,40 @@ api.MapGet("/body-reference-photos", (WardrobeService wardrobe, HttpContext cont
 api.MapDelete("/body-reference-photos/{photoId:guid}", (Guid photoId, WardrobeService wardrobe, HttpContext context) =>
     wardrobe.DeleteBodyReferencePhoto(CurrentUser(context), photoId) ? Results.NoContent() : Results.NotFound());
 
-api.MapGet("/garments", (WardrobeService wardrobe, HttpContext context) =>
-    Results.Ok(wardrobe.ListGarments(CurrentUser(context))));
+api.MapGet("/garments", (
+    WardrobeService wardrobe,
+    HttpContext context,
+    GarmentCategory? category,
+    string? color,
+    string? season,
+    string? q,
+    string? sort,
+    int? offset,
+    int? limit,
+    bool? favorite,
+    bool? archived,
+    string? occasion,
+    string? brand,
+    string? material) =>
+    Results.Ok(wardrobe.ListGarments(CurrentUser(context), new GarmentQuery(
+        category,
+        color,
+        season,
+        q,
+        sort,
+        offset,
+        limit,
+        favorite,
+        archived,
+        occasion,
+        brand,
+        material))));
+
+api.MapGet("/garments/{garmentId:guid}", (Guid garmentId, WardrobeService wardrobe, HttpContext context) =>
+{
+    var garment = wardrobe.GetGarment(CurrentUser(context), garmentId);
+    return garment is null ? Results.NotFound() : Results.Ok(garment);
+});
 
 api.MapPost("/uploads/garment-photo", async (HttpRequest request, PhotoUploadService photos, ILogger<Program> logger, CancellationToken cancellationToken) =>
 {
@@ -432,9 +540,57 @@ api.MapPost("/garments", (CreateGarmentRequest request, WardrobeService wardrobe
             request.Category,
             request.ImageUrl,
             request.ThumbnailUrl,
-            request.Tags ?? Array.Empty<string>()));
+            request.Tags ?? Array.Empty<string>(),
+            request.PrimaryColor,
+            request.SecondaryColors,
+            request.Material,
+            request.Brand,
+            request.Size,
+            request.Season,
+            request.WeatherMinTemp,
+            request.WeatherMaxTemp,
+            request.Occasion,
+            request.FormalityScore,
+            request.WarmthScore,
+            request.ComfortScore,
+            request.IsFavorite ?? false,
+            request.IsArchived ?? false,
+            request.LastWornAt,
+            request.LaundryStatus));
 
         return Results.Created($"/api/garments/{garment.Id}", garment);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+api.MapPatch("/garments/{garmentId:guid}", (Guid garmentId, UpdateGarmentRequest request, WardrobeService wardrobe, HttpContext context) =>
+{
+    try
+    {
+        var garment = wardrobe.UpdateGarment(CurrentUser(context), garmentId, new UpdateGarmentCommand(
+            request.Name,
+            request.Category,
+            request.Tags,
+            request.PrimaryColor,
+            request.SecondaryColors,
+            request.Material,
+            request.Brand,
+            request.Size,
+            request.Season,
+            request.WeatherMinTemp,
+            request.WeatherMaxTemp,
+            request.Occasion,
+            request.FormalityScore,
+            request.WarmthScore,
+            request.ComfortScore,
+            request.IsFavorite,
+            request.IsArchived,
+            request.LastWornAt,
+            request.LaundryStatus));
+        return garment is null ? Results.NotFound() : Results.Ok(garment);
     }
     catch (InvalidOperationException ex)
     {
@@ -445,8 +601,23 @@ api.MapPost("/garments", (CreateGarmentRequest request, WardrobeService wardrobe
 api.MapDelete("/garments/{garmentId:guid}", (Guid garmentId, WardrobeService wardrobe, HttpContext context) =>
     wardrobe.DeleteGarment(CurrentUser(context), garmentId) ? Results.NoContent() : Results.NotFound());
 
-api.MapGet("/outfits", (OutfitService outfits, HttpContext context) =>
-    Results.Ok(outfits.ListOutfits(CurrentUser(context))));
+api.MapGet("/outfits", (
+    OutfitService outfits,
+    HttpContext context,
+    string? q,
+    string? occasion,
+    bool? favorite,
+    bool? archived,
+    string? sort,
+    int? offset,
+    int? limit) =>
+    Results.Ok(outfits.ListOutfits(CurrentUser(context), new OutfitQuery(q, occasion, favorite, archived, sort, offset, limit))));
+
+api.MapGet("/outfits/{outfitId:guid}", (Guid outfitId, OutfitService outfits, HttpContext context) =>
+{
+    var outfit = outfits.GetOutfit(CurrentUser(context), outfitId);
+    return outfit is null ? Results.NotFound() : Results.Ok(outfit);
+});
 
 api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, HttpContext context) =>
 {
@@ -461,15 +632,38 @@ api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, Htt
     }
 });
 
-api.MapPost("/outfits/{outfitId:guid}/try-on", (
-    Guid outfitId,
-    StartTryOnRequest request,
-    TryOnService tryOn,
-    HttpContext context) =>
+api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest request, OutfitService outfits, HttpContext context) =>
 {
     try
     {
-        var job = tryOn.Start(CurrentUser(context), outfitId, request.BodyReferencePhotoUrl, request.ConsentAccepted, request.SequentialFlowEnabled);
+        var outfit = outfits.UpdateOutfit(CurrentUser(context), outfitId, new UpdateOutfitCommand(
+            request.Name,
+            request.GarmentIds,
+            request.Tags,
+            request.Occasion,
+            request.IsFavorite,
+            request.IsArchived));
+        return outfit is null ? Results.NotFound() : Results.Ok(outfit);
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+api.MapDelete("/outfits/{outfitId:guid}", (Guid outfitId, OutfitService outfits, HttpContext context) =>
+    outfits.DeleteOutfit(CurrentUser(context), outfitId) ? Results.NoContent() : Results.NotFound());
+
+api.MapPost("/outfits/{outfitId:guid}/try-on", async (
+    Guid outfitId,
+    StartTryOnRequest request,
+    TryOnService tryOn,
+    HttpContext context,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var job = await tryOn.StartAsync(CurrentUser(context), outfitId, request.BodyReferencePhotoUrl, request.ConsentAccepted, request.SequentialFlowEnabled, cancellationToken);
         return Results.Accepted($"/api/try-on-jobs/{job.Id}", job);
     }
     catch (InvalidOperationException ex)
@@ -514,6 +708,16 @@ api.MapGet("/schedule", (string from, string to, ScheduleService schedule, HttpC
     }
 });
 
+api.MapDelete("/schedule/{date}", (string date, ScheduleService schedule, HttpContext context) =>
+{
+    if (!DateOnly.TryParse(date, out var scheduledDate))
+    {
+        return Results.BadRequest(new { error = "Route parameter 'date' must be an ISO date." });
+    }
+
+    return schedule.UnscheduleOutfit(CurrentUser(context), scheduledDate) ? Results.NoContent() : Results.NotFound();
+});
+
 api.MapPost("/outfits/{outfitId:guid}/share", (Guid outfitId, ShareService share, HttpContext context) =>
 {
     try
@@ -535,11 +739,18 @@ api.MapGet("/share/{token}", (string token, ShareService share) =>
         outfit.Id,
         outfit.Name,
         outfit.Items,
+        outfit.Tags,
+        outfit.Occasion,
+        outfit.IsFavorite,
+        outfit.IsArchived,
         outfit.ClothesOnlyPreviewUrl,
         outfit.PersonPreviewUrl,
         outfit.CreatedAt
     });
 });
+
+api.MapDelete("/share/{token}", (string token, ShareService share, HttpContext context) =>
+    share.RevokeShareLink(CurrentUser(context), token) ? Results.NoContent() : Results.NotFound());
 
 app.MapGet("/uploads/garments/{fileName}", (string fileName, IStoredPhotoReader photos) =>
 {
@@ -615,6 +826,59 @@ static async Task<IResult> UploadPhoto(HttpRequest request, ILogger logger, stri
     }
 }
 
+static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfiguration configuration)
+{
+    var configuredProvider = configuration["TryOn:Provider"] ?? "Mock";
+    var httpFactory = provider.GetRequiredService<IHttpClientFactory>();
+
+    return configuredProvider.Trim().ToLowerInvariant() switch
+    {
+        "fashn" => new FashnTryOnProvider(
+            httpFactory.CreateClient("fashn"),
+            new FashnTryOnSettings(
+                configuration["Fashn:ApiKey"] ?? "",
+                configuration["Fashn:ModelName"] ?? "tryon-v1.6",
+                configuration["Fashn:Mode"] ?? "balanced",
+                configuration.GetValue("Fashn:MaxPollingAttempts", 30),
+                TimeSpan.FromSeconds(configuration.GetValue("Fashn:PollIntervalSeconds", 2)))),
+        "localvton" or "local-vton" => new LocalVtonProvider(
+            httpFactory.CreateClient("local-vton"),
+            HttpProviderSettings(configuration, "LocalVton", "http://localhost:7860/", "/try-on", requiresApiKey: false)),
+        "localcatvton" or "local-cat-vton" or "localcatvtonprovider" => new LocalCatVtonProvider(
+            httpFactory.CreateClient("local-cat-vton"),
+            HttpProviderSettings(configuration, "LocalCatVton", "http://localhost:7861/", "/try-on", requiresApiKey: false)),
+        "replicate" => new ReplicateProvider(
+            httpFactory.CreateClient("replicate"),
+            HttpProviderSettings(configuration, "Replicate", "https://api.replicate.com/v1/", "/predictions", requiresApiKey: true)),
+        "fal" => new FalProvider(
+            httpFactory.CreateClient("fal"),
+            HttpProviderSettings(configuration, "Fal", "https://fal.run/", "/try-on", requiresApiKey: true)),
+        _ => new MockTryOnProvider()
+    };
+}
+
+static HttpTryOnProviderSettings HttpProviderSettings(
+    IConfiguration configuration,
+    string providerName,
+    string defaultBaseUrl,
+    string defaultEndpoint,
+    bool requiresApiKey)
+{
+    return new HttpTryOnProviderSettings(
+        ProviderSetting(configuration, providerName, "BaseUrl", defaultBaseUrl),
+        ProviderSetting(configuration, providerName, "Endpoint", defaultEndpoint),
+        ProviderSetting(configuration, providerName, "ApiKey", ""),
+        ProviderSetting(configuration, providerName, "ModelName", providerName),
+        requiresApiKey);
+}
+
+static string ProviderSetting(IConfiguration configuration, string providerName, string key, string fallback)
+{
+    return configuration[$"TryOn:{providerName}:{key}"]
+        ?? configuration[$"{providerName}:{key}"]
+        ?? fallback;
+}
+
 static string CurrentUser(HttpContext context)
 {
     return context.Items.TryGetValue(CurrentUserItemKey, out var userId) && userId is string value
@@ -633,7 +897,7 @@ static bool RequiresAuthenticatedUser(HttpContext context)
     return !path.Equals("/health", StringComparison.OrdinalIgnoreCase)
         && !path.Equals("/system/status", StringComparison.OrdinalIgnoreCase)
         && !path.StartsWith("/auth/", StringComparison.OrdinalIgnoreCase)
-        && !path.StartsWith("/share/", StringComparison.OrdinalIgnoreCase);
+        && !(HttpMethods.IsGet(context.Request.Method) && path.StartsWith("/share/", StringComparison.OrdinalIgnoreCase));
 }
 
 static bool RequiresCsrfToken(HttpRequest request)
@@ -645,34 +909,34 @@ static bool RequiresCsrfToken(HttpRequest request)
 
 static void IssueAuthCookies(HttpContext context, AuthResult result, IWebHostEnvironment environment)
 {
-    context.Response.Cookies.Append(SessionCookieName, result.SessionToken, SessionCookieOptions(result.ExpiresAt, environment));
-    context.Response.Cookies.Append(CsrfCookieName, result.CsrfToken, CsrfCookieOptions(result.ExpiresAt, environment));
+    context.Response.Cookies.Append(SessionCookieName, result.SessionToken, SessionCookieOptions(result.ExpiresAt, environment, context.Request.IsHttps));
+    context.Response.Cookies.Append(CsrfCookieName, result.CsrfToken, CsrfCookieOptions(result.ExpiresAt, environment, context.Request.IsHttps));
 }
 
 static void ClearAuthCookies(HttpContext context, IWebHostEnvironment environment)
 {
-    context.Response.Cookies.Delete(SessionCookieName, SessionCookieOptions(DateTimeOffset.UnixEpoch, environment));
-    context.Response.Cookies.Delete(CsrfCookieName, CsrfCookieOptions(DateTimeOffset.UnixEpoch, environment));
+    context.Response.Cookies.Delete(SessionCookieName, SessionCookieOptions(DateTimeOffset.UnixEpoch, environment, context.Request.IsHttps));
+    context.Response.Cookies.Delete(CsrfCookieName, CsrfCookieOptions(DateTimeOffset.UnixEpoch, environment, context.Request.IsHttps));
 }
 
-static CookieOptions SessionCookieOptions(DateTimeOffset expiresAt, IWebHostEnvironment environment)
+static CookieOptions SessionCookieOptions(DateTimeOffset expiresAt, IWebHostEnvironment environment, bool isHttps)
 {
     return new CookieOptions
     {
         HttpOnly = true,
-        Secure = !environment.IsDevelopment(),
+        Secure = !environment.IsDevelopment() || isHttps,
         SameSite = SameSiteMode.Lax,
         Expires = expiresAt,
         Path = "/"
     };
 }
 
-static CookieOptions CsrfCookieOptions(DateTimeOffset expiresAt, IWebHostEnvironment environment)
+static CookieOptions CsrfCookieOptions(DateTimeOffset expiresAt, IWebHostEnvironment environment, bool isHttps)
 {
     return new CookieOptions
     {
         HttpOnly = false,
-        Secure = !environment.IsDevelopment(),
+        Secure = !environment.IsDevelopment() || isHttps,
         SameSite = SameSiteMode.Lax,
         Expires = expiresAt,
         Path = "/"
@@ -731,6 +995,46 @@ static bool IsExternalEmailVerified(ClaimsPrincipal principal)
 {
     var claim = principal.FindFirst("email_verified")?.Value;
     return string.Equals(claim, "true", StringComparison.OrdinalIgnoreCase) || claim == "1";
+}
+
+static string BuildOAuthAuthorizationRedirectUri(RedirectContext<OAuthOptions> context, string? publicOrigin)
+{
+    if (publicOrigin is null)
+    {
+        return context.RedirectUri;
+    }
+
+    var authorizationEndpoint = new Uri(context.RedirectUri);
+    var query = QueryHelpers.ParseQuery(authorizationEndpoint.Query)
+        .ToDictionary(
+            pair => pair.Key,
+            pair => (string?)pair.Value.ToString(),
+            StringComparer.Ordinal);
+    query["redirect_uri"] = BuildExternalCallbackUri(publicOrigin, context.Options.CallbackPath);
+
+    return QueryHelpers.AddQueryString(authorizationEndpoint.GetLeftPart(UriPartial.Path), query);
+}
+
+static string? NormalizePublicOrigin(string? origin)
+{
+    if (string.IsNullOrWhiteSpace(origin))
+    {
+        return null;
+    }
+
+    if (!Uri.TryCreate(origin.Trim(), UriKind.Absolute, out var uri)
+        || uri.Scheme is not ("http" or "https")
+        || string.IsNullOrWhiteSpace(uri.Host))
+    {
+        throw new InvalidOperationException("Authentication:PublicOrigin must be an absolute HTTP or HTTPS origin.");
+    }
+
+    return uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+}
+
+static string BuildExternalCallbackUri(string publicOrigin, PathString callbackPath)
+{
+    return $"{publicOrigin}{callbackPath}";
 }
 
 public partial class Program;

@@ -8,6 +8,12 @@ public static class GarmentRules
         {
             GarmentCategory.Top => BodyZone.Torso,
             GarmentCategory.Bottom => BodyZone.Legs,
+            GarmentCategory.Dress => BodyZone.FullBody,
+            GarmentCategory.Outerwear => BodyZone.OuterLayer,
+            GarmentCategory.Shoes => BodyZone.Feet,
+            GarmentCategory.Bag => BodyZone.Accessory,
+            GarmentCategory.Accessory => BodyZone.Accessory,
+            GarmentCategory.Hat => BodyZone.Head,
             _ => throw new ArgumentOutOfRangeException(nameof(category), category, "Unsupported garment category.")
         };
     }

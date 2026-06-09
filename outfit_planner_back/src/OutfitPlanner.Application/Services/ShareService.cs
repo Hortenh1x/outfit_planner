@@ -41,4 +41,12 @@ public sealed class ShareService
         var link = _shareLinks.GetActiveShareLink(InputGuard.RequireText(token, "Share token"));
         return link is null ? null : _outfits.GetOutfitById(link.OutfitId);
     }
+
+    public bool RevokeShareLink(string userId, string token)
+    {
+        return _shareLinks.RevokeShareLinkByUser(
+            InputGuard.NormalizeUserId(userId),
+            InputGuard.RequireText(token, "Share token"),
+            _clock.UtcNow);
+    }
 }

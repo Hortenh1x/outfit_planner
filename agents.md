@@ -13,6 +13,8 @@ This file is durable working context for Codex agents in this project.
 - If API contracts change, update `outfit_planner_front/src/api/client.ts`, `outfit_planner_front/src/types.ts`, tests, and README.
 - If garment categories or body zones change, update Domain rules/enums, API contracts, frontend selectors/types, PostgreSQL schema/storage, and tests together.
 - Preserve the same-origin frontend convention: frontend code should call `/api` and `/uploads`; Vite/nginx should proxy those paths to the API.
+- Never hurry: always prioritise quality over speed.
+- Don't cut corners on the practical tasks, and approach them with the utmost care—even if they are very large and require multiple stages to complete. Don't try to finish everything "in 20 minutes" or rush through the work as fast as possible. Take as much time as needed
 
 ## Project Context
 
@@ -42,6 +44,13 @@ Run backend with in-memory storage:
 
 ```powershell
 dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls http://localhost:5000
+```
+
+Run backend with HTTPS for local Google/Apple OAuth:
+
+```powershell
+$env:Authentication__PublicOrigin = "https://localhost:5173"
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls https://localhost:5001
 ```
 
 Run backend against compose PostgreSQL:
@@ -77,6 +86,16 @@ Run frontend dev server:
 cd outfit_planner_front
 npm run dev
 ```
+
+Run frontend dev server over HTTPS for local Google/Apple OAuth:
+
+```powershell
+cd outfit_planner_front
+$env:VITE_DEV_API_TARGET = "https://localhost:5001"
+npm run dev:https
+```
+
+Stop any existing Vite process on port 5173 before `dev:https`; first run requires approving the Windows `mkcert` certificate prompt.
 
 Run frontend tests:
 
