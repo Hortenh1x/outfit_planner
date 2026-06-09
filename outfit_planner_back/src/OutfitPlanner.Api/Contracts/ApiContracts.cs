@@ -60,7 +60,7 @@ public sealed record UpdateOutfitRequest(
 
 public sealed record ScheduleOutfitRequest(DateOnly Date, Guid OutfitId);
 
-public sealed record StartTryOnRequest(string BodyReferencePhotoUrl, bool ConsentAccepted, bool SequentialFlowEnabled);
+public sealed record StartTryOnRequest(string BodyReferencePhotoUrl, bool ConsentAccepted, bool SequentialFlowEnabled, Guid? BodyReferencePhotoId = null);
 
 public sealed record ShareLinkResponse(string Token, string Url);
 
@@ -69,6 +69,14 @@ public sealed record UploadedPhotoResponse(string FileName, string ContentType, 
 public sealed record RegisterRequest(string Email, string Password, string RepeatPassword);
 
 public sealed record LoginRequest(string Email, string Password);
+
+public sealed record EmailVerificationRequest(string Email);
+
+public sealed record TokenRequest(string Token);
+
+public sealed record PasswordResetRequest(string Email);
+
+public sealed record PasswordResetConfirmRequest(string Token, string Password, string RepeatPassword);
 
 public sealed record AuthUserResponse(string Id, string? Email, string DisplayName);
 

@@ -1,5 +1,5 @@
-export type GarmentCategory = 'Top' | 'Bottom';
-export type BodyZone = 'Torso' | 'Legs';
+export type GarmentCategory = 'Top' | 'Bottom' | 'Dress' | 'Outerwear' | 'Shoes' | 'Bag' | 'Accessory' | 'Hat';
+export type BodyZone = 'Torso' | 'Legs' | 'FullBody' | 'Feet' | 'Head' | 'Hands' | 'Accessory' | 'OuterLayer';
 export type PreviewMode = 'clothes' | 'person';
 export type TryOnStatus = 'Queued' | 'Processing' | 'Succeeded' | 'Failed';
 export type LaundryStatus = 'clean' | 'worn' | 'washing';
@@ -74,9 +74,16 @@ export interface TryOnJob {
   userId: string;
   outfitId: string;
   bodyReferencePhotoUrl: string;
+  sequentialFlowEnabled?: boolean;
   status: TryOnStatus;
   providerJobId?: string | null;
+  providerName?: string | null;
+  providerRequestId?: string | null;
+  sourceBodyPhotoId?: string | null;
   outputImageUrl?: string | null;
+  consentAcceptedAt?: string | null;
+  retentionUntil?: string | null;
+  isDeleted?: boolean;
   error?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -85,4 +92,10 @@ export interface TryOnJob {
 export interface OutfitSelection {
   topId?: string;
   bottomId?: string;
+  dressId?: string;
+  outerwearId?: string;
+  shoesId?: string;
+  bagId?: string;
+  accessoryId?: string;
+  hatId?: string;
 }

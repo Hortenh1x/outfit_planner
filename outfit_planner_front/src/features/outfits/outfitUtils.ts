@@ -1,31 +1,43 @@
 import type { GarmentCategory, GarmentItem, OutfitSelection } from '../../types';
 
+export const GARMENT_CATEGORIES: GarmentCategory[] = ['Top', 'Bottom', 'Dress', 'Outerwear', 'Shoes', 'Bag', 'Accessory', 'Hat'];
+
+export const CATEGORY_SELECTION_KEYS: Record<GarmentCategory, keyof OutfitSelection> = {
+  Top: 'topId',
+  Bottom: 'bottomId',
+  Dress: 'dressId',
+  Outerwear: 'outerwearId',
+  Shoes: 'shoesId',
+  Bag: 'bagId',
+  Accessory: 'accessoryId',
+  Hat: 'hatId'
+};
+
 export function groupGarmentsByCategory(garments: GarmentItem[]): Record<GarmentCategory, GarmentItem[]> {
-  return {
-    Top: garments.filter((garment) => garment.category === 'Top'),
-    Bottom: garments.filter((garment) => garment.category === 'Bottom')
-  };
+  return GARMENT_CATEGORIES.reduce((grouped, category) => {
+    grouped[category] = garments.filter((garment) => garment.category === category);
+    return grouped;
+  }, {} as Record<GarmentCategory, GarmentItem[]>);
 }
 
 export function selectedGarmentIds(selection: OutfitSelection): string[] {
-  return [selection.topId, selection.bottomId].filter((id): id is string => Boolean(id));
+  return GARMENT_CATEGORIES
+    .map((category) => selection[CATEGORY_SELECTION_KEYS[category]])
+    .filter((id): id is string => Boolean(id));
 }
 
 export function selectionLabel(selection: OutfitSelection, garments: GarmentItem[]): string {
-  const top = garments.find((garment) => garment.id === selection.topId);
-  const bottom = garments.find((garment) => garment.id === selection.bottomId);
+  const selected = selectedGarmentIds(selection)
+    .map((id) => garments.find((garment) => garment.id === id)?.name)
+    .filter((name): name is string => Boolean(name));
 
-  if (!top && !bottom) {
-    return 'Choose a top and a bottom';
+  if (selected.length === 0) {
+    return 'Choose outfit pieces';
   }
 
-  if (top && !bottom) {
-    return `${top.name} + choose a bottom`;
+  if (selected.length === 1) {
+    return `${selected[0]} + choose another piece`;
   }
 
-  if (!top && bottom) {
-    return `Choose a top + ${bottom.name}`;
-  }
-
-  return `${top?.name} + ${bottom?.name}`;
+  return selected.join(' + ');
 }

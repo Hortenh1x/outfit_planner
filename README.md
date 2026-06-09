@@ -2,20 +2,21 @@
 
 Outfit Planner is a research-demo web app for cataloging garments, composing outfits, planning outfits by day, sharing saved outfits, and generating AI try-on previews through a replaceable provider adapter.
 
-The app is intentionally small, but it has a real backend/frontend split, local photo upload storage, optional PostgreSQL persistence, and an optional FASHN provider scaffold. By default it uses in-memory storage and the mock try-on provider, so local development does not need paid AI credentials.
+The app is intentionally small, but it has a real backend/frontend split, signed object storage for uploads, optional PostgreSQL persistence, and an optional FASHN provider scaffold. By default it uses in-memory storage, local object storage, and the mock try-on provider, so local development does not need paid AI credentials.
 
 ## Features
 
-- Wardrobe catalog for top and bottom garments with editable structured metadata for colors, material, brand, size, season, weather, occasion, scoring, favorites, archive state, last worn date, and laundry status.
+- Wardrobe catalog for Top, Bottom, Dress, Outerwear, Shoes, Bag, Accessory, and Hat garments with editable structured metadata for colors, material, brand, size, season, weather, occasion, scoring, favorites, archive state, last worn date, and laundry status.
 - Garment photo uploads from the browser.
-- Body reference photo uploads for try-on generation.
-- Outfit builder with one garment per supported category.
+- Private body reference photo uploads for try-on generation.
+- Outfit builder with slot compatibility rules instead of one-garment-per-category rules.
 - Clothes-only and generated person preview modes.
 - Calendar planning with one outfit per user and day.
 - Share links for saved outfits.
 - Secure account registration and sign-in with email/password.
 - Google OAuth and Apple OIDC sign-in when provider credentials are configured.
-- Revocable server-side sessions with HttpOnly cookies and CSRF protection.
+- Revocable server-side sessions with HttpOnly cookies, CSRF protection, rate-limited auth endpoints, email verification/password reset token storage, and session revoke-all support.
+- Privacy endpoints for account export/delete, body photo deletion, and AI output purging.
 - Background AI try-on jobs with a Redis-backed queue in Docker and an in-memory queue fallback for local development.
 - Mock AI try-on by default, optional FASHN `tryon-v1.6`, local VTON/CatVTON, Replicate, and Fal provider adapters.
 
@@ -23,9 +24,9 @@ The app is intentionally small, but it has a real backend/frontend split, local 
 
 - Backend: ASP.NET Core Minimal API on .NET 10.
 - Backend architecture: onion-style `Domain`, `Application`, `Infrastructure`, and `Api` projects.
-- Persistence: PostgreSQL through Npgsql when `ConnectionStrings__Postgres` is configured; in-memory fallback otherwise.
+- Persistence: PostgreSQL through Npgsql and DbUp migrations when `ConnectionStrings__Postgres` is configured; in-memory fallback otherwise.
 - Background queue: Redis through `StackExchange.Redis` when `ConnectionStrings__Redis` is configured; in-memory fallback otherwise.
-- File storage: local disk under the API storage directory.
+- Object storage: signed local object storage by default, or S3-compatible MinIO through `ObjectStorage__Provider=S3`/`Minio`.
 - Frontend: React, TypeScript, Vite, TanStack Query, React Router, date-fns, lucide-react.
 - Infra: PostgreSQL 18, MinIO placeholder service, Docker Compose, nginx for the production frontend container.
 
@@ -40,7 +41,9 @@ The app is intentionally small, but it has a real backend/frontend split, local 
 |-- docker-compose.dev.yml
 |-- outfit_planner_back/
 |   |-- Dockerfile
-|   |-- database/schema.sql
+|   |-- database/
+|   |   |-- schema.sql
+|   |   `-- migrations/
 |   |-- src/
 |   |   |-- OutfitPlanner.Domain/
 |   |   |-- OutfitPlanner.Application/
@@ -66,13 +69,19 @@ The backend follows inward dependencies:
 
 - `OutfitPlanner.Domain` contains entities, enums, and domain rules.
 - `OutfitPlanner.Application` contains use-case services and repository/provider abstractions.
-- `OutfitPlanner.Infrastructure` implements PostgreSQL storage, local photo storage, clocks, password hashing, auth token hashing, share token generation, and try-on providers.
+- `OutfitPlanner.Infrastructure` implements PostgreSQL storage, local/S3-compatible object storage, image processing, clocks, password hashing, auth token hashing, share token generation, and try-on providers.
 - `OutfitPlanner.Api` wires dependencies, JSON/CORS/upload limits, routes, diagnostics, secure auth cookies, OAuth/OIDC callbacks, and CSRF enforcement.
 
 The API chooses storage at startup:
 
 - Empty `ConnectionStrings:Postgres`: use `InMemoryOutfitStore`.
-- Non-empty `ConnectionStrings:Postgres`: use `PostgresOutfitStore` and apply `outfit_planner_back/database/schema.sql` on startup.
+- Non-empty `ConnectionStrings:Postgres`: use `PostgresOutfitStore` and apply DbUp SQL migrations from `outfit_planner_back/database/migrations`.
+
+Photo uploads are private by default:
+
+- Uploads are validated server-side by image magic bytes, then decoded, auto-oriented, stripped of metadata, resized/compressed, and stored as object variants.
+- Garment uploads store original, thumbnail, processed cutout, optional segmentation mask, and perceptual hash.
+- Body reference uploads store original, thumbnail, blurred private preview, and perceptual hash. Public `/uploads/body-reference-photos/{fileName}` access is disabled; clients receive signed object URLs.
 
 Try-on jobs are queued at request time:
 
@@ -92,7 +101,7 @@ Authentication is cookie-backed:
 - Session cookie `outfit_session` is HttpOnly, SameSite=Lax, and Secure outside development.
 - CSRF cookie `outfit_csrf` is readable by the frontend and must be echoed as `X-CSRF-Token` on mutating authenticated API requests.
 - Google and Apple sign-in start from backend challenge endpoints and complete through backend callbacks. If the external account is new, the API creates it automatically. If the provider returns a verified email that already exists, the external login is linked to that user.
-- All private `/api` routes require a valid session. `/api/health`, `/api/system/status`, `/api/auth/*`, and `/api/share/{token}` remain public.
+- All private `/api` routes require a valid session. `/api/health`, `/api/system/status`, `/api/auth/*`, `/api/storage/signed/*`, and `/api/share/{token}` remain public; signed storage access is protected by URL signature and expiry.
 
 The frontend visual system is High-Fidelity Claymorphism:
 
@@ -225,6 +234,13 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | --- | --- | --- |
 | `ConnectionStrings__Postgres` | empty | Enables PostgreSQL persistence when non-empty. |
 | `ConnectionStrings__Redis` | empty | Enables the Redis try-on job queue when non-empty. Empty uses an in-memory queue. |
+| `ObjectStorage__Provider` | `Local` | Use `Local`, `S3`, or `Minio` for uploaded image object storage. |
+| `ObjectStorage__Local__Root` | `storage/objects` under API content root | Local object storage root. |
+| `ObjectStorage__Local__SigningSecret` | development fallback | HMAC secret for local signed object URLs. Set a strong value outside dev. |
+| `ObjectStorage__S3__Endpoint` / `Minio__Endpoint` | empty | S3-compatible endpoint for MinIO/S3 storage. |
+| `ObjectStorage__S3__AccessKey` / `Minio__AccessKey` | empty | S3-compatible access key. |
+| `ObjectStorage__S3__SecretKey` / `Minio__SecretKey` | empty | S3-compatible secret key. |
+| `ObjectStorage__S3__Bucket` / `Minio__Bucket` | `outfit-planner-private` | Private bucket for uploaded image variants. |
 | `TryOn__Provider` | `Mock` | Use `Mock`, `Fashn`, `LocalVton`, `LocalCatVton`, `Replicate`, or `Fal`. Unknown values use the mock provider. |
 | `Fashn__ApiKey` | empty | Required before the FASHN provider makes network calls. |
 | `Fashn__BaseUrl` | `https://api.fashn.ai/v1/` | FASHN API base URL. |
@@ -296,9 +312,17 @@ Private routes require the `outfit_session` cookie. Mutating private routes also
 | `POST` | `/auth/login` | Sign in with email/password and issue auth cookies. |
 | `POST` | `/auth/logout` | Revoke the current session and clear auth cookies. |
 | `GET` | `/auth/me` | Read the current authenticated user session. |
+| `POST` | `/auth/email-verification/request` | Create an email verification token. |
+| `POST` | `/auth/email-verification/confirm` | Verify an email verification token. |
+| `POST` | `/auth/password-reset/request` | Create a password reset token. |
+| `POST` | `/auth/password-reset/confirm` | Reset a password and revoke existing sessions. |
+| `GET` | `/auth/sessions` | List active sessions. |
+| `DELETE` | `/auth/sessions` | Revoke all sessions for the current user. |
 | `GET` | `/auth/external/{provider}/start` | Start Google or Apple auth with `returnUrl`. |
 | `GET` | `/auth/external/{provider}/callback` | OAuth/OIDC provider callback path registered with Google/Apple. |
 | `GET` | `/auth/external/{provider}/complete` | Complete external auth after the provider callback and issue app cookies. |
+| `GET` | `/account/export` | Export the current user's account, wardrobe, body photos, outfits, and try-on jobs. |
+| `DELETE` | `/account` | Delete the current account and clear auth cookies. |
 | `GET` | `/body-reference-photos` | List body reference photos for the current user. |
 | `POST` | `/body-reference-photos` | Register an already uploaded body reference photo URL. |
 | `DELETE` | `/body-reference-photos/{photoId}` | Delete a body reference photo and its stored file when local. |
@@ -314,8 +338,10 @@ Private routes require the `outfit_session` cookie. Mutating private routes also
 | `POST` | `/outfits` | Create an outfit. |
 | `PATCH` | `/outfits/{outfitId}` | Edit outfit name, garments, tags, occasion, favorite, and archive state. |
 | `DELETE` | `/outfits/{outfitId}` | Delete an outfit. |
-| `POST` | `/outfits/{outfitId}/try-on` | Queue try-on generation and return `202 Accepted`. |
+| `POST` | `/outfits/{outfitId}/try-on` | Queue try-on generation and return `202 Accepted`. Accepts optional `bodyReferencePhotoId` for audit linkage. |
 | `GET` | `/try-on-jobs/{jobId}` | Read try-on job status/result. |
+| `DELETE` | `/try-on-jobs/{jobId}/output` | Mark one try-on output deleted and remove the stored output URL from the job. |
+| `POST` | `/privacy/purge-ai-outputs` | Mark all current-user AI outputs deleted and remove stored output URLs from jobs. |
 | `POST` | `/schedule` | Plan an outfit for a date. |
 | `GET` | `/schedule?from=YYYY-MM-DD&to=YYYY-MM-DD` | List planned outfits for a date range. |
 | `DELETE` | `/schedule/{date}` | Remove the planned outfit for one date. |
@@ -323,7 +349,8 @@ Private routes require the `outfit_session` cookie. Mutating private routes also
 | `GET` | `/share/{token}` | Read a shared outfit. |
 | `DELETE` | `/share/{token}` | Revoke a share link owned by the current user. |
 | `GET` | `/uploads/garments/{fileName}` | Serve uploaded garment files. This route is outside `/api`. |
-| `GET` | `/uploads/body-reference-photos/{fileName}` | Serve uploaded body reference files. This route is outside `/api`. |
+| `GET` | `/api/storage/signed/{objectKey}` | Serve a signed local object URL until its expiry. S3/MinIO presigned URLs go directly to object storage. |
+| `GET` | `/uploads/body-reference-photos/{fileName}` | Disabled privacy compatibility route; returns 404. |
 
 The current user is resolved from the server-side auth session, not from a browser-supplied user header.
 

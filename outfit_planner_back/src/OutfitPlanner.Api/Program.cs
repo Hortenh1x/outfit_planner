@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.WebUtilities;
 using Npgsql;
 using StackExchange.Redis;
@@ -21,6 +22,7 @@ using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 const long MaxUploadRequestBytes = PhotoUploadService.MaxPhotoBytes * 2;
@@ -74,6 +76,29 @@ builder.Services.AddCors(options =>
             .AllowCredentials()
             .AllowAnyHeader()
             .AllowAnyMethod());
+});
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddPolicy("login-rate-limit", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst
+            }));
+    options.AddPolicy("registration-rate-limit", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(15),
+                QueueLimit = 0,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst
+            }));
 });
 
 builder.Services.AddSingleton<IClock, OutfitPlanner.Infrastructure.Security.SystemClock>();
@@ -185,7 +210,9 @@ else
     builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnectionString));
     builder.Services.AddSingleton<ITryOnJobQueue>(provider => new RedisTryOnJobQueue(provider.GetRequiredService<IConnectionMultiplexer>()));
 }
-builder.Services.AddSingleton(_ => new LocalPhotoStorage(Path.Combine(builder.Environment.ContentRootPath, "storage", "garment-photos")));
+builder.Services.AddSingleton<IObjectStorage>(provider => CreateObjectStorage(builder.Configuration, builder.Environment));
+builder.Services.AddSingleton<IImageProcessor, ImageProcessor>();
+builder.Services.AddSingleton<LocalPhotoStorage>();
 builder.Services.AddSingleton<IPhotoStorage>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IStoredPhotoReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IStoredPhotoDeletion>(provider => provider.GetRequiredService<LocalPhotoStorage>());
@@ -196,8 +223,11 @@ if (storageProvider == "Postgres")
     builder.Services.AddSingleton(NpgsqlDataSource.Create(postgresConnectionString!));
     builder.Services.AddSingleton(provider =>
     {
-        var schemaPath = Path.Combine(AppContext.BaseDirectory, "database", "schema.sql");
-        return new PostgresSchemaInitializer(provider.GetRequiredService<NpgsqlDataSource>(), schemaPath);
+        var migrationsPath = Path.Combine(AppContext.BaseDirectory, "database", "migrations");
+        return new PostgresMigrationRunner(
+            postgresConnectionString!,
+            migrationsPath,
+            provider.GetRequiredService<ILogger<PostgresMigrationRunner>>());
     });
     builder.Services.AddSingleton<PostgresOutfitStore>();
     builder.Services.AddSingleton<IBodyReferencePhotoRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
@@ -231,7 +261,7 @@ builder.Services.AddHostedService<TryOnBackgroundWorker>();
 
 var app = builder.Build();
 
-app.Services.GetService<PostgresSchemaInitializer>()?.Initialize();
+app.Services.GetService<PostgresMigrationRunner>()?.Initialize();
 
 var detailedErrorsEnabled = app.Environment.IsDevelopment()
     || app.Environment.IsEnvironment("Test")
@@ -277,6 +307,7 @@ app.Use(async (context, next) =>
 
 app.UseForwardedHeaders();
 app.UseCors();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.Use(async (context, next) =>
 {
@@ -347,7 +378,7 @@ api.MapPost("/auth/register", (RegisterRequest request, AuthService auth, HttpCo
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+}).RequireRateLimiting("registration-rate-limit");
 
 api.MapPost("/auth/login", (LoginRequest request, AuthService auth, HttpContext context) =>
 {
@@ -361,7 +392,7 @@ api.MapPost("/auth/login", (LoginRequest request, AuthService auth, HttpContext 
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+}).RequireRateLimiting("login-rate-limit");
 
 api.MapPost("/auth/logout", (AuthService auth, HttpContext context) =>
 {
@@ -374,6 +405,77 @@ api.MapGet("/auth/me", (AuthService auth, HttpContext context) =>
 {
     var session = auth.AuthenticateSession(context.Request.Cookies[SessionCookieName], null, requireCsrf: false);
     return session is null ? Results.Unauthorized() : Results.Ok(ToAuthSessionResponseFromSession(session));
+});
+
+api.MapPost("/auth/email-verification/request", (EmailVerificationRequest request, AuthService auth) =>
+{
+    try
+    {
+        var token = auth.CreateEmailVerificationToken(request.Email);
+        return Results.Ok(new { status = "verification-requested", token = app.Environment.IsDevelopment() ? token : null });
+    }
+    catch (InvalidOperationException)
+    {
+        return Results.Ok(new { status = "verification-requested" });
+    }
+}).RequireRateLimiting("login-rate-limit");
+
+api.MapPost("/auth/email-verification/confirm", (TokenRequest request, AuthService auth) =>
+    auth.ConfirmEmailVerification(request.Token)
+        ? Results.Ok(new { status = "email-verified" })
+        : Results.BadRequest(new { error = "Verification token is invalid or expired." }));
+
+api.MapPost("/auth/password-reset/request", (PasswordResetRequest request, AuthService auth) =>
+{
+    try
+    {
+        var token = auth.CreatePasswordResetToken(request.Email);
+        return Results.Ok(new { status = "password-reset-requested", token = app.Environment.IsDevelopment() ? token : null });
+    }
+    catch (InvalidOperationException)
+    {
+        return Results.Ok(new { status = "password-reset-requested" });
+    }
+}).RequireRateLimiting("login-rate-limit");
+
+api.MapPost("/auth/password-reset/confirm", (PasswordResetConfirmRequest request, AuthService auth) =>
+{
+    try
+    {
+        return auth.ResetPassword(request.Token, request.Password, request.RepeatPassword)
+            ? Results.Ok(new { status = "password-reset" })
+            : Results.BadRequest(new { error = "Password reset token is invalid or expired." });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
+
+api.MapGet("/auth/sessions", (AuthService auth, HttpContext context) =>
+{
+    try
+    {
+        return Results.Ok(auth.ListSessions(context.Request.Cookies[SessionCookieName]));
+    }
+    catch (InvalidOperationException)
+    {
+        return Results.Unauthorized();
+    }
+});
+
+api.MapDelete("/auth/sessions", (AuthService auth, HttpContext context) =>
+{
+    try
+    {
+        auth.RevokeAllSessions(context.Request.Cookies[SessionCookieName]);
+        ClearAuthCookies(context, app.Environment);
+        return Results.Ok(new { status = "sessions-revoked" });
+    }
+    catch (InvalidOperationException)
+    {
+        return Results.Unauthorized();
+    }
 });
 
 api.MapGet("/auth/external/{provider}/start", (string provider, string? returnUrl) =>
@@ -464,6 +566,32 @@ api.MapGet("/auth/external/{provider}/complete", async (
             detail = detailedErrorsEnabled ? ex.Message : null
         });
     }
+});
+
+api.MapGet("/account/export", (
+    IUserAccountRepository users,
+    IGarmentRepository garments,
+    IOutfitRepository outfits,
+    IBodyReferencePhotoRepository bodyPhotos,
+    ITryOnJobRepository tryOnJobs,
+    HttpContext context) =>
+{
+    var userId = CurrentUser(context);
+    return Results.Ok(new
+    {
+        user = users.GetUserById(userId),
+        garments = garments.ListGarmentsByUser(userId),
+        outfits = outfits.ListOutfitsByUser(userId),
+        bodyReferencePhotos = bodyPhotos.ListBodyReferencePhotosByUser(userId),
+        tryOnJobs = tryOnJobs.ListTryOnJobsByUser(userId)
+    });
+});
+
+api.MapDelete("/account", (IUserAccountRepository users, HttpContext context) =>
+{
+    var deleted = users.DeleteUserById(CurrentUser(context));
+    ClearAuthCookies(context, app.Environment);
+    return deleted ? Results.NoContent() : Results.NotFound();
 });
 
 api.MapPost("/body-reference-photos", (CreateBodyReferencePhotoRequest request, WardrobeService wardrobe, HttpContext context) =>
@@ -663,7 +791,14 @@ api.MapPost("/outfits/{outfitId:guid}/try-on", async (
 {
     try
     {
-        var job = await tryOn.StartAsync(CurrentUser(context), outfitId, request.BodyReferencePhotoUrl, request.ConsentAccepted, request.SequentialFlowEnabled, cancellationToken);
+        var job = await tryOn.StartAsync(
+            CurrentUser(context),
+            outfitId,
+            request.BodyReferencePhotoUrl,
+            request.ConsentAccepted,
+            request.SequentialFlowEnabled,
+            request.BodyReferencePhotoId,
+            cancellationToken);
         return Results.Accepted($"/api/try-on-jobs/{job.Id}", job);
     }
     catch (InvalidOperationException ex)
@@ -677,6 +812,12 @@ api.MapGet("/try-on-jobs/{jobId:guid}", (Guid jobId, TryOnService tryOn, HttpCon
     var job = tryOn.GetJob(CurrentUser(context), jobId);
     return job is null ? Results.NotFound() : Results.Ok(job);
 });
+
+api.MapDelete("/try-on-jobs/{jobId:guid}/output", (Guid jobId, TryOnService tryOn, HttpContext context) =>
+    tryOn.DeleteOutput(CurrentUser(context), jobId) ? Results.NoContent() : Results.NotFound());
+
+api.MapPost("/privacy/purge-ai-outputs", (TryOnService tryOn, HttpContext context) =>
+    Results.Ok(new { purged = tryOn.PurgeAiOutputs(CurrentUser(context)) }));
 
 api.MapPost("/schedule", (ScheduleOutfitRequest request, ScheduleService schedule, HttpContext context) =>
 {
@@ -758,10 +899,22 @@ app.MapGet("/uploads/garments/{fileName}", (string fileName, IStoredPhotoReader 
     return photo is null ? Results.NotFound() : Results.File(photo.FullPath, photo.ContentType);
 });
 
-app.MapGet("/uploads/body-reference-photos/{fileName}", (string fileName, IStoredPhotoReader photos) =>
+app.MapGet("/uploads/body-reference-photos/{fileName}", (string fileName) => Results.NotFound());
+
+app.MapGet("/api/storage/signed/{**objectKey}", (
+    string objectKey,
+    long expires,
+    string signature,
+    IObjectStorage objects,
+    IClock clock) =>
 {
-    var photo = photos.GetBodyReferencePhoto(fileName);
-    return photo is null ? Results.NotFound() : Results.File(photo.FullPath, photo.ContentType);
+    if (objects is not LocalObjectStorage local)
+    {
+        return Results.NotFound();
+    }
+
+    var stored = local.GetSignedObject(objectKey, expires, signature, clock.UtcNow);
+    return stored is null ? Results.NotFound() : Results.File(stored.FullPath, stored.ContentType);
 });
 
 app.Run();
@@ -857,6 +1010,25 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
     };
 }
 
+static IObjectStorage CreateObjectStorage(IConfiguration configuration, IWebHostEnvironment environment)
+{
+    var provider = (configuration["ObjectStorage:Provider"] ?? "Local").Trim().ToLowerInvariant();
+    if (provider is "s3" or "minio")
+    {
+        return new MinioObjectStorage(new MinioObjectStorageSettings(
+            configuration["ObjectStorage:S3:Endpoint"] ?? configuration["Minio:Endpoint"] ?? "",
+            configuration["ObjectStorage:S3:AccessKey"] ?? configuration["Minio:AccessKey"] ?? "",
+            configuration["ObjectStorage:S3:SecretKey"] ?? configuration["Minio:SecretKey"] ?? "",
+            configuration["ObjectStorage:S3:Bucket"] ?? configuration["Minio:Bucket"] ?? "outfit-planner-private",
+            ForcePathStyle: configuration.GetValue("ObjectStorage:S3:ForcePathStyle", true),
+            Region: configuration["ObjectStorage:S3:Region"] ?? "us-east-1"));
+    }
+
+    var root = configuration["ObjectStorage:Local:Root"]
+        ?? Path.Combine(environment.ContentRootPath, "storage", "objects");
+    return new LocalObjectStorage(root, configuration["ObjectStorage:Local:SigningSecret"]);
+}
+
 static HttpTryOnProviderSettings HttpProviderSettings(
     IConfiguration configuration,
     string providerName,
@@ -897,6 +1069,7 @@ static bool RequiresAuthenticatedUser(HttpContext context)
     return !path.Equals("/health", StringComparison.OrdinalIgnoreCase)
         && !path.Equals("/system/status", StringComparison.OrdinalIgnoreCase)
         && !path.StartsWith("/auth/", StringComparison.OrdinalIgnoreCase)
+        && !path.StartsWith("/storage/signed/", StringComparison.OrdinalIgnoreCase)
         && !(HttpMethods.IsGet(context.Request.Method) && path.StartsWith("/share/", StringComparison.OrdinalIgnoreCase));
 }
 

@@ -986,7 +986,7 @@ static void TestApiUsesDbUpMigrations()
     var program = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Program.cs"));
     var migrationPath = Path.Combine(rootPath, "database", "migrations");
 
-    AssertTrue(apiProject.Contains("DbUp.Postgresql", StringComparison.OrdinalIgnoreCase), "api project should reference DbUp PostgreSQL package.");
+    AssertTrue(apiProject.Contains("dbup-postgresql", StringComparison.OrdinalIgnoreCase), "api project should reference DbUp PostgreSQL package.");
     AssertTrue(program.Contains("PostgresMigrationRunner", StringComparison.Ordinal), "api startup should run DbUp migrations.");
     AssertTrue(!program.Contains("PostgresSchemaInitializer", StringComparison.Ordinal), "api startup should no longer initialize schema.sql directly.");
     AssertTrue(Directory.Exists(migrationPath), "database migrations directory should exist.");
@@ -1102,7 +1102,7 @@ static CreateGarmentCommand CreateGarment(string userId, string name, GarmentCat
 
 static byte[] MinimalPngBytes()
 {
-    return Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
+    return Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXY/j///9/AAn7A/0FQ0XKAAAAAElFTkSuQmCC");
 }
 
 static Outfit CreateSingleGarmentOutfit()

@@ -398,6 +398,7 @@ export function deleteOutfit(outfitId: string): Promise<void> {
 export function startTryOn(input: {
   outfitId: string;
   bodyReferencePhotoUrl: string;
+  bodyReferencePhotoId?: string;
   consentAccepted: boolean;
   sequentialFlowEnabled: boolean;
 }): Promise<TryOnJob> {
@@ -405,6 +406,7 @@ export function startTryOn(input: {
     method: 'POST',
     body: JSON.stringify({
       bodyReferencePhotoUrl: input.bodyReferencePhotoUrl,
+      bodyReferencePhotoId: input.bodyReferencePhotoId,
       consentAccepted: input.consentAccepted,
       sequentialFlowEnabled: input.sequentialFlowEnabled
     })

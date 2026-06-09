@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Eye,
+  Footprints,
   GitBranch,
   Heart,
   ImagePlus,
@@ -54,7 +55,7 @@ import type { AuthProvider, AuthUser } from './api/client';
 import { ModeToggle } from './components/ModeToggle';
 import { ThemeToggle, type ThemeMode } from './components/ThemeToggle';
 import { buildMonthCalendar, weekDayLabels } from './features/calendar/calendarUtils';
-import { groupGarmentsByCategory, selectedGarmentIds, selectionLabel } from './features/outfits/outfitUtils';
+import { CATEGORY_SELECTION_KEYS, GARMENT_CATEGORIES, groupGarmentsByCategory, selectedGarmentIds, selectionLabel } from './features/outfits/outfitUtils';
 import { validateUploadImageFile } from './features/uploads/imageFile';
 import type { BodyReferencePhoto, GarmentCategory, GarmentItem, Outfit, OutfitSelection, PreviewMode } from './types';
 
@@ -353,18 +354,15 @@ function WardrobePage() {
           <SkeletonGrid />
         ) : (
           <div className="wardrobe-columns">
-            <GarmentColumn
-              title="Tops"
-              items={grouped.Top}
-              deletingId={deleteGarmentMutation.isPending ? deleteGarmentMutation.variables : undefined}
-              onDelete={(id) => deleteGarmentMutation.mutate(id)}
-            />
-            <GarmentColumn
-              title="Bottoms"
-              items={grouped.Bottom}
-              deletingId={deleteGarmentMutation.isPending ? deleteGarmentMutation.variables : undefined}
-              onDelete={(id) => deleteGarmentMutation.mutate(id)}
-            />
+            {GARMENT_CATEGORIES.map((category) => (
+              <GarmentColumn
+                key={category}
+                title={category}
+                items={grouped[category]}
+                deletingId={deleteGarmentMutation.isPending ? deleteGarmentMutation.variables : undefined}
+                onDelete={(id) => deleteGarmentMutation.mutate(id)}
+              />
+            ))}
           </div>
         )}
         {deleteGarmentMutation.error ? <p className="error">{deleteGarmentMutation.error.message}</p> : null}
@@ -519,9 +517,10 @@ function BuilderPage() {
       });
     },
     onSuccess: (garment) => {
-      setSelection((current) => garment.category === 'Top'
-        ? { ...current, topId: garment.id }
-        : { ...current, bottomId: garment.id });
+      setSelection((current) => ({
+        ...current,
+        [CATEGORY_SELECTION_KEYS[garment.category]]: garment.id
+      }));
       setQuickAddGarmentError(null);
       void queryClient.invalidateQueries({ queryKey: ['garments'] });
     },
@@ -583,24 +582,21 @@ function BuilderPage() {
           <PanelSkeleton />
         ) : (
           <>
-            <SlotPicker
-              title="Top"
-              category="Top"
-              garments={grouped.Top}
-              selectedId={selection.topId}
-              onSelect={(id) => setSelection({ ...selection, topId: id })}
-              onQuickAdd={(event) => handleQuickAddGarment('Top', event)}
-              isQuickAdding={quickAddGarmentMutation.isPending && quickAddGarmentMutation.variables?.category === 'Top'}
-            />
-            <SlotPicker
-              title="Bottom"
-              category="Bottom"
-              garments={grouped.Bottom}
-              selectedId={selection.bottomId}
-              onSelect={(id) => setSelection({ ...selection, bottomId: id })}
-              onQuickAdd={(event) => handleQuickAddGarment('Bottom', event)}
-              isQuickAdding={quickAddGarmentMutation.isPending && quickAddGarmentMutation.variables?.category === 'Bottom'}
-            />
+            {GARMENT_CATEGORIES.map((category) => {
+              const selectionKey = CATEGORY_SELECTION_KEYS[category];
+              return (
+                <SlotPicker
+                  key={category}
+                  title={category}
+                  category={category}
+                  garments={grouped[category]}
+                  selectedId={selection[selectionKey]}
+                  onSelect={(id) => setSelection({ ...selection, [selectionKey]: id })}
+                  onQuickAdd={(event) => handleQuickAddGarment(category, event)}
+                  isQuickAdding={quickAddGarmentMutation.isPending && quickAddGarmentMutation.variables?.category === category}
+                />
+              );
+            })}
           </>
         )}
       </aside>
@@ -684,6 +680,7 @@ function BuilderPage() {
               await tryOnMutation.mutateAsync({
                 outfitId: outfit.id,
                 bodyReferencePhotoUrl: selectedBodyPhoto.imageUrl,
+                bodyReferencePhotoId: selectedBodyPhoto.id,
                 consentAccepted: true,
                 sequentialFlowEnabled
               });
@@ -965,9 +962,8 @@ function CategorySegmentedControl({
   return (
     <fieldset className="segmented-field">
       <legend>Type</legend>
-      <div className="segmented-control" data-value={value.toLowerCase()} role="radiogroup" aria-label="Garment type">
-        <span className="toggle-motion-indicator" aria-hidden="true" />
-        {(['Top', 'Bottom'] as const).map((category) => (
+      <div className="choice-list" role="radiogroup" aria-label="Garment type">
+        {GARMENT_CATEGORIES.map((category) => (
           <button
             type="button"
             key={category}
@@ -987,7 +983,19 @@ function CategorySegmentedControl({
 }
 
 function GarmentCategoryIcon({ category, size = 16 }: { category: GarmentCategory; size?: number }) {
-  return category === 'Top' ? <Shirt size={size} /> : <BottomsIcon size={size} />;
+  if (category === 'Top') {
+    return <Shirt size={size} />;
+  }
+
+  if (category === 'Bottom') {
+    return <BottomsIcon size={size} />;
+  }
+
+  if (category === 'Shoes') {
+    return <Footprints size={size} />;
+  }
+
+  return <Layers3 size={size} />;
 }
 
 function BottomsIcon({ size = 16 }: { size?: number }) {

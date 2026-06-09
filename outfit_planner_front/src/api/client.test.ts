@@ -41,6 +41,7 @@ describe('api client', () => {
     await startTryOn({
       outfitId: 'outfit-1',
       bodyReferencePhotoUrl: 'https://example.com/body.jpg',
+      bodyReferencePhotoId: 'body-1',
       consentAccepted: true,
       sequentialFlowEnabled: true
     });
@@ -50,6 +51,7 @@ describe('api client', () => {
     expect(init).toMatchObject({ credentials: 'include' });
     expect(JSON.parse(init?.body as string)).toMatchObject({
       bodyReferencePhotoUrl: 'https://example.com/body.jpg',
+      bodyReferencePhotoId: 'body-1',
       consentAccepted: true,
       sequentialFlowEnabled: true
     });
@@ -58,13 +60,13 @@ describe('api client', () => {
   it('uploads and stores a reusable body reference photo', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ url: 'http://localhost:5000/uploads/body-reference-photos/body.png' }), {
+        new Response(JSON.stringify({ url: 'http://localhost:5000/api/storage/signed/body-reference-photos/original/body.png?expires=1&signature=sig' }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' }
         })
       )
       .mockResolvedValueOnce(
-        new Response(JSON.stringify({ id: 'body-1', imageUrl: 'http://localhost:5000/uploads/body-reference-photos/body.png' }), {
+        new Response(JSON.stringify({ id: 'body-1', imageUrl: 'http://localhost:5000/api/storage/signed/body-reference-photos/original/body.png?expires=1&signature=sig' }), {
           status: 201,
           headers: { 'Content-Type': 'application/json' }
         })
@@ -78,7 +80,7 @@ describe('api client', () => {
     expect(fetchMock.mock.calls[1][0]).toContain('/body-reference-photos');
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ credentials: 'include' });
     expect(JSON.parse(fetchMock.mock.calls[1][1]?.body as string)).toMatchObject({
-      imageUrl: 'http://localhost:5000/uploads/body-reference-photos/body.png'
+      imageUrl: 'http://localhost:5000/api/storage/signed/body-reference-photos/original/body.png?expires=1&signature=sig'
     });
   });
 
