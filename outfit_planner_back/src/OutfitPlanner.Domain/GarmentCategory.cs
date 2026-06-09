@@ -3,5 +3,11 @@ namespace OutfitPlanner.Domain;
 public enum GarmentCategory
 {
     Top,
-    Bottom
+    Bottom,
+    Dress,
+    Outerwear,
+    Shoes,
+    Bag,
+    Accessory,
+    Hat
 }

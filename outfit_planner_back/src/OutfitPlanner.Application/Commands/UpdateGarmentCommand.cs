@@ -2,13 +2,10 @@ using OutfitPlanner.Domain;
 
 namespace OutfitPlanner.Application.Services;
 
-public sealed record CreateGarmentCommand(
-    string UserId,
-    string Name,
-    GarmentCategory Category,
-    string ImageUrl,
-    string? ThumbnailUrl,
-    IReadOnlyList<string> Tags,
+public sealed record UpdateGarmentCommand(
+    string? Name = null,
+    GarmentCategory? Category = null,
+    IReadOnlyList<string>? Tags = null,
     string? PrimaryColor = null,
     IReadOnlyList<string>? SecondaryColors = null,
     string? Material = null,
@@ -21,7 +18,7 @@ public sealed record CreateGarmentCommand(
     int? FormalityScore = null,
     int? WarmthScore = null,
     int? ComfortScore = null,
-    bool IsFavorite = false,
-    bool IsArchived = false,
+    bool? IsFavorite = null,
+    bool? IsArchived = null,
     DateTimeOffset? LastWornAt = null,
     string? LaundryStatus = null);

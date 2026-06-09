@@ -17,6 +17,8 @@ public sealed class AuthService
     private readonly IAuthTokenService _tokens;
     private readonly IClock _clock;
     private readonly TimeSpan _sessionLifetime = TimeSpan.FromDays(14);
+    private readonly TimeSpan _emailVerificationLifetime = TimeSpan.FromHours(24);
+    private readonly TimeSpan _passwordResetLifetime = TimeSpan.FromHours(1);
 
     public AuthService(
         IUserAccountRepository users,
@@ -144,6 +146,110 @@ public sealed class AuthService
         _users.RevokeAuthSessionByTokenHash(_tokens.HashToken(sessionToken), _clock.UtcNow);
     }
 
+    public IReadOnlyList<AuthSessionInfo> ListSessions(string? sessionToken)
+    {
+        var session = RequireActiveSession(sessionToken);
+        return _users.ListAuthSessionsByUser(session.UserId, _clock.UtcNow)
+            .Select(item => new AuthSessionInfo(item.Id, item.CreatedAt, item.ExpiresAt, item.RevokedAt))
+            .ToList();
+    }
+
+    public void RevokeAllSessions(string? sessionToken)
+    {
+        var session = RequireActiveSession(sessionToken);
+        _users.RevokeAuthSessionsByUser(session.UserId, _clock.UtcNow);
+    }
+
+    public int CleanupExpiredSessions()
+    {
+        return _users.DeleteExpiredAuthSessions(_clock.UtcNow);
+    }
+
+    public string CreateEmailVerificationToken(string email)
+    {
+        var normalizedEmail = NormalizeEmail(email);
+        var user = _users.GetUserByNormalizedEmail(normalizedEmail)
+            ?? throw new InvalidOperationException("Account was not found.");
+        var token = _tokens.CreateToken();
+        var now = _clock.UtcNow;
+        _users.AddEmailVerificationToken(new AuthEmailVerificationToken(
+            _tokens.HashToken(token),
+            user.Id,
+            now.Add(_emailVerificationLifetime),
+            now,
+            null));
+        return token;
+    }
+
+    public bool ConfirmEmailVerification(string token)
+    {
+        var now = _clock.UtcNow;
+        var tokenHash = _tokens.HashToken(RequireText(token, "Verification token"));
+        var verification = _users.GetActiveEmailVerificationToken(tokenHash, now);
+        if (verification is null)
+        {
+            return false;
+        }
+
+        var user = _users.GetUserById(verification.UserId);
+        if (user is null)
+        {
+            return false;
+        }
+
+        _users.UpdateUser(user with { EmailVerifiedAt = now, UpdatedAt = now });
+        _users.MarkEmailVerificationTokenUsed(tokenHash, now);
+        return true;
+    }
+
+    public string CreatePasswordResetToken(string email)
+    {
+        var normalizedEmail = NormalizeEmail(email);
+        var user = _users.GetUserByNormalizedEmail(normalizedEmail)
+            ?? throw new InvalidOperationException("Account was not found.");
+        var token = _tokens.CreateToken();
+        var now = _clock.UtcNow;
+        _users.AddPasswordResetToken(new AuthPasswordResetToken(
+            _tokens.HashToken(token),
+            user.Id,
+            now.Add(_passwordResetLifetime),
+            now,
+            null));
+        return token;
+    }
+
+    public bool ResetPassword(string token, string password, string repeatPassword)
+    {
+        var cleanPassword = RequirePassword(password);
+        if (cleanPassword != repeatPassword)
+        {
+            throw new InvalidOperationException("Passwords do not match.");
+        }
+
+        var now = _clock.UtcNow;
+        var tokenHash = _tokens.HashToken(RequireText(token, "Password reset token"));
+        var reset = _users.GetActivePasswordResetToken(tokenHash, now);
+        if (reset is null)
+        {
+            return false;
+        }
+
+        var user = _users.GetUserById(reset.UserId);
+        if (user is null)
+        {
+            return false;
+        }
+
+        _users.UpdateUser(user with
+        {
+            PasswordHash = _passwordHasher.HashPassword(cleanPassword),
+            UpdatedAt = now
+        });
+        _users.MarkPasswordResetTokenUsed(tokenHash, now);
+        _users.RevokeAuthSessionsByUser(user.Id, now);
+        return true;
+    }
+
     private AuthResult CreateAuthResult(UserAccount user, DateTimeOffset now)
     {
         var sessionToken = _tokens.CreateToken();
@@ -160,6 +266,17 @@ public sealed class AuthService
             null));
 
         return new AuthResult(ToPublicUser(user), sessionToken, csrfToken, expiresAt);
+    }
+
+    private AuthSession RequireActiveSession(string? sessionToken)
+    {
+        if (string.IsNullOrWhiteSpace(sessionToken))
+        {
+            throw new InvalidOperationException("Authentication is required.");
+        }
+
+        return _users.GetActiveAuthSessionByTokenHash(_tokens.HashToken(sessionToken), _clock.UtcNow)
+            ?? throw new InvalidOperationException("Authentication is required.");
     }
 
     private static UserAccount CreateExternalUser(string? normalizedEmail, string? displayName, DateTimeOffset now)
@@ -263,3 +380,5 @@ public sealed record PublicUser(string Id, string? Email, string DisplayName);
 public sealed record AuthResult(PublicUser User, string SessionToken, string CsrfToken, DateTimeOffset ExpiresAt);
 
 public sealed record AuthenticatedSession(PublicUser User, DateTimeOffset ExpiresAt);
+
+public sealed record AuthSessionInfo(Guid Id, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, DateTimeOffset? RevokedAt);

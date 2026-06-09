@@ -9,9 +9,54 @@ public sealed record CreateGarmentRequest(
     GarmentCategory Category,
     string ImageUrl,
     string? ThumbnailUrl,
-    IReadOnlyList<string>? Tags);
+    IReadOnlyList<string>? Tags,
+    string? PrimaryColor,
+    IReadOnlyList<string>? SecondaryColors,
+    string? Material,
+    string? Brand,
+    string? Size,
+    IReadOnlyList<string>? Season,
+    int? WeatherMinTemp,
+    int? WeatherMaxTemp,
+    IReadOnlyList<string>? Occasion,
+    int? FormalityScore,
+    int? WarmthScore,
+    int? ComfortScore,
+    bool? IsFavorite,
+    bool? IsArchived,
+    DateTimeOffset? LastWornAt,
+    string? LaundryStatus);
+
+public sealed record UpdateGarmentRequest(
+    string? Name,
+    GarmentCategory? Category,
+    IReadOnlyList<string>? Tags,
+    string? PrimaryColor,
+    IReadOnlyList<string>? SecondaryColors,
+    string? Material,
+    string? Brand,
+    string? Size,
+    IReadOnlyList<string>? Season,
+    int? WeatherMinTemp,
+    int? WeatherMaxTemp,
+    IReadOnlyList<string>? Occasion,
+    int? FormalityScore,
+    int? WarmthScore,
+    int? ComfortScore,
+    bool? IsFavorite,
+    bool? IsArchived,
+    DateTimeOffset? LastWornAt,
+    string? LaundryStatus);
 
 public sealed record CreateOutfitRequest(string Name, IReadOnlyList<Guid> GarmentIds);
+
+public sealed record UpdateOutfitRequest(
+    string? Name,
+    IReadOnlyList<Guid>? GarmentIds,
+    IReadOnlyList<string>? Tags,
+    IReadOnlyList<string>? Occasion,
+    bool? IsFavorite,
+    bool? IsArchived);
 
 public sealed record ScheduleOutfitRequest(DateOnly Date, Guid OutfitId);
 

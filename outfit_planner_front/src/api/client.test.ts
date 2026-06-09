@@ -4,16 +4,24 @@ import {
   createBodyReferencePhoto,
   deleteBodyReferencePhoto,
   deleteGarment,
+  deleteOutfit,
+  getGarment,
   getCurrentSession,
   getAuthProviders,
   getHealth,
+  getOutfit,
   getSystemStatus,
   getTryOnJob,
   listGarments,
+  listOutfits,
   login,
   logout,
   register,
+  revokeShare,
   startTryOn,
+  unscheduleOutfit,
+  updateGarment,
+  updateOutfit,
   uploadBodyReferencePhoto
 } from './client';
 
@@ -115,6 +123,43 @@ describe('api client', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/garments/garment-1', expect.objectContaining({ method: 'DELETE' }));
     expect(fetchMock).toHaveBeenCalledWith('/api/body-reference-photos/body-1', expect.objectContaining({ method: 'DELETE' }));
+  });
+
+  it('calls edit detail filtering unschedule and revoke endpoints', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'garment-1' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'garment-1', name: 'black shirt' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'outfit-1' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'outfit-1', name: 'office' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    await listGarments({ category: 'Top', color: 'black', season: 'summer', q: 'shirt', sort: 'recent', favorite: true, limit: 20 });
+    await getGarment('garment-1');
+    await updateGarment('garment-1', { name: 'black shirt', primaryColor: 'black', season: ['summer'], laundryStatus: 'worn' });
+    await listOutfits({ q: 'office', occasion: 'business', favorite: true });
+    await getOutfit('outfit-1');
+    await updateOutfit('outfit-1', { name: 'office', occasion: ['business'], isFavorite: true });
+    await deleteOutfit('outfit-1');
+    await unscheduleOutfit('2026-06-08');
+    await revokeShare('share-token');
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/garments?category=Top&color=black&season=summer&q=shirt&sort=recent&favorite=true&limit=20');
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/garments/garment-1');
+    expect(fetchMock.mock.calls[2][0]).toBe('/api/garments/garment-1');
+    expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: 'PATCH' });
+    expect(JSON.parse(fetchMock.mock.calls[2][1]?.body as string)).toMatchObject({ primaryColor: 'black', laundryStatus: 'worn' });
+    expect(fetchMock.mock.calls[3][0]).toBe('/api/outfits?q=office&occasion=business&favorite=true');
+    expect(fetchMock.mock.calls[4][0]).toBe('/api/outfits/outfit-1');
+    expect(fetchMock.mock.calls[5][0]).toBe('/api/outfits/outfit-1');
+    expect(fetchMock.mock.calls[5][1]).toMatchObject({ method: 'PATCH' });
+    expect(fetchMock.mock.calls[6][0]).toBe('/api/outfits/outfit-1');
+    expect(fetchMock.mock.calls[6][1]).toMatchObject({ method: 'DELETE' });
+    expect(fetchMock.mock.calls[7][0]).toBe('/api/schedule/2026-06-08');
+    expect(fetchMock.mock.calls[8][0]).toBe('/api/share/share-token');
   });
 
   it('covers service metadata and try-on status endpoints', async () => {

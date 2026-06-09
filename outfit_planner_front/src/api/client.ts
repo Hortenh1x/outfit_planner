@@ -1,4 +1,4 @@
-import type { BodyReferencePhoto, GarmentCategory, GarmentItem, Outfit, ScheduledOutfit, TryOnJob } from '../types';
+import type { BodyReferencePhoto, GarmentCategory, GarmentItem, LaundryStatus, Outfit, ScheduledOutfit, TryOnJob } from '../types';
 
 const apiBaseUrl = import.meta.env.VITE_API_URL ?? '/api';
 const csrfCookieName = 'outfit_csrf';
@@ -39,6 +39,71 @@ export interface AuthSession {
   expiresAt: string;
 }
 
+export interface GarmentFilters {
+  category?: GarmentCategory;
+  color?: string;
+  season?: string;
+  q?: string;
+  sort?: 'recent' | 'oldest' | 'name' | 'category';
+  offset?: number;
+  limit?: number;
+  favorite?: boolean;
+  archived?: boolean;
+  occasion?: string;
+  brand?: string;
+  material?: string;
+}
+
+export interface OutfitFilters {
+  q?: string;
+  occasion?: string;
+  favorite?: boolean;
+  archived?: boolean;
+  sort?: 'recent' | 'oldest' | 'name';
+  offset?: number;
+  limit?: number;
+}
+
+type QueryFunctionLikeContext = {
+  queryKey: unknown;
+  signal?: AbortSignal;
+  client?: unknown;
+};
+
+export interface GarmentMetadataInput {
+  primaryColor?: string | null;
+  secondaryColors?: string[];
+  material?: string | null;
+  brand?: string | null;
+  size?: string | null;
+  season?: string[];
+  weatherMinTemp?: number | null;
+  weatherMaxTemp?: number | null;
+  occasion?: string[];
+  formalityScore?: number | null;
+  warmthScore?: number | null;
+  comfortScore?: number | null;
+  isFavorite?: boolean;
+  isArchived?: boolean;
+  lastWornAt?: string | null;
+  laundryStatus?: LaundryStatus;
+}
+
+export type UpdateGarmentInput = Partial<{
+  name: string;
+  category: GarmentCategory;
+  tags: string[];
+}> & GarmentMetadataInput;
+
+export type UpdateOutfitInput = Partial<{
+  name: string;
+  garmentIds: string[];
+  tags: string[];
+  occasion: string[];
+  isFavorite: boolean;
+  isArchived: boolean;
+}>;
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET';
   const url = `${apiBaseUrl}${path}`;
@@ -69,8 +134,40 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function listGarments(): Promise<GarmentItem[]> {
-  return request<GarmentItem[]>('/garments');
+function buildQuery(filters?: object): string {
+  if (!filters) {
+    return '';
+  }
+
+  const params = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined) {
+      params.set(key, String(value));
+    }
+  });
+
+  const query = params.toString();
+  return query ? `?${query}` : '';
+}
+
+function requestFilters<T extends object>(filters?: T | QueryFunctionLikeContext): T | undefined {
+  if (!filters || isQueryFunctionContext(filters)) {
+    return undefined;
+  }
+
+  return filters;
+}
+
+function isQueryFunctionContext(value: object): value is QueryFunctionLikeContext {
+  return 'queryKey' in value || 'signal' in value || 'client' in value;
+}
+
+export function listGarments(filters?: GarmentFilters | QueryFunctionLikeContext): Promise<GarmentItem[]> {
+  return request<GarmentItem[]>(`/garments${buildQuery(requestFilters(filters))}`);
+}
+
+export function getGarment(garmentId: string): Promise<GarmentItem> {
+  return request<GarmentItem>(`/garments/${garmentId}`);
 }
 
 export function getHealth(): Promise<HealthStatus> {
@@ -250,9 +347,16 @@ export function createGarment(input: {
   imageUrl: string;
   thumbnailUrl?: string;
   tags: string[];
-}): Promise<GarmentItem> {
+} & GarmentMetadataInput): Promise<GarmentItem> {
   return request<GarmentItem>('/garments', {
     method: 'POST',
+    body: JSON.stringify(input)
+  });
+}
+
+export function updateGarment(garmentId: string, input: UpdateGarmentInput): Promise<GarmentItem> {
+  return request<GarmentItem>(`/garments/${garmentId}`, {
+    method: 'PATCH',
     body: JSON.stringify(input)
   });
 }
@@ -263,14 +367,31 @@ export function deleteGarment(garmentId: string): Promise<void> {
   });
 }
 
-export function listOutfits(): Promise<Outfit[]> {
-  return request<Outfit[]>('/outfits');
+export function listOutfits(filters?: OutfitFilters | QueryFunctionLikeContext): Promise<Outfit[]> {
+  return request<Outfit[]>(`/outfits${buildQuery(requestFilters(filters))}`);
+}
+
+export function getOutfit(outfitId: string): Promise<Outfit> {
+  return request<Outfit>(`/outfits/${outfitId}`);
 }
 
 export function createOutfit(input: { name: string; garmentIds: string[] }): Promise<Outfit> {
   return request<Outfit>('/outfits', {
     method: 'POST',
     body: JSON.stringify(input)
+  });
+}
+
+export function updateOutfit(outfitId: string, input: UpdateOutfitInput): Promise<Outfit> {
+  return request<Outfit>(`/outfits/${outfitId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input)
+  });
+}
+
+export function deleteOutfit(outfitId: string): Promise<void> {
+  return request<void>(`/outfits/${outfitId}`, {
+    method: 'DELETE'
   });
 }
 
@@ -305,9 +426,21 @@ export function listSchedule(from: string, to: string): Promise<ScheduledOutfit[
   return request<ScheduledOutfit[]>(`/schedule?from=${from}&to=${to}`);
 }
 
+export function unscheduleOutfit(date: string): Promise<void> {
+  return request<void>(`/schedule/${encodeURIComponent(date)}`, {
+    method: 'DELETE'
+  });
+}
+
 export function shareOutfit(outfitId: string): Promise<{ token: string; url: string }> {
   return request<{ token: string; url: string }>(`/outfits/${outfitId}/share`, {
     method: 'POST'
+  });
+}
+
+export function revokeShare(token: string): Promise<void> {
+  return request<void>(`/share/${encodeURIComponent(token)}`, {
+    method: 'DELETE'
   });
 }
 

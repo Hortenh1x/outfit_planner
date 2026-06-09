@@ -2,9 +2,74 @@ namespace OutfitPlanner.Application.Abstractions;
 
 public sealed record IncomingPhoto(string FileName, string ContentType, long Length, Stream Content);
 
-public sealed record StoredPhoto(string FileName, string ContentType, long Length, string Url);
+public sealed record StoredPhoto(string FileName, string ContentType, long Length, string Url)
+{
+    public string? ObjectKey { get; init; }
+    public string? ThumbnailObjectKey { get; init; }
+    public string? ProcessedCutoutObjectKey { get; init; }
+    public string? PrivatePreviewObjectKey { get; init; }
+    public string? PerceptualHash { get; init; }
+}
 
 public sealed record StoredPhotoFile(string FullPath, string ContentType);
+
+public enum StoredImageVariant
+{
+    Original,
+    Thumbnail,
+    ProcessedCutout,
+    TryOnOutput,
+    PrivatePreview,
+    SegmentationMask
+}
+
+public sealed record ProcessedImage(
+    StoredImageVariant Variant,
+    string ContentType,
+    string Extension,
+    byte[] Bytes);
+
+public sealed record ProcessedPhotoSet(
+    string FileName,
+    string ContentType,
+    long Length,
+    string? PerceptualHash,
+    IReadOnlyList<ProcessedImage> Images);
+
+public sealed record ObjectStoragePutRequest(
+    string ObjectKey,
+    string ContentType,
+    Stream Content,
+    bool Private,
+    DateTimeOffset? RetentionUntil = null);
+
+public sealed record StoredObject(
+    string ObjectKey,
+    string ContentType,
+    long Length,
+    bool Private);
+
+public sealed record StoredObjectFile(string FullPath, string ContentType);
+
+public interface IImageProcessor
+{
+    ProcessedPhotoSet ProcessGarmentPhoto(IncomingPhoto photo);
+
+    ProcessedPhotoSet ProcessBodyReferencePhoto(IncomingPhoto photo);
+}
+
+public interface IObjectStorage
+{
+    StoredObject PutObject(ObjectStoragePutRequest request);
+
+    StoredObjectFile? GetObject(string objectKey);
+
+    bool DeleteObject(string objectKey);
+
+    int DeletePrefix(string prefix);
+
+    string CreateSignedReadUrl(string objectKey, TimeSpan lifetime);
+}
 
 public interface IPhotoStorage
 {

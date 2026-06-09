@@ -6,7 +6,7 @@ The app is intentionally small, but it has a real backend/frontend split, local 
 
 ## Features
 
-- Wardrobe catalog for top and bottom garments.
+- Wardrobe catalog for top and bottom garments with editable structured metadata for colors, material, brand, size, season, weather, occasion, scoring, favorites, archive state, last worn date, and laundry status.
 - Garment photo uploads from the browser.
 - Body reference photo uploads for try-on generation.
 - Outfit builder with one garment per supported category.
@@ -16,13 +16,15 @@ The app is intentionally small, but it has a real backend/frontend split, local 
 - Secure account registration and sign-in with email/password.
 - Google OAuth and Apple OIDC sign-in when provider credentials are configured.
 - Revocable server-side sessions with HttpOnly cookies and CSRF protection.
-- Mock AI try-on by default, optional FASHN `tryon-v1.6` integration.
+- Background AI try-on jobs with a Redis-backed queue in Docker and an in-memory queue fallback for local development.
+- Mock AI try-on by default, optional FASHN `tryon-v1.6`, local VTON/CatVTON, Replicate, and Fal provider adapters.
 
 ## Tech Stack
 
 - Backend: ASP.NET Core Minimal API on .NET 10.
 - Backend architecture: onion-style `Domain`, `Application`, `Infrastructure`, and `Api` projects.
 - Persistence: PostgreSQL through Npgsql when `ConnectionStrings__Postgres` is configured; in-memory fallback otherwise.
+- Background queue: Redis through `StackExchange.Redis` when `ConnectionStrings__Redis` is configured; in-memory fallback otherwise.
 - File storage: local disk under the API storage directory.
 - Frontend: React, TypeScript, Vite, TanStack Query, React Router, date-fns, lucide-react.
 - Infra: PostgreSQL 18, MinIO placeholder service, Docker Compose, nginx for the production frontend container.
@@ -72,6 +74,12 @@ The API chooses storage at startup:
 - Empty `ConnectionStrings:Postgres`: use `InMemoryOutfitStore`.
 - Non-empty `ConnectionStrings:Postgres`: use `PostgresOutfitStore` and apply `outfit_planner_back/database/schema.sql` on startup.
 
+Try-on jobs are queued at request time:
+
+- Empty `ConnectionStrings:Redis`: use an in-memory try-on queue.
+- Non-empty `ConnectionStrings:Redis`: use Redis list queue `outfit-planner:try-on-jobs`.
+- `POST /api/outfits/{outfitId}/try-on` creates a `Queued` job and returns `202 Accepted`; a hosted background worker moves the job through `Processing` to `Succeeded` or `Failed`.
+
 The frontend uses a same-origin API path by default:
 
 - `VITE_API_URL` defaults to `/api`.
@@ -111,6 +119,7 @@ Open:
 - Frontend: `http://localhost:5173`
 - API: `http://localhost:5000/api/health`
 - PostgreSQL on host: `localhost:5433`
+- Redis on host: `localhost:6379`
 - MinIO API: `http://localhost:9000`
 - MinIO console: `http://localhost:9001`
 
@@ -130,18 +139,28 @@ Run the API with in-memory storage:
 dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls http://localhost:5000
 ```
 
+For local OAuth testing, run the API on HTTPS:
+
+```powershell
+$env:Authentication__PublicOrigin = "https://localhost:5173"
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls https://localhost:5001
+```
+
 Run PostgreSQL and MinIO only:
 
 ```powershell
-docker compose -f docker-compose.dev.yml up -d postgres minio
+docker compose -f docker-compose.dev.yml up -d postgres redis minio
 ```
 
 Run the API against the compose PostgreSQL service:
 
 ```powershell
 $env:ConnectionStrings__Postgres = "Host=localhost;Port=5433;Database=outfit_planner;Username=outfit;Password=outfit;GSS Encryption Mode=Disable"
+$env:ConnectionStrings__Redis = "localhost:6379"
 dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls http://localhost:5000
 ```
+
+For PostgreSQL plus local OAuth testing, use the same connection strings and run the API at `https://localhost:5001`.
 
 The API writes uploaded files below its content root:
 
@@ -168,6 +187,29 @@ npm run dev
 
 Open `http://127.0.0.1:5173`. During Vite development, the browser calls `/api` and `/uploads`; Vite proxies those requests to `http://localhost:5000` unless `VITE_DEV_API_TARGET` is set.
 
+Run Vite over HTTPS for Google/Apple OAuth testing:
+
+```powershell
+$env:VITE_DEV_API_TARGET = "https://localhost:5001"
+npm run dev:https
+```
+
+Stop any existing `npm run dev` process on port `5173` before starting the HTTPS server. On the first run, approve the Windows certificate prompt from `mkcert`; this installs a local development CA so the browser can trust `https://localhost:5173`.
+
+Open `https://localhost:5173`. The HTTPS dev server uses a local development certificate through `vite-plugin-mkcert` and forwards the browser-facing HTTPS scheme and host to the API. In Google Cloud Console, add this exact Authorized JavaScript origin for local development:
+
+```text
+https://localhost:5173
+```
+
+Also add this exact Authorized redirect URI:
+
+```text
+https://localhost:5173/api/auth/external/google/callback
+```
+
+The provider callback path is only for Google/Apple to return to the API. After the provider callback succeeds, the API redirects internally to `/api/auth/external/{provider}/complete` to issue app cookies and then returns to the requested app route.
+
 To target a different local API:
 
 ```powershell
@@ -182,7 +224,8 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `ConnectionStrings__Postgres` | empty | Enables PostgreSQL persistence when non-empty. |
-| `TryOn__Provider` | `Mock` | Use `Mock` or `Fashn`. Anything other than `Fashn` uses the mock provider. |
+| `ConnectionStrings__Redis` | empty | Enables the Redis try-on job queue when non-empty. Empty uses an in-memory queue. |
+| `TryOn__Provider` | `Mock` | Use `Mock`, `Fashn`, `LocalVton`, `LocalCatVton`, `Replicate`, or `Fal`. Unknown values use the mock provider. |
 | `Fashn__ApiKey` | empty | Required before the FASHN provider makes network calls. |
 | `Fashn__BaseUrl` | `https://api.fashn.ai/v1/` | FASHN API base URL. |
 | `Fashn__ModelName` | `tryon-v1.6` | FASHN model name. |
@@ -190,7 +233,18 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `Fashn__MaxPollingAttempts` | `30` | Status polling limit. |
 | `Fashn__PollIntervalSeconds` | `2` | Delay between status polls. |
 | `Fashn__TimeoutSeconds` | `180` | HTTP client timeout. |
+| `TryOn__LocalVton__BaseUrl` | `http://localhost:7860/` | Local/dev VTON endpoint base URL. |
+| `TryOn__LocalVton__Endpoint` | `/try-on` | Local/dev VTON generation endpoint. |
+| `TryOn__LocalCatVton__BaseUrl` | `http://localhost:7861/` | Local/dev CatVTON endpoint base URL. |
+| `TryOn__LocalCatVton__Endpoint` | `/try-on` | Local/dev CatVTON generation endpoint. |
+| `TryOn__Replicate__ApiKey` | empty | Required when `TryOn__Provider=Replicate`. |
+| `TryOn__Replicate__BaseUrl` | `https://api.replicate.com/v1/` | Replicate adapter base URL. |
+| `TryOn__Replicate__Endpoint` | `/predictions` | Replicate adapter endpoint. |
+| `TryOn__Fal__ApiKey` | empty | Required when `TryOn__Provider=Fal`. |
+| `TryOn__Fal__BaseUrl` | `https://fal.run/` | Fal adapter base URL. |
+| `TryOn__Fal__Endpoint` | `/try-on` | Fal adapter endpoint. |
 | `DetailedErrors` | environment-dependent | Enables structured exception details in dev/test diagnostics. |
+| `Authentication__PublicOrigin` | `https://localhost:5173` | Canonical browser-facing origin used to build Google/Apple callback URLs. Set this to the exact frontend origin registered in the OAuth provider. |
 | `Authentication__Google__ClientId` | empty | Enables Google OAuth when paired with `Authentication__Google__ClientSecret`. |
 | `Authentication__Google__ClientSecret` | empty | Google OAuth client secret. |
 | `Authentication__Apple__ClientId` | empty | Enables Apple OIDC when paired with `Authentication__Apple__ClientSecret`. |
@@ -201,11 +255,11 @@ Frontend configuration:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `VITE_API_URL` | `/api` | Base URL used by `src/api/client.ts`. |
-| `VITE_DEV_API_TARGET` | `http://localhost:5000` | Vite dev proxy target for `/api` and `/uploads`. |
+| `VITE_DEV_API_TARGET` | `http://localhost:5000` | Vite dev proxy target for `/api` and `/uploads`; use `https://localhost:5001` for local OAuth testing. |
 
-## Optional FASHN Try-On Provider
+## Optional Try-On Providers
 
-The backend uses the mock try-on provider by default. The mock returns deterministic demo output and does not spend credits.
+The backend uses the mock try-on provider by default. The mock returns deterministic demo output and does not spend credits. All non-mock providers run from the hosted background worker after `POST /api/outfits/{outfitId}/try-on` has already returned a queued job.
 
 Enable the FASHN scaffold:
 
@@ -216,6 +270,16 @@ dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api
 ```
 
 The FASHN provider submits to `/run` and polls `/status/{id}`. A single-garment outfit maps directly to one provider run. Multi-garment outfits require the Builder page's `Sequential flow` toggle; the provider then applies garments one after another, using the previous output image as the next model image. This can consume one provider run per garment.
+
+Local/dev provider adapters can target a local HTTP service:
+
+```powershell
+$env:TryOn__Provider = "LocalVton"
+$env:TryOn__LocalVton__BaseUrl = "http://localhost:7860/"
+$env:TryOn__LocalVton__Endpoint = "/try-on"
+```
+
+`LocalCatVton`, `Replicate`, and `Fal` use the same JSON adapter shape. `Replicate` and `Fal` require `TryOn__Replicate__ApiKey` or `TryOn__Fal__ApiKey` respectively.
 
 ## API Overview
 
@@ -233,23 +297,31 @@ Private routes require the `outfit_session` cookie. Mutating private routes also
 | `POST` | `/auth/logout` | Revoke the current session and clear auth cookies. |
 | `GET` | `/auth/me` | Read the current authenticated user session. |
 | `GET` | `/auth/external/{provider}/start` | Start Google or Apple auth with `returnUrl`. |
-| `GET` | `/auth/external/{provider}/callback` | Complete backend OAuth/OIDC callback and issue auth cookies. |
+| `GET` | `/auth/external/{provider}/callback` | OAuth/OIDC provider callback path registered with Google/Apple. |
+| `GET` | `/auth/external/{provider}/complete` | Complete external auth after the provider callback and issue app cookies. |
 | `GET` | `/body-reference-photos` | List body reference photos for the current user. |
 | `POST` | `/body-reference-photos` | Register an already uploaded body reference photo URL. |
 | `DELETE` | `/body-reference-photos/{photoId}` | Delete a body reference photo and its stored file when local. |
-| `GET` | `/garments` | List garments for the current user. |
+| `GET` | `/garments?category=Top&color=black&season=summer&q=shirt&sort=recent&offset=0&limit=20` | List garments for the current user with optional filters, sorting, and pagination. |
+| `GET` | `/garments/{garmentId}` | Read one garment owned by the current user. |
 | `POST` | `/garments` | Create a garment. |
+| `PATCH` | `/garments/{garmentId}` | Edit garment name, category, tags, and structured metadata without re-uploading the photo. |
 | `DELETE` | `/garments/{garmentId}` | Delete a garment and its stored file when local. |
 | `POST` | `/uploads/garment-photo` | Multipart garment photo upload. |
 | `POST` | `/uploads/body-reference-photo` | Multipart body reference photo upload. |
-| `GET` | `/outfits` | List saved outfits. |
+| `GET` | `/outfits?q=office&occasion=business&favorite=true&sort=recent&offset=0&limit=20` | List saved outfits with optional filters, sorting, and pagination. |
+| `GET` | `/outfits/{outfitId}` | Read one outfit owned by the current user. |
 | `POST` | `/outfits` | Create an outfit. |
-| `POST` | `/outfits/{outfitId}/try-on` | Start try-on generation. |
+| `PATCH` | `/outfits/{outfitId}` | Edit outfit name, garments, tags, occasion, favorite, and archive state. |
+| `DELETE` | `/outfits/{outfitId}` | Delete an outfit. |
+| `POST` | `/outfits/{outfitId}/try-on` | Queue try-on generation and return `202 Accepted`. |
 | `GET` | `/try-on-jobs/{jobId}` | Read try-on job status/result. |
 | `POST` | `/schedule` | Plan an outfit for a date. |
 | `GET` | `/schedule?from=YYYY-MM-DD&to=YYYY-MM-DD` | List planned outfits for a date range. |
+| `DELETE` | `/schedule/{date}` | Remove the planned outfit for one date. |
 | `POST` | `/outfits/{outfitId}/share` | Create a share link. |
 | `GET` | `/share/{token}` | Read a shared outfit. |
+| `DELETE` | `/share/{token}` | Revoke a share link owned by the current user. |
 | `GET` | `/uploads/garments/{fileName}` | Serve uploaded garment files. This route is outside `/api`. |
 | `GET` | `/uploads/body-reference-photos/{fileName}` | Serve uploaded body reference files. This route is outside `/api`. |
 
@@ -291,7 +363,7 @@ Invoke-RestMethod http://localhost:5000/api/health
 - Uploaded files are stored on local disk, not MinIO. MinIO is present as an infrastructure placeholder.
 - PostgreSQL schema creation is startup-time schema initialization, not a full migration system.
 - Only `Top` and `Bottom` garment categories are supported.
-- The mock try-on provider is the default. FASHN requires explicit environment configuration.
+- The mock try-on provider is the default. FASHN, Replicate, Fal, and local VTON providers require explicit environment configuration.
 
 ## Troubleshooting
 

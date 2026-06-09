@@ -28,18 +28,28 @@ services:
     volumes:
       - minio_data:/data
 
+  redis:
+    image: redis:8-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
   api:
     build:
       context: ./outfit_planner_back
     environment:
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=outfit_planner;Username=outfit;Password=outfit;GSS Encryption Mode=Disable
+      ConnectionStrings__Redis: redis:6379
     ports:
       - "5000:8080"
     depends_on:
       postgres:
         condition: service_healthy
       minio:
+        condition: service_started
+      redis:
         condition: service_started
 
   frontend:
@@ -55,3 +65,4 @@ services:
 volumes:
   postgres_data:
   minio_data:
+  redis_data:

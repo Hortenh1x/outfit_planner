@@ -4,90 +4,134 @@ namespace OutfitPlanner.Infrastructure.Storage;
 
 public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStoredPhotoDeletion
 {
-    private readonly string _storageRoot;
+    private static readonly TimeSpan DefaultSignedUrlLifetime = TimeSpan.FromMinutes(15);
+
+    private readonly IObjectStorage _objects;
+    private readonly IImageProcessor _images;
 
     public LocalPhotoStorage(string storageRoot)
+        : this(new LocalObjectStorage(storageRoot), new ImageProcessor())
     {
-        _storageRoot = Path.GetFullPath(storageRoot);
+    }
+
+    public LocalPhotoStorage(IObjectStorage objects, IImageProcessor images)
+    {
+        _objects = objects;
+        _images = images;
     }
 
     public StoredPhoto SaveGarmentPhoto(IncomingPhoto photo)
     {
-        return SavePhoto(photo, "garments", "/uploads/garments");
+        var processed = _images.ProcessGarmentPhoto(photo);
+        return SaveProcessedPhoto("garments", processed);
     }
 
     public StoredPhoto SaveBodyReferencePhoto(IncomingPhoto photo)
     {
-        return SavePhoto(photo, "body-reference-photos", "/uploads/body-reference-photos");
+        var processed = _images.ProcessBodyReferencePhoto(photo);
+        return SaveProcessedPhoto("body-reference-photos", processed);
     }
 
     public StoredPhotoFile? GetGarmentPhoto(string fileName)
     {
-        return GetPhoto("garments", fileName);
+        return GetPhoto("garments", StoredImageVariant.Original, fileName);
     }
 
     public StoredPhotoFile? GetBodyReferencePhoto(string fileName)
     {
-        return GetPhoto("body-reference-photos", fileName);
+        return GetPhoto("body-reference-photos", StoredImageVariant.Original, fileName);
     }
 
     public bool DeleteGarmentPhoto(string photoUrl)
     {
-        return DeletePhoto("garments", "/uploads/garments/", photoUrl);
+        return DeletePhoto("garments", photoUrl);
     }
 
     public bool DeleteBodyReferencePhoto(string photoUrl)
     {
-        return DeletePhoto("body-reference-photos", "/uploads/body-reference-photos/", photoUrl);
+        return DeletePhoto("body-reference-photos", photoUrl);
     }
 
-    private StoredPhoto SavePhoto(IncomingPhoto photo, string storageFolder, string publicBasePath)
+    private StoredPhoto SaveProcessedPhoto(string collection, ProcessedPhotoSet processed)
     {
-        var folderPath = Path.Combine(_storageRoot, storageFolder);
-        Directory.CreateDirectory(folderPath);
+        var storedByVariant = new Dictionary<StoredImageVariant, StoredObject>();
+        foreach (var image in processed.Images)
+        {
+            var objectKey = ObjectKey(collection, image.Variant, processed.FileName);
+            using var stream = new MemoryStream(image.Bytes, writable: false);
+            storedByVariant[image.Variant] = _objects.PutObject(new ObjectStoragePutRequest(
+                objectKey,
+                image.ContentType,
+                stream,
+                Private: true));
+        }
 
-        var extension = ExtensionFor(photo.ContentType);
-        var fileName = $"{Guid.NewGuid():N}{extension}";
-        var fullPath = Path.Combine(folderPath, fileName);
-
-        using var output = new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-        photo.Content.CopyTo(output);
-
-        return new StoredPhoto(fileName, photo.ContentType, photo.Length, $"{publicBasePath}/{fileName}");
+        var original = storedByVariant[StoredImageVariant.Original];
+        return new StoredPhoto(
+            processed.FileName,
+            processed.ContentType,
+            processed.Length,
+            _objects.CreateSignedReadUrl(original.ObjectKey, DefaultSignedUrlLifetime))
+        {
+            ObjectKey = original.ObjectKey,
+            ThumbnailObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.Thumbnail)?.ObjectKey,
+            ProcessedCutoutObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.ProcessedCutout)?.ObjectKey,
+            PrivatePreviewObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.PrivatePreview)?.ObjectKey,
+            PerceptualHash = processed.PerceptualHash
+        };
     }
 
-    private StoredPhotoFile? GetPhoto(string storageFolder, string fileName)
+    private StoredPhotoFile? GetPhoto(string collection, StoredImageVariant variant, string fileName)
     {
         if (!IsSafeStoredFileName(fileName))
         {
             return null;
         }
 
-        var folderPath = Path.GetFullPath(Path.Combine(_storageRoot, storageFolder));
-        var fullPath = Path.GetFullPath(Path.Combine(folderPath, fileName));
-        if (!fullPath.StartsWith(folderPath, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
-        {
-            return null;
-        }
-
-        return ContentTypeForExtension(Path.GetExtension(fileName)) is { } contentType
-            ? new StoredPhotoFile(fullPath, contentType)
-            : null;
+        var objectFile = _objects.GetObject(ObjectKey(collection, variant, fileName));
+        return objectFile is null ? null : new StoredPhotoFile(objectFile.FullPath, objectFile.ContentType);
     }
 
-    private bool DeletePhoto(string storageFolder, string publicPathPrefix, string photoUrl)
+    private bool DeletePhoto(string collection, string photoUrl)
     {
-        var fileName = FileNameFromPublicUrl(photoUrl, publicPathPrefix);
-        if (fileName is null || GetPhoto(storageFolder, fileName) is not { } photo)
+        var fileName = FileNameFromPhotoUrl(photoUrl);
+        if (fileName is null)
         {
             return false;
         }
 
-        File.Delete(photo.FullPath);
-        return true;
+        var deleted = 0;
+        foreach (var variant in Enum.GetValues<StoredImageVariant>())
+        {
+            if (_objects.DeleteObject(ObjectKey(collection, variant, fileName)))
+            {
+                deleted++;
+            }
+        }
+
+        return deleted > 0;
     }
 
-    private static string? FileNameFromPublicUrl(string photoUrl, string publicPathPrefix)
+    private static string ObjectKey(string collection, StoredImageVariant variant, string fileName)
+    {
+        return $"{collection}/{VariantFolder(variant)}/{fileName}";
+    }
+
+    private static string VariantFolder(StoredImageVariant variant)
+    {
+        return variant switch
+        {
+            StoredImageVariant.Original => "original",
+            StoredImageVariant.Thumbnail => "thumbnail",
+            StoredImageVariant.ProcessedCutout => "processed-cutout",
+            StoredImageVariant.TryOnOutput => "try-on-output",
+            StoredImageVariant.PrivatePreview => "private-preview",
+            StoredImageVariant.SegmentationMask => "segmentation-mask",
+            _ => throw new ArgumentOutOfRangeException(nameof(variant), variant, "Unsupported image variant.")
+        };
+    }
+
+    private static string? FileNameFromPhotoUrl(string photoUrl)
     {
         if (string.IsNullOrWhiteSpace(photoUrl))
         {
@@ -96,12 +140,7 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
 
         var path = Uri.TryCreate(photoUrl, UriKind.Absolute, out var absoluteUri)
             ? absoluteUri.AbsolutePath
-            : photoUrl;
-
-        if (!path.StartsWith(publicPathPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
+            : photoUrl.Split('?', 2)[0];
 
         var fileName = Path.GetFileName(path);
         return IsSafeStoredFileName(fileName) ? fileName : null;
@@ -112,17 +151,6 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
         return !string.IsNullOrWhiteSpace(fileName)
             && fileName == Path.GetFileName(fileName)
             && ContentTypeForExtension(Path.GetExtension(fileName)) is not null;
-    }
-
-    private static string ExtensionFor(string contentType)
-    {
-        return contentType.ToLowerInvariant() switch
-        {
-            "image/jpeg" => ".jpg",
-            "image/png" => ".png",
-            "image/webp" => ".webp",
-            _ => throw new InvalidOperationException("Unsupported photo content type.")
-        };
     }
 
     private static string? ContentTypeForExtension(string extension)

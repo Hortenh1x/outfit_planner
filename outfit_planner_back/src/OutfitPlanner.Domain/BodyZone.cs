@@ -3,5 +3,11 @@ namespace OutfitPlanner.Domain;
 public enum BodyZone
 {
     Torso,
-    Legs
+    Legs,
+    FullBody,
+    Feet,
+    Head,
+    Hands,
+    Accessory,
+    OuterLayer
 }

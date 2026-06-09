@@ -26,21 +26,39 @@ var tests = new List<(string Name, Action Test)>
     ("auth service rejects duplicate email registration", TestAuthServiceRejectsDuplicateEmailRegistration),
     ("auth service signs in existing external accounts and auto-registers missing accounts", TestAuthServiceExternalLoginAutoRegisters),
     ("auth service revokes session tokens by stored hash", TestAuthServiceRevokesSessionByHash),
+    ("auth service lists sessions revokes all sessions and cleans expired sessions", TestAuthServiceSessionHardening),
     ("api exposes secure auth endpoints and cookie settings", TestApiExposesSecureAuthEndpoints),
-    ("maps garment category to body zone", TestCategoryMapping),
-    ("outfit service rejects two garments for the same category", TestDuplicateCategoryRejected),
+    ("api exposes privacy and auth hardening endpoints", TestApiExposesPrivacyAndAuthHardeningEndpoints),
+    ("api exposes edit delete filtering and revoke endpoints", TestApiExposesEditDeleteFilterAndRevokeEndpoints),
+    ("maps expanded garment categories to richer body zones", TestCategoryMapping),
+    ("wardrobe service updates structured garment metadata without reupload", TestWardrobeServiceUpdatesStructuredMetadata),
+    ("wardrobe service filters sorts and paginates garments", TestWardrobeServiceFiltersSortsAndPaginatesGarments),
+    ("outfit service updates gets filters and deletes outfits", TestOutfitServiceUpdatesFiltersAndDeletesOutfits),
+    ("outfit service applies slot compatibility rules", TestOutfitSlotCompatibilityRules),
+    ("schedule service can unschedule a planned date", TestScheduleServiceUnschedulesDate),
+    ("share service can revoke current user share links", TestShareServiceRevokesShareLinks),
     ("try-on service requires explicit AI consent before provider call", TestTryOnConsentRequired),
+    ("try-on service queues jobs without calling provider inline", TestTryOnServiceQueuesJobsWithoutInlineProviderCall),
+    ("try-on processor completes queued jobs through provider", TestTryOnProcessorCompletesQueuedJobs),
     ("try-on service forwards sequential flow option to provider", TestTryOnServiceForwardsSequentialFlowOption),
+    ("api registers redis try-on queue and provider choices", TestApiRegistersRedisQueueAndProviderChoices),
     ("schedule service stores one planned outfit per user and day", TestDailySchedulePerUser),
     ("share token generator emits url safe high entropy tokens", TestShareTokenGenerator),
     ("photo upload service rejects unsupported content types", TestPhotoUploadRejectsUnsupportedContentType),
+    ("photo upload service rejects forged image content type by magic bytes", TestPhotoUploadRejectsForgedImageContentType),
     ("photo upload service accepts large phone photos", TestPhotoUploadAcceptsLargePhonePhotos),
     ("api configures upload body limits", TestApiConfiguresUploadBodyLimits),
     ("api exposes test diagnostics and trace ids", TestApiExposesTestDiagnosticsAndTraceIds),
-    ("photo upload service stores garment photo and returns public url", TestPhotoUploadStoresGarmentPhoto),
-    ("photo upload service stores body reference photo separately", TestPhotoUploadStoresBodyReferencePhoto),
+    ("object storage ports and local/minio adapters exist", TestObjectStoragePortsAndAdapters),
+    ("image processing pipeline exposes privacy preserving variants", TestImageProcessingPipelineContracts),
+    ("photo upload service stores garment photo variants behind signed url", TestPhotoUploadStoresGarmentPhoto),
+    ("photo upload service stores body reference photo privately", TestPhotoUploadStoresBodyReferencePhoto),
     ("wardrobe service deletes garment records and stored photos", TestWardrobeServiceDeletesGarmentAndStoredPhoto),
     ("wardrobe service deletes body reference records and stored photos", TestWardrobeServiceDeletesBodyReferenceAndStoredPhoto),
+    ("postgres schema contains structured garment metadata and query indexes", TestPostgresSchemaContainsStructuredMetadataAndIndexes),
+    ("postgres schema contains privacy storage auth hardening and try-on retention fields", TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields),
+    ("api uses DbUp migrations instead of startup schema initializer", TestApiUsesDbUpMigrations),
+    ("new try-on provider adapters implement provider port", TestProviderAdaptersImplementPort),
     ("fashn provider requires api key before network call", TestFashnProviderRequiresApiKey),
     ("fashn provider submits try-on request and polls status", TestFashnProviderSubmitsRequestAndPollsStatus),
     ("fashn provider rejects multi-garment outfits when sequential flow is off", TestFashnProviderRejectsMultiGarmentOutfitsWhenSequentialOff),
@@ -72,6 +90,12 @@ static void TestCategoryMapping()
 {
     AssertEqual(BodyZone.Torso, GarmentRules.GetBodyZone(GarmentCategory.Top), "Top should map to torso");
     AssertEqual(BodyZone.Legs, GarmentRules.GetBodyZone(GarmentCategory.Bottom), "Bottom should map to legs");
+    AssertEqual(BodyZone.FullBody, GarmentRules.GetBodyZone(GarmentCategory.Dress), "Dress should map to full body");
+    AssertEqual(BodyZone.OuterLayer, GarmentRules.GetBodyZone(GarmentCategory.Outerwear), "Outerwear should map to outer layer");
+    AssertEqual(BodyZone.Feet, GarmentRules.GetBodyZone(GarmentCategory.Shoes), "Shoes should map to feet");
+    AssertEqual(BodyZone.Accessory, GarmentRules.GetBodyZone(GarmentCategory.Bag), "Bag should map to accessory");
+    AssertEqual(BodyZone.Accessory, GarmentRules.GetBodyZone(GarmentCategory.Accessory), "Accessory should map to accessory");
+    AssertEqual(BodyZone.Head, GarmentRules.GetBodyZone(GarmentCategory.Hat), "Hat should map to head");
 }
 
 static void TestDomainLayerHasNoOuterReferences()
@@ -267,6 +291,35 @@ static void TestAuthServiceRevokesSessionByHash()
     AssertTrue(store.GetActiveAuthSessionByTokenHash("hash:session-1", DateTimeOffset.UtcNow) is null, "revoked sessions should no longer authenticate.");
 }
 
+static void TestAuthServiceSessionHardening()
+{
+    var store = new InMemoryOutfitStore();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+    var first = auth.RegisterWithPassword("sessions@example.com", "abc12345", "abc12345");
+    var second = auth.SignInWithPassword("sessions@example.com", "abc12345");
+
+    var sessions = auth.ListSessions(first.SessionToken);
+
+    AssertEqual(2, sessions.Count, "session listing should include all active sessions for the authenticated user.");
+    AssertTrue(sessions.All(session => session.RevokedAt is null), "active session listing should not include revoked sessions.");
+
+    auth.RevokeAllSessions(first.SessionToken);
+
+    AssertTrue(store.GetActiveAuthSessionByTokenHash("hash:session-1", DateTimeOffset.UtcNow) is null, "revoke all should revoke the first session.");
+    AssertTrue(store.GetActiveAuthSessionByTokenHash("hash:session-3", DateTimeOffset.UtcNow) is null, "revoke all should revoke later sessions.");
+
+    store.AddAuthSession(new AuthSession(
+        Guid.NewGuid(),
+        first.User.Id,
+        "hash:expired",
+        "hash:csrf-expired",
+        DateTimeOffset.UtcNow.AddDays(-1),
+        DateTimeOffset.UtcNow.AddDays(-31),
+        null));
+
+    AssertEqual(1, auth.CleanupExpiredSessions(), "expired session cleanup should remove persisted expired sessions.");
+}
+
 static void TestApiExposesSecureAuthEndpoints()
 {
     var programPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "OutfitPlanner.Api", "Program.cs"));
@@ -277,21 +330,251 @@ static void TestApiExposesSecureAuthEndpoints()
     AssertTrue(program.Contains("/auth/logout", StringComparison.Ordinal), "api should expose logout.");
     AssertTrue(program.Contains("/auth/me", StringComparison.Ordinal), "api should expose current user session.");
     AssertTrue(program.Contains("/auth/external/{provider}/start", StringComparison.Ordinal), "api should expose OAuth/OIDC start endpoints.");
+    AssertTrue(program.Contains("/auth/external/{provider}/complete", StringComparison.Ordinal), "api should complete external auth on a route separate from the provider callback path.");
+    AssertTrue(program.Contains("/complete?returnUrl=", StringComparison.Ordinal), "external auth challenge should redirect to a completion route after the provider callback.");
+    AssertTrue(program.Contains("UseForwardedHeaders", StringComparison.Ordinal), "api should honor forwarded proxy headers before auth.");
+    AssertTrue(program.Contains("XForwardedProto", StringComparison.Ordinal), "api should preserve the browser-facing scheme for OAuth redirects.");
+    AssertTrue(program.Contains("https://127.0.0.1:5173", StringComparison.Ordinal), "api CORS should allow HTTPS Vite dev origin.");
+    AssertTrue(program.Contains("Authentication:PublicOrigin", StringComparison.Ordinal), "api should support a canonical public origin for stable external auth callbacks.");
+    AssertTrue(program.Contains("CanonicalGoogleHandler", StringComparison.Ordinal), "google oauth should use the canonical public origin for token exchange callbacks.");
     AssertTrue(program.Contains("HttpOnly = true", StringComparison.Ordinal), "session cookies should be HttpOnly.");
     AssertTrue(program.Contains("SameSite = SameSiteMode.Lax", StringComparison.Ordinal), "auth cookies should use SameSite=Lax.");
     AssertTrue(program.Contains("X-CSRF-Token", StringComparison.Ordinal), "mutating authenticated requests should require a CSRF header.");
 }
 
-static void TestDuplicateCategoryRejected()
+static void TestApiExposesPrivacyAndAuthHardeningEndpoints()
+{
+    var programPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "OutfitPlanner.Api", "Program.cs"));
+    var program = File.ReadAllText(programPath);
+
+    foreach (var route in new[]
+    {
+        "MapDelete(\"/account\"",
+        "MapGet(\"/account/export\"",
+        "MapDelete(\"/body-reference-photos/{photoId:guid}\"",
+        "MapDelete(\"/try-on-jobs/{jobId:guid}/output\"",
+        "MapPost(\"/privacy/purge-ai-outputs\"",
+        "MapPost(\"/auth/email-verification/request\"",
+        "MapPost(\"/auth/email-verification/confirm\"",
+        "MapPost(\"/auth/password-reset/request\"",
+        "MapPost(\"/auth/password-reset/confirm\"",
+        "MapGet(\"/auth/sessions\"",
+        "MapDelete(\"/auth/sessions\""
+    })
+    {
+        AssertTrue(program.Contains(route, StringComparison.Ordinal), $"api should expose {route}.");
+    }
+
+    AssertTrue(program.Contains("AddRateLimiter", StringComparison.Ordinal), "api should configure rate limiting.");
+    AssertTrue(program.Contains("login-rate-limit", StringComparison.Ordinal), "login route should use a rate limit policy.");
+    AssertTrue(program.Contains("registration-rate-limit", StringComparison.Ordinal), "registration route should use a rate limit policy.");
+}
+
+static void TestApiExposesEditDeleteFilterAndRevokeEndpoints()
+{
+    var programPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "OutfitPlanner.Api", "Program.cs"));
+    var program = File.ReadAllText(programPath);
+
+    AssertTrue(program.Contains("MapGet(\"/garments/{garmentId:guid}\"", StringComparison.Ordinal), "api should expose garment detail reads.");
+    AssertTrue(program.Contains("MapPatch(\"/garments/{garmentId:guid}\"", StringComparison.Ordinal), "api should expose garment edits.");
+    AssertTrue(program.Contains("MapGet(\"/outfits/{outfitId:guid}\"", StringComparison.Ordinal), "api should expose outfit detail reads.");
+    AssertTrue(program.Contains("MapPatch(\"/outfits/{outfitId:guid}\"", StringComparison.Ordinal), "api should expose outfit edits.");
+    AssertTrue(program.Contains("MapDelete(\"/outfits/{outfitId:guid}\"", StringComparison.Ordinal), "api should expose outfit deletion.");
+    AssertTrue(program.Contains("MapDelete(\"/schedule/{date}\"", StringComparison.Ordinal), "api should expose unscheduling by date.");
+    AssertTrue(program.Contains("MapDelete(\"/share/{token}\"", StringComparison.Ordinal), "api should expose share revocation.");
+    AssertTrue(program.Contains("GarmentQuery", StringComparison.Ordinal), "garment list route should bind filter and pagination criteria.");
+    AssertTrue(program.Contains("OutfitQuery", StringComparison.Ordinal), "outfit list route should bind filter and pagination criteria.");
+}
+
+static void TestWardrobeServiceUpdatesStructuredMetadata()
+{
+    var store = new InMemoryOutfitStore();
+    var service = new WardrobeService(store, store, new SystemClock());
+    var garment = service.CreateGarment(CreateGarment("user-a", "linen shirt", GarmentCategory.Top));
+    var lastWorn = new DateTimeOffset(2026, 6, 1, 9, 30, 0, TimeSpan.Zero);
+
+    var updated = service.UpdateGarment("user-a", garment.Id, new UpdateGarmentCommand(
+        Name: "black linen trousers",
+        Category: GarmentCategory.Bottom,
+        Tags: new[] { "linen", "capsule" },
+        PrimaryColor: "black",
+        SecondaryColors: new[] { "charcoal", "white" },
+        Material: "linen",
+        Brand: "Muji",
+        Size: "M",
+        Season: new[] { "summer" },
+        WeatherMinTemp: 18,
+        WeatherMaxTemp: 30,
+        Occasion: new[] { "casual", "date" },
+        FormalityScore: 2,
+        WarmthScore: 1,
+        ComfortScore: 5,
+        IsFavorite: true,
+        IsArchived: false,
+        LastWornAt: lastWorn,
+        LaundryStatus: "worn"));
+
+    AssertTrue(updated is not null, "existing garment should update.");
+    AssertEqual("black linen trousers", updated!.Name, "garment name should be editable.");
+    AssertEqual(GarmentCategory.Bottom, updated.Category, "garment category should be editable.");
+    AssertEqual(BodyZone.Legs, updated.BodyZone, "body zone should follow the edited category.");
+    AssertEqual("black", updated.PrimaryColor, "primary color should be structured metadata.");
+    AssertEqual(2, updated.SecondaryColors.Count, "secondary colors should be structured metadata.");
+    AssertEqual("linen", updated.Material, "material should be structured metadata.");
+    AssertEqual("Muji", updated.Brand, "brand should be structured metadata.");
+    AssertEqual("M", updated.Size, "size should be structured metadata.");
+    AssertEqual(1, updated.Season.Count, "season should be structured metadata.");
+    AssertEqual(18, updated.WeatherMinTemp, "weather min temp should update.");
+    AssertEqual(30, updated.WeatherMaxTemp, "weather max temp should update.");
+    AssertEqual(2, updated.Occasion.Count, "occasion should be structured metadata.");
+    AssertEqual(2, updated.FormalityScore, "formality score should update.");
+    AssertEqual(1, updated.WarmthScore, "warmth score should update.");
+    AssertEqual(5, updated.ComfortScore, "comfort score should update.");
+    AssertTrue(updated.IsFavorite, "favorite flag should update.");
+    AssertTrue(!updated.IsArchived, "archive flag should update.");
+    AssertEqual(lastWorn, updated.LastWornAt, "last worn timestamp should update.");
+    AssertEqual("worn", updated.LaundryStatus, "laundry status should update.");
+    AssertEqual(2, updated.Tags.Count, "free-form tags should remain available.");
+    AssertTrue(service.UpdateGarment("user-b", garment.Id, new UpdateGarmentCommand(Name: "stolen")) is null, "other users must not update the garment.");
+}
+
+static void TestWardrobeServiceFiltersSortsAndPaginatesGarments()
+{
+    var store = new InMemoryOutfitStore();
+    var service = new WardrobeService(store, store, new SystemClock());
+    var summerShirt = service.CreateGarment(new CreateGarmentCommand(
+        "user-a",
+        "black summer shirt",
+        GarmentCategory.Top,
+        "https://example.com/black-shirt.jpg",
+        null,
+        new[] { "shirt", "linen" },
+        PrimaryColor: "black",
+        Season: new[] { "summer" },
+        Occasion: new[] { "casual" },
+        IsFavorite: true));
+    service.CreateGarment(new CreateGarmentCommand(
+        "user-a",
+        "white winter shirt",
+        GarmentCategory.Top,
+        "https://example.com/white-shirt.jpg",
+        null,
+        new[] { "shirt" },
+        PrimaryColor: "white",
+        Season: new[] { "winter" }));
+    service.CreateGarment(new CreateGarmentCommand(
+        "user-a",
+        "black jeans",
+        GarmentCategory.Bottom,
+        "https://example.com/black-jeans.jpg",
+        null,
+        new[] { "denim" },
+        PrimaryColor: "black",
+        Season: new[] { "summer" }));
+
+    var result = service.ListGarments("user-a", new GarmentQuery(
+        Category: GarmentCategory.Top,
+        Color: "black",
+        Season: "summer",
+        Search: "shirt",
+        Sort: "recent",
+        Offset: 0,
+        Limit: 1,
+        Favorite: true));
+
+    AssertEqual(1, result.Count, "filters and limit should narrow the result set.");
+    AssertEqual(summerShirt.Id, result[0].Id, "filtered result should match category color season q and favorite.");
+}
+
+static void TestOutfitServiceUpdatesFiltersAndDeletesOutfits()
 {
     var store = new InMemoryOutfitStore();
     var service = new OutfitService(store, store, new SystemClock());
-    var topA = store.CreateGarment(CreateGarment("user-a", "white tee", GarmentCategory.Top));
-    var topB = store.CreateGarment(CreateGarment("user-a", "black knit", GarmentCategory.Top));
+    var top = store.CreateGarment(CreateGarment("user-a", "oxford shirt", GarmentCategory.Top));
+    var bottom = store.CreateGarment(CreateGarment("user-a", "tailored trousers", GarmentCategory.Bottom));
+    var outfit = service.CreateOutfit("user-a", "work fit", new[] { top.Id });
+
+    var updated = service.UpdateOutfit("user-a", outfit.Id, new UpdateOutfitCommand(
+        Name: "office uniform",
+        GarmentIds: new[] { top.Id, bottom.Id },
+        Tags: new[] { "office" },
+        Occasion: new[] { "business" },
+        IsFavorite: true,
+        IsArchived: false));
+    var detail = service.GetOutfit("user-a", outfit.Id);
+    var filtered = service.ListOutfits("user-a", new OutfitQuery(Search: "office", Occasion: "business", Favorite: true));
+
+    AssertTrue(updated is not null, "existing outfit should update.");
+    AssertEqual("office uniform", updated!.Name, "outfit name should update.");
+    AssertEqual(2, updated.Items.Count, "outfit garments should update.");
+    AssertEqual(1, updated.Tags.Count, "outfit tags should update.");
+    AssertEqual(1, updated.Occasion.Count, "outfit occasion should update.");
+    AssertTrue(updated.IsFavorite, "outfit favorite flag should update.");
+    AssertTrue(detail is not null, "outfit detail should be readable.");
+    AssertEqual(1, filtered.Count, "outfit filters should find the updated outfit.");
+    AssertTrue(service.DeleteOutfit("user-a", outfit.Id), "owner should delete outfit.");
+    AssertTrue(service.GetOutfit("user-a", outfit.Id) is null, "deleted outfit detail should disappear.");
+    AssertTrue(!service.DeleteOutfit("user-b", outfit.Id), "other users must not delete outfit.");
+}
+
+static void TestOutfitSlotCompatibilityRules()
+{
+    var store = new InMemoryOutfitStore();
+    var service = new OutfitService(store, store, new SystemClock());
+    var top = store.CreateGarment(CreateGarment("user-a", "white tee", GarmentCategory.Top));
+    var bottom = store.CreateGarment(CreateGarment("user-a", "black trousers", GarmentCategory.Bottom));
+    var secondBottom = store.CreateGarment(CreateGarment("user-a", "blue jeans", GarmentCategory.Bottom));
+    var dress = store.CreateGarment(CreateGarment("user-a", "black dress", GarmentCategory.Dress));
+    var outerwear = store.CreateGarment(CreateGarment("user-a", "wool coat", GarmentCategory.Outerwear));
+    var shoes = store.CreateGarment(CreateGarment("user-a", "leather shoes", GarmentCategory.Shoes));
+    var secondShoes = store.CreateGarment(CreateGarment("user-a", "white sneakers", GarmentCategory.Shoes));
+    var bag = store.CreateGarment(CreateGarment("user-a", "crossbody bag", GarmentCategory.Bag));
+
+    AssertEqual(3, service.CreateOutfit("user-a", "top bottom shoes", new[] { top.Id, bottom.Id, shoes.Id }).Items.Count, "top bottom shoes should be compatible.");
+    AssertEqual(2, service.CreateOutfit("user-a", "dress shoes", new[] { dress.Id, shoes.Id }).Items.Count, "dress shoes should be compatible.");
+    AssertEqual(4, service.CreateOutfit("user-a", "layers", new[] { top.Id, bottom.Id, outerwear.Id, shoes.Id }).Items.Count, "top bottom outerwear shoes should be compatible.");
+    AssertEqual(3, service.CreateOutfit("user-a", "dress coat shoes", new[] { dress.Id, outerwear.Id, shoes.Id }).Items.Count, "dress outerwear shoes should be compatible.");
+    AssertEqual(4, service.CreateOutfit("user-a", "accessorized", new[] { top.Id, bottom.Id, shoes.Id, bag.Id }).Items.Count, "bag should not conflict with base slots.");
 
     AssertThrows<InvalidOperationException>(
-        () => service.CreateOutfit("user-a", "bad outfit", new[] { topA.Id, topB.Id }),
-        "duplicate categories must be rejected");
+        () => service.CreateOutfit("user-a", "dress with tee", new[] { dress.Id, top.Id, shoes.Id }),
+        "full body garments must conflict with torso garments");
+    AssertThrows<InvalidOperationException>(
+        () => service.CreateOutfit("user-a", "double bottoms", new[] { top.Id, bottom.Id, secondBottom.Id, shoes.Id }),
+        "two bottom garments should require explicit layering mode");
+    AssertThrows<InvalidOperationException>(
+        () => service.CreateOutfit("user-a", "double shoes", new[] { top.Id, bottom.Id, shoes.Id, secondShoes.Id }),
+        "two shoe garments should be rejected");
+}
+
+static void TestScheduleServiceUnschedulesDate()
+{
+    var store = new InMemoryOutfitStore();
+    var outfitService = new OutfitService(store, store, new SystemClock());
+    var scheduleService = new ScheduleService(store, store, new SystemClock());
+    var day = new DateOnly(2026, 6, 8);
+    var top = store.CreateGarment(CreateGarment("user-a", "white tee", GarmentCategory.Top));
+    var outfit = outfitService.CreateOutfit("user-a", "casual", new[] { top.Id });
+    scheduleService.ScheduleOutfit("user-a", day, outfit.Id);
+
+    AssertTrue(scheduleService.UnscheduleOutfit("user-a", day), "owner should unschedule a planned date.");
+    AssertEqual(0, scheduleService.GetSchedule("user-a", day, day).Count, "unscheduled date should disappear from schedule.");
+    AssertTrue(!scheduleService.UnscheduleOutfit("user-b", day), "other users must not unschedule the date.");
+}
+
+static void TestShareServiceRevokesShareLinks()
+{
+    var store = new InMemoryOutfitStore();
+    var outfitService = new OutfitService(store, store, new SystemClock());
+    var share = new ShareService(store, store, new TestShareTokenGenerator(), new SystemClock());
+    var top = store.CreateGarment(CreateGarment("user-a", "white tee", GarmentCategory.Top));
+    var outfit = outfitService.CreateOutfit("user-a", "casual", new[] { top.Id });
+    var link = share.CreateShareLink("user-a", outfit.Id);
+
+    AssertTrue(share.GetSharedOutfit(link.Token) is not null, "fresh share link should resolve.");
+    AssertTrue(!share.RevokeShareLink("user-b", link.Token), "other users must not revoke the share link.");
+    AssertTrue(share.RevokeShareLink("user-a", link.Token), "owner should revoke the share link.");
+    AssertTrue(share.GetSharedOutfit(link.Token) is null, "revoked share link should no longer resolve.");
 }
 
 static void TestTryOnConsentRequired()
@@ -303,12 +586,62 @@ static void TestTryOnConsentRequired()
     var outfit = new OutfitService(store, store, new SystemClock())
         .CreateOutfit(userId, "casual", new[] { top.Id, bottom.Id });
     var provider = new CountingTryOnProvider();
-    var service = new TryOnService(store, store, provider, new SystemClock());
+    var service = new TryOnService(store, store, new RecordingTryOnJobQueue(), provider, new SystemClock());
 
     AssertThrows<InvalidOperationException>(
         () => service.Start(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: false),
         "try-on should require consent");
     AssertEqual(0, provider.Calls, "provider must not receive photos without consent");
+}
+
+static void TestTryOnServiceQueuesJobsWithoutInlineProviderCall()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id });
+    var provider = new CountingTryOnProvider();
+    var queue = new RecordingTryOnJobQueue();
+    var service = new TryOnService(store, store, queue, provider, new SystemClock());
+
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(TryOnStatus.Queued, job.Status, "starting try-on should create a queued job.");
+    AssertTrue(job.ConsentAcceptedAt is not null, "try-on jobs should record when consent was accepted.");
+    AssertEqual("test", job.ProviderName, "try-on jobs should record provider name.");
+    AssertTrue(job.RetentionUntil > job.CreatedAt, "try-on jobs should have an output retention deadline.");
+    AssertTrue(!job.IsDeleted, "new try-on jobs should not be marked deleted.");
+    AssertEqual(0, provider.Calls, "provider should not be called inline by the request path.");
+    AssertEqual(1, queue.Enqueued.Count, "queued job id should be pushed to the background queue.");
+    AssertEqual(job.Id, queue.Enqueued[0], "queued id should match the persisted job.");
+}
+
+static void TestTryOnProcessorCompletesQueuedJobs()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id });
+    var provider = new CountingTryOnProvider();
+    var queue = new RecordingTryOnJobQueue();
+    var service = new TryOnService(store, store, queue, provider, new SystemClock());
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, sequentialFlowEnabled: true)
+        .GetAwaiter()
+        .GetResult();
+
+    service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
+    var completed = service.GetJob(userId, job.Id);
+    var updatedOutfit = new OutfitService(store, store, new SystemClock()).GetOutfit(userId, outfit.Id);
+
+    AssertEqual(1, provider.Calls, "worker processing should call provider once.");
+    AssertTrue(provider.LastOptions?.SequentialFlowEnabled == true, "worker should preserve sequential flow option from the queued job.");
+    AssertEqual(TryOnStatus.Succeeded, completed?.Status, "processed job should succeed.");
+    AssertEqual("https://example.com/output.jpg", completed?.OutputImageUrl, "processed job should store provider output.");
+    AssertEqual("https://example.com/output.jpg", updatedOutfit?.PersonPreviewUrl, "processed job should update outfit preview.");
 }
 
 static void TestTryOnServiceForwardsSequentialFlowOption()
@@ -319,12 +652,29 @@ static void TestTryOnServiceForwardsSequentialFlowOption()
     var outfit = new OutfitService(store, store, new SystemClock())
         .CreateOutfit(userId, "casual", new[] { top.Id });
     var provider = new CountingTryOnProvider();
-    var service = new TryOnService(store, store, provider, new SystemClock());
+    var service = new TryOnService(store, store, new RecordingTryOnJobQueue(), provider, new SystemClock());
 
-    service.Start(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, sequentialFlowEnabled: true);
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, sequentialFlowEnabled: true)
+        .GetAwaiter()
+        .GetResult();
+    service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
 
     AssertEqual(1, provider.Calls, "provider should receive the try-on request");
     AssertTrue(provider.LastOptions?.SequentialFlowEnabled == true, "provider should receive sequential flow option");
+}
+
+static void TestApiRegistersRedisQueueAndProviderChoices()
+{
+    var programPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "OutfitPlanner.Api", "Program.cs"));
+    var program = File.ReadAllText(programPath);
+
+    AssertTrue(program.Contains("ConnectionStrings:Redis", StringComparison.Ordinal), "api should read Redis connection configuration.");
+    AssertTrue(program.Contains("RedisTryOnJobQueue", StringComparison.Ordinal), "api should register a Redis-backed try-on queue when configured.");
+    AssertTrue(program.Contains("InMemoryTryOnJobQueue", StringComparison.Ordinal), "api should keep a local in-memory queue fallback for development.");
+    AssertTrue(program.Contains("LocalVton", StringComparison.Ordinal), "api should allow selecting the local VTON provider.");
+    AssertTrue(program.Contains("LocalCatVton", StringComparison.Ordinal), "api should allow selecting the local CatVTON provider.");
+    AssertTrue(program.Contains("Replicate", StringComparison.Ordinal), "api should allow selecting the Replicate provider.");
+    AssertTrue(program.Contains("Fal", StringComparison.Ordinal), "api should allow selecting the Fal provider.");
 }
 
 static void TestDailySchedulePerUser()
@@ -374,6 +724,17 @@ static void TestPhotoUploadRejectsUnsupportedContentType()
     AssertEqual(0, storage.Calls, "invalid uploads must not reach storage");
 }
 
+static void TestPhotoUploadRejectsForgedImageContentType()
+{
+    var storage = new CountingPhotoStorage();
+    var service = new PhotoUploadService(storage);
+
+    AssertThrows<InvalidOperationException>(
+        () => service.UploadGarmentPhoto(new IncomingPhoto("fake.png", "image/png", 11, new MemoryStream(Encoding.UTF8.GetBytes("not-an-image")))),
+        "image uploads with forged MIME type must be rejected by magic bytes");
+    AssertEqual(0, storage.Calls, "forged image uploads must not reach storage");
+}
+
 static void TestPhotoUploadAcceptsLargePhonePhotos()
 {
     AssertTrue(PhotoUploadService.MaxPhotoBytes >= 50L * 1024 * 1024, "photo uploads should allow large phone photos.");
@@ -399,22 +760,41 @@ static void TestApiExposesTestDiagnosticsAndTraceIds()
     AssertTrue(program.Contains("Results.Json", StringComparison.Ordinal), "api should return structured JSON for unexpected errors in test/dev.");
 }
 
+static void TestObjectStoragePortsAndAdapters()
+{
+    AssertTrue(typeof(IObjectStorage).IsInterface, "application should expose an object storage port.");
+    AssertTrue(typeof(LocalObjectStorage).GetInterfaces().Contains(typeof(IObjectStorage)), "local adapter should implement object storage.");
+    AssertTrue(typeof(MinioObjectStorage).GetInterfaces().Contains(typeof(IObjectStorage)), "minio adapter should implement object storage.");
+}
+
+static void TestImageProcessingPipelineContracts()
+{
+    AssertTrue(typeof(IImageProcessor).IsInterface, "application should expose an image processing port.");
+    var variantNames = Enum.GetNames<StoredImageVariant>();
+    foreach (var variant in new[] { "Original", "Thumbnail", "ProcessedCutout", "TryOnOutput", "PrivatePreview", "SegmentationMask" })
+    {
+        AssertTrue(variantNames.Contains(variant), $"stored image variant {variant} should be modeled.");
+    }
+}
+
 static void TestPhotoUploadStoresGarmentPhoto()
 {
     var tempPath = Path.Combine(Path.GetTempPath(), "outfit-planner-photo-tests", Guid.NewGuid().ToString("N"));
 
     try
     {
-        var bytes = new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 };
+        var bytes = MinimalPngBytes();
         var storage = new LocalPhotoStorage(tempPath);
         var service = new PhotoUploadService(storage);
 
         var stored = service.UploadGarmentPhoto(new IncomingPhoto("shirt.png", "image/png", bytes.Length, new MemoryStream(bytes)));
 
-        AssertTrue(stored.Url.StartsWith("/uploads/garments/", StringComparison.Ordinal), "stored photo should expose public upload path");
+        AssertTrue(stored.Url.StartsWith("/api/storage/signed/", StringComparison.Ordinal), "stored garment photos should be served through signed object URLs");
         AssertEqual("image/png", stored.ContentType, "stored content type should be preserved");
-        AssertEqual(bytes.Length, (int)stored.Length, "stored length should be preserved");
-        AssertTrue(File.Exists(Path.Combine(tempPath, "garments", stored.FileName)), "uploaded file should exist on disk");
+        AssertTrue(stored.Length > 0, "stored length should reflect processed object bytes");
+        AssertTrue(File.Exists(Path.Combine(tempPath, "garments", "original", stored.FileName)), "original garment object should exist on disk");
+        AssertTrue(File.Exists(Path.Combine(tempPath, "garments", "thumbnail", stored.FileName)), "thumbnail garment object should exist on disk");
+        AssertTrue(File.Exists(Path.Combine(tempPath, "garments", "processed-cutout", stored.FileName)), "processed cutout garment object should exist on disk");
     }
     finally
     {
@@ -431,15 +811,17 @@ static void TestPhotoUploadStoresBodyReferencePhoto()
 
     try
     {
-        var bytes = new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 };
+        var bytes = MinimalPngBytes();
         var storage = new LocalPhotoStorage(tempPath);
         var service = new PhotoUploadService(storage);
 
         var stored = service.UploadBodyReferencePhoto(new IncomingPhoto("body.png", "image/png", bytes.Length, new MemoryStream(bytes)));
 
-        AssertTrue(stored.Url.StartsWith("/uploads/body-reference-photos/", StringComparison.Ordinal), "stored body photo should expose body reference upload path");
+        AssertTrue(stored.Url.StartsWith("/api/storage/signed/", StringComparison.Ordinal), "stored body photos should be served through signed object URLs");
         AssertEqual("image/png", stored.ContentType, "stored content type should be preserved");
-        AssertTrue(File.Exists(Path.Combine(tempPath, "body-reference-photos", stored.FileName)), "uploaded body photo should exist on disk");
+        AssertTrue(File.Exists(Path.Combine(tempPath, "body-reference-photos", "original", stored.FileName)), "uploaded body photo should exist on disk");
+        AssertTrue(File.Exists(Path.Combine(tempPath, "body-reference-photos", "thumbnail", stored.FileName)), "body photo thumbnail should exist on disk");
+        AssertTrue(File.Exists(Path.Combine(tempPath, "body-reference-photos", "private-preview", stored.FileName)), "body photo private preview should exist on disk");
         AssertTrue(storage.GetBodyReferencePhoto(stored.FileName) is not null, "body photo reader should find stored file");
     }
     finally
@@ -461,20 +843,21 @@ static void TestWardrobeServiceDeletesGarmentAndStoredPhoto()
         var store = new InMemoryOutfitStore();
         var service = new WardrobeService(store, store, new SystemClock(), storage);
         var stored = new PhotoUploadService(storage)
-            .UploadGarmentPhoto(new IncomingPhoto("shirt.png", "image/png", 8, new MemoryStream(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 })));
+            .UploadGarmentPhoto(new IncomingPhoto("shirt.png", "image/png", MinimalPngBytes().Length, new MemoryStream(MinimalPngBytes())));
         var garment = service.CreateGarment(new CreateGarmentCommand(
             "user-a",
             "linen shirt",
             GarmentCategory.Top,
-            $"http://localhost:5000{stored.Url}",
-            $"http://localhost:5000{stored.Url}",
+            stored.Url,
+            stored.Url,
             Array.Empty<string>()));
 
         var deleted = service.DeleteGarment("user-a", garment.Id);
 
         AssertTrue(deleted, "existing garment should be deleted");
         AssertEqual(0, service.ListGarments("user-a").Count, "deleted garment should disappear from wardrobe");
-        AssertTrue(!File.Exists(Path.Combine(tempPath, "garments", stored.FileName)), "deleted garment should remove its stored photo");
+        AssertTrue(!File.Exists(Path.Combine(tempPath, "garments", "original", stored.FileName)), "deleted garment should remove its original object");
+        AssertTrue(!File.Exists(Path.Combine(tempPath, "garments", "thumbnail", stored.FileName)), "deleted garment should remove its thumbnail object");
         AssertTrue(!service.DeleteGarment("user-b", garment.Id), "other users must not delete the garment");
     }
     finally
@@ -496,14 +879,15 @@ static void TestWardrobeServiceDeletesBodyReferenceAndStoredPhoto()
         var store = new InMemoryOutfitStore();
         var service = new WardrobeService(store, store, new SystemClock(), storage);
         var stored = new PhotoUploadService(storage)
-            .UploadBodyReferencePhoto(new IncomingPhoto("body.png", "image/png", 8, new MemoryStream(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 })));
-        var photo = service.CreateBodyReferencePhoto("user-a", $"http://localhost:5000{stored.Url}");
+            .UploadBodyReferencePhoto(new IncomingPhoto("body.png", "image/png", MinimalPngBytes().Length, new MemoryStream(MinimalPngBytes())));
+        var photo = service.CreateBodyReferencePhoto("user-a", stored.Url);
 
         var deleted = service.DeleteBodyReferencePhoto("user-a", photo.Id);
 
         AssertTrue(deleted, "existing body reference should be deleted");
         AssertEqual(0, service.ListBodyReferencePhotos("user-a").Count, "deleted body reference should disappear from the library");
-        AssertTrue(!File.Exists(Path.Combine(tempPath, "body-reference-photos", stored.FileName)), "deleted body reference should remove its stored photo");
+        AssertTrue(!File.Exists(Path.Combine(tempPath, "body-reference-photos", "original", stored.FileName)), "deleted body reference should remove its original object");
+        AssertTrue(!File.Exists(Path.Combine(tempPath, "body-reference-photos", "thumbnail", stored.FileName)), "deleted body reference should remove its thumbnail object");
         AssertTrue(!service.DeleteBodyReferencePhoto("user-b", photo.Id), "other users must not delete the body reference");
     }
     finally
@@ -512,6 +896,118 @@ static void TestWardrobeServiceDeletesBodyReferenceAndStoredPhoto()
         {
             Directory.Delete(tempPath, recursive: true);
         }
+    }
+}
+
+static void TestPostgresSchemaContainsStructuredMetadataAndIndexes()
+{
+    var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "schema.sql"));
+    var schema = File.ReadAllText(schemaPath);
+
+    foreach (var column in new[]
+    {
+        "primary_color",
+        "secondary_colors",
+        "material",
+        "brand",
+        "size",
+        "season",
+        "weather_min_temp",
+        "weather_max_temp",
+        "occasion",
+        "formality_score",
+        "warmth_score",
+        "comfort_score",
+        "is_favorite",
+        "is_archived",
+        "last_worn_at",
+        "laundry_status"
+    })
+    {
+        AssertTrue(schema.Contains(column, StringComparison.OrdinalIgnoreCase), $"schema should include garment metadata column {column}.");
+    }
+
+    AssertTrue(schema.Contains("ix_garment_items_user_category", StringComparison.OrdinalIgnoreCase), "schema should index garment user/category filters.");
+    AssertTrue(schema.Contains("ix_garment_items_user_created_at", StringComparison.OrdinalIgnoreCase), "schema should index garment recent sorting.");
+    AssertTrue(schema.Contains("ix_scheduled_outfits_user_date", StringComparison.OrdinalIgnoreCase), "schema should index schedule date lookup.");
+    AssertTrue(schema.Contains("ix_outfits_user_created_at", StringComparison.OrdinalIgnoreCase), "schema should index outfit recent sorting.");
+    AssertTrue(schema.Contains("using gin (tags)", StringComparison.OrdinalIgnoreCase), "schema should add a GIN index for garment tags.");
+}
+
+static void TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields()
+{
+    var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "schema.sql"));
+    var schema = File.ReadAllText(schemaPath);
+
+    foreach (var value in new[]
+    {
+        "Dress",
+        "Outerwear",
+        "Shoes",
+        "Bag",
+        "Accessory",
+        "Hat",
+        "FullBody",
+        "Feet",
+        "Head",
+        "Hands",
+        "OuterLayer"
+    })
+    {
+        AssertTrue(schema.Contains(value, StringComparison.Ordinal), $"schema should allow enum value {value}.");
+    }
+
+    foreach (var column in new[]
+    {
+        "object_key",
+        "thumbnail_object_key",
+        "processed_cutout_object_key",
+        "perceptual_hash",
+        "email_verified_at",
+        "two_factor_enabled",
+        "auth_email_verification_tokens",
+        "auth_password_reset_tokens",
+        "consent_accepted_at",
+        "provider_name",
+        "provider_request_id",
+        "source_body_photo_id",
+        "retention_until",
+        "is_deleted"
+    })
+    {
+        AssertTrue(schema.Contains(column, StringComparison.OrdinalIgnoreCase), $"schema should include privacy/storage/auth field {column}.");
+    }
+}
+
+static void TestApiUsesDbUpMigrations()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var apiProject = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "OutfitPlanner.Api.csproj"));
+    var program = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Program.cs"));
+    var migrationPath = Path.Combine(rootPath, "database", "migrations");
+
+    AssertTrue(apiProject.Contains("DbUp.Postgresql", StringComparison.OrdinalIgnoreCase), "api project should reference DbUp PostgreSQL package.");
+    AssertTrue(program.Contains("PostgresMigrationRunner", StringComparison.Ordinal), "api startup should run DbUp migrations.");
+    AssertTrue(!program.Contains("PostgresSchemaInitializer", StringComparison.Ordinal), "api startup should no longer initialize schema.sql directly.");
+    AssertTrue(Directory.Exists(migrationPath), "database migrations directory should exist.");
+    AssertTrue(Directory.GetFiles(migrationPath, "*.sql").Length > 0, "database migrations directory should contain SQL migrations.");
+}
+
+static void TestProviderAdaptersImplementPort()
+{
+    var providerTypes = new[]
+    {
+        typeof(LocalVtonProvider),
+        typeof(LocalCatVtonProvider),
+        typeof(ReplicateProvider),
+        typeof(FalProvider),
+        typeof(FashnTryOnProvider),
+        typeof(MockTryOnProvider)
+    };
+
+    foreach (var providerType in providerTypes)
+    {
+        AssertTrue(typeof(ITryOnProvider).IsAssignableFrom(providerType), $"{providerType.Name} should implement ITryOnProvider.");
     }
 }
 
@@ -604,6 +1100,11 @@ static CreateGarmentCommand CreateGarment(string userId, string name, GarmentCat
         Array.Empty<string>());
 }
 
+static byte[] MinimalPngBytes()
+{
+    return Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=");
+}
+
 static Outfit CreateSingleGarmentOutfit()
 {
     return new Outfit(
@@ -614,6 +1115,10 @@ static Outfit CreateSingleGarmentOutfit()
         {
             new OutfitItem(Guid.NewGuid(), "white tee", GarmentCategory.Top, BodyZone.Torso, "https://app.test/shirt.png")
         },
+        Array.Empty<string>(),
+        Array.Empty<string>(),
+        false,
+        false,
         null,
         null,
         DateTimeOffset.UtcNow);
@@ -630,6 +1135,10 @@ static Outfit CreateTwoGarmentOutfit()
             new OutfitItem(Guid.NewGuid(), "white tee", GarmentCategory.Top, BodyZone.Torso, "https://app.test/shirt.png"),
             new OutfitItem(Guid.NewGuid(), "jeans", GarmentCategory.Bottom, BodyZone.Legs, "https://app.test/jeans.png")
         },
+        Array.Empty<string>(),
+        Array.Empty<string>(),
+        false,
+        false,
         null,
         null,
         DateTimeOffset.UtcNow);
@@ -681,12 +1190,44 @@ sealed class CountingTryOnProvider : ITryOnProvider
 {
     public int Calls { get; private set; }
     public TryOnOptions? LastOptions { get; private set; }
+    public string Name => "test";
 
     public TryOnGeneration Generate(string userId, Outfit outfit, string bodyReferencePhotoUrl, TryOnOptions options)
     {
         Calls++;
         LastOptions = options;
         return new TryOnGeneration("test-provider-job", "https://example.com/output.jpg");
+    }
+}
+
+sealed class RecordingTryOnJobQueue : ITryOnJobQueue
+{
+    public List<Guid> Enqueued { get; } = new();
+
+    public ValueTask EnqueueAsync(Guid jobId, CancellationToken cancellationToken = default)
+    {
+        Enqueued.Add(jobId);
+        return ValueTask.CompletedTask;
+    }
+
+    public Task<Guid> DequeueAsync(CancellationToken cancellationToken)
+    {
+        if (Enqueued.Count == 0)
+        {
+            throw new InvalidOperationException("No queued job.");
+        }
+
+        var jobId = Enqueued[0];
+        Enqueued.RemoveAt(0);
+        return Task.FromResult(jobId);
+    }
+}
+
+sealed class TestShareTokenGenerator : IShareTokenGenerator
+{
+    public string CreateToken()
+    {
+        return "test-share-token";
     }
 }
 
