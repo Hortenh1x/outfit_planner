@@ -19,6 +19,7 @@ using Microsoft.AspNetCore.WebUtilities;
 using Npgsql;
 using StackExchange.Redis;
 using System.Net.Http.Headers;
+using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -46,6 +47,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
+builder.Services.AddOpenApi();
 
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
@@ -261,7 +263,10 @@ builder.Services.AddHostedService<TryOnBackgroundWorker>();
 
 var app = builder.Build();
 
-app.Services.GetService<PostgresMigrationRunner>()?.Initialize();
+if (!IsOpenApiDocumentGeneration())
+{
+    app.Services.GetService<PostgresMigrationRunner>()?.Initialize();
+}
 
 var detailedErrorsEnabled = app.Environment.IsDevelopment()
     || app.Environment.IsEnvironment("Test")
@@ -344,6 +349,10 @@ app.Use(async (context, next) =>
 });
 
 var api = app.MapGroup("/api");
+if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Test"))
+{
+    app.MapOpenApi("/api/openapi/{documentName}.json");
+}
 
 api.MapGet("/health", () => Results.Ok(new { status = "ok", service = "outfit-planner-api" }));
 
@@ -1058,6 +1067,12 @@ static string CurrentUser(HttpContext context)
         : throw new InvalidOperationException("Authenticated user was not resolved for this request.");
 }
 
+static bool IsOpenApiDocumentGeneration()
+{
+    var entryAssemblyName = Assembly.GetEntryAssembly()?.GetName().Name;
+    return string.Equals(entryAssemblyName, "dotnet-getdocument", StringComparison.OrdinalIgnoreCase);
+}
+
 static bool RequiresAuthenticatedUser(HttpContext context)
 {
     if (!context.Request.Path.StartsWithSegments("/api", out var remaining))
@@ -1069,6 +1084,7 @@ static bool RequiresAuthenticatedUser(HttpContext context)
     return !path.Equals("/health", StringComparison.OrdinalIgnoreCase)
         && !path.Equals("/system/status", StringComparison.OrdinalIgnoreCase)
         && !path.StartsWith("/auth/", StringComparison.OrdinalIgnoreCase)
+        && !path.StartsWith("/openapi/", StringComparison.OrdinalIgnoreCase)
         && !path.StartsWith("/storage/signed/", StringComparison.OrdinalIgnoreCase)
         && !(HttpMethods.IsGet(context.Request.Method) && path.StartsWith("/share/", StringComparison.OrdinalIgnoreCase));
 }
