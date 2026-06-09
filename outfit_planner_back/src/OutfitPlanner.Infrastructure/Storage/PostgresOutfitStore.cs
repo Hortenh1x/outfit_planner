@@ -422,8 +422,14 @@ public sealed class PostgresOutfitStore :
         EnsureUser(connection, transaction, job.UserId);
 
         using var command = new NpgsqlCommand("""
-            insert into try_on_jobs (id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status, provider_job_id, output_image_url, error, created_at, updated_at)
-            values (@id, @user_id, @outfit_id, @body_reference_photo_url, @sequential_flow_enabled, @status, @provider_job_id, @output_image_url, @error, @created_at, @updated_at)
+            insert into try_on_jobs (
+                id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status,
+                provider_job_id, output_image_url, error, created_at, updated_at,
+                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted)
+            values (
+                @id, @user_id, @outfit_id, @body_reference_photo_url, @sequential_flow_enabled, @status,
+                @provider_job_id, @output_image_url, @error, @created_at, @updated_at,
+                @consent_accepted_at, @provider_name, @provider_request_id, @source_body_photo_id, @retention_until, @is_deleted)
             """, connection, transaction);
         AddTryOnJobParameters(command, job);
         command.ExecuteNonQuery();
@@ -433,7 +439,9 @@ public sealed class PostgresOutfitStore :
     public TryOnJob? GetTryOnJobByUser(string userId, Guid jobId)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status, provider_job_id, output_image_url, error, created_at, updated_at
+            select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status,
+                provider_job_id, output_image_url, error, created_at, updated_at,
+                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted
             from try_on_jobs
             where user_id = @user_id and id = @id
             """);
@@ -447,7 +455,9 @@ public sealed class PostgresOutfitStore :
     public TryOnJob? GetTryOnJobById(Guid jobId)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status, provider_job_id, output_image_url, error, created_at, updated_at
+            select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status,
+                provider_job_id, output_image_url, error, created_at, updated_at,
+                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted
             from try_on_jobs
             where id = @id
             """);
@@ -457,14 +467,39 @@ public sealed class PostgresOutfitStore :
         return reader.Read() ? ReadTryOnJob(reader) : null;
     }
 
+    public IReadOnlyList<TryOnJob> ListTryOnJobsByUser(string userId)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status,
+                provider_job_id, output_image_url, error, created_at, updated_at,
+                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted
+            from try_on_jobs
+            where user_id = @user_id
+            order by created_at desc
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+
+        using var reader = command.ExecuteReader();
+        var jobs = new List<TryOnJob>();
+        while (reader.Read())
+        {
+            jobs.Add(ReadTryOnJob(reader));
+        }
+
+        return jobs;
+    }
+
     public void UpdateTryOnJob(TryOnJob job)
     {
         using var command = _dataSource.CreateCommand("""
             update try_on_jobs
             set status = @status,
                 provider_job_id = @provider_job_id,
+                provider_request_id = @provider_request_id,
                 output_image_url = @output_image_url,
                 error = @error,
+                retention_until = @retention_until,
+                is_deleted = @is_deleted,
                 updated_at = @updated_at
             where id = @id and user_id = @user_id
             """);
@@ -472,8 +507,11 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("user_id", job.UserId);
         command.Parameters.AddWithValue("status", job.Status.ToString());
         command.Parameters.AddWithValue("provider_job_id", DbValue(job.ProviderJobId));
+        command.Parameters.AddWithValue("provider_request_id", DbValue(job.ProviderRequestId));
         command.Parameters.AddWithValue("output_image_url", DbValue(job.OutputImageUrl));
         command.Parameters.AddWithValue("error", DbValue(job.Error));
+        command.Parameters.AddWithValue("retention_until", DbValue(job.RetentionUntil));
+        command.Parameters.AddWithValue("is_deleted", job.IsDeleted);
         command.Parameters.AddWithValue("updated_at", job.UpdatedAt);
         command.ExecuteNonQuery();
     }
@@ -533,8 +571,8 @@ public sealed class PostgresOutfitStore :
     public void AddUser(UserAccount user)
     {
         using var command = _dataSource.CreateCommand("""
-            insert into users (id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at)
-            values (@id, @email, @normalized_email, @display_name, @password_hash, @created_at, @updated_at, @last_login_at)
+            insert into users (id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled)
+            values (@id, @email, @normalized_email, @display_name, @password_hash, @created_at, @updated_at, @last_login_at, @email_verified_at, @two_factor_enabled)
             """);
         AddUserParameters(command, user);
         command.ExecuteNonQuery();
@@ -549,7 +587,9 @@ public sealed class PostgresOutfitStore :
                 display_name = @display_name,
                 password_hash = @password_hash,
                 updated_at = @updated_at,
-                last_login_at = @last_login_at
+                last_login_at = @last_login_at,
+                email_verified_at = @email_verified_at,
+                two_factor_enabled = @two_factor_enabled
             where id = @id
             """);
         AddUserParameters(command, user);
@@ -559,7 +599,7 @@ public sealed class PostgresOutfitStore :
     public UserAccount? GetUserById(string userId)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at
+            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled
             from users
             where id = @id
             """);
@@ -572,7 +612,7 @@ public sealed class PostgresOutfitStore :
     public UserAccount? GetUserByNormalizedEmail(string normalizedEmail)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at
+            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled
             from users
             where normalized_email = @normalized_email
             """);
@@ -660,6 +700,157 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("token_hash", tokenHash);
         command.Parameters.AddWithValue("revoked_at", revokedAt);
         command.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<AuthSession> ListAuthSessionsByUser(string userId, DateTimeOffset now)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select id, user_id, token_hash, csrf_token_hash, expires_at, created_at, revoked_at
+            from auth_sessions
+            where user_id = @user_id
+                and revoked_at is null
+                and expires_at > @now
+            order by created_at desc
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("now", now);
+
+        using var reader = command.ExecuteReader();
+        var sessions = new List<AuthSession>();
+        while (reader.Read())
+        {
+            sessions.Add(ReadAuthSession(reader));
+        }
+
+        return sessions;
+    }
+
+    public void RevokeAuthSessionsByUser(string userId, DateTimeOffset revokedAt)
+    {
+        using var command = _dataSource.CreateCommand("""
+            update auth_sessions
+            set revoked_at = @revoked_at
+            where user_id = @user_id and revoked_at is null
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("revoked_at", revokedAt);
+        command.ExecuteNonQuery();
+    }
+
+    public int DeleteExpiredAuthSessions(DateTimeOffset now)
+    {
+        using var command = _dataSource.CreateCommand("""
+            delete from auth_sessions
+            where expires_at <= @now
+            """);
+        command.Parameters.AddWithValue("now", now);
+        return command.ExecuteNonQuery();
+    }
+
+    public void AddEmailVerificationToken(AuthEmailVerificationToken token)
+    {
+        using var command = _dataSource.CreateCommand("""
+            insert into auth_email_verification_tokens (token_hash, user_id, expires_at, created_at, used_at)
+            values (@token_hash, @user_id, @expires_at, @created_at, @used_at)
+            """);
+        command.Parameters.AddWithValue("token_hash", token.TokenHash);
+        command.Parameters.AddWithValue("user_id", token.UserId);
+        command.Parameters.AddWithValue("expires_at", token.ExpiresAt);
+        command.Parameters.AddWithValue("created_at", token.CreatedAt);
+        command.Parameters.AddWithValue("used_at", DbValue(token.UsedAt));
+        command.ExecuteNonQuery();
+    }
+
+    public AuthEmailVerificationToken? GetActiveEmailVerificationToken(string tokenHash, DateTimeOffset now)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select token_hash, user_id, expires_at, created_at, used_at
+            from auth_email_verification_tokens
+            where token_hash = @token_hash
+                and used_at is null
+                and expires_at > @now
+            """);
+        command.Parameters.AddWithValue("token_hash", tokenHash);
+        command.Parameters.AddWithValue("now", now);
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new AuthEmailVerificationToken(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetFieldValue<DateTimeOffset>(2),
+                reader.GetFieldValue<DateTimeOffset>(3),
+                reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4))
+            : null;
+    }
+
+    public void MarkEmailVerificationTokenUsed(string tokenHash, DateTimeOffset usedAt)
+    {
+        using var command = _dataSource.CreateCommand("""
+            update auth_email_verification_tokens
+            set used_at = @used_at
+            where token_hash = @token_hash and used_at is null
+            """);
+        command.Parameters.AddWithValue("token_hash", tokenHash);
+        command.Parameters.AddWithValue("used_at", usedAt);
+        command.ExecuteNonQuery();
+    }
+
+    public void AddPasswordResetToken(AuthPasswordResetToken token)
+    {
+        using var command = _dataSource.CreateCommand("""
+            insert into auth_password_reset_tokens (token_hash, user_id, expires_at, created_at, used_at)
+            values (@token_hash, @user_id, @expires_at, @created_at, @used_at)
+            """);
+        command.Parameters.AddWithValue("token_hash", token.TokenHash);
+        command.Parameters.AddWithValue("user_id", token.UserId);
+        command.Parameters.AddWithValue("expires_at", token.ExpiresAt);
+        command.Parameters.AddWithValue("created_at", token.CreatedAt);
+        command.Parameters.AddWithValue("used_at", DbValue(token.UsedAt));
+        command.ExecuteNonQuery();
+    }
+
+    public AuthPasswordResetToken? GetActivePasswordResetToken(string tokenHash, DateTimeOffset now)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select token_hash, user_id, expires_at, created_at, used_at
+            from auth_password_reset_tokens
+            where token_hash = @token_hash
+                and used_at is null
+                and expires_at > @now
+            """);
+        command.Parameters.AddWithValue("token_hash", tokenHash);
+        command.Parameters.AddWithValue("now", now);
+        using var reader = command.ExecuteReader();
+        return reader.Read()
+            ? new AuthPasswordResetToken(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetFieldValue<DateTimeOffset>(2),
+                reader.GetFieldValue<DateTimeOffset>(3),
+                reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4))
+            : null;
+    }
+
+    public void MarkPasswordResetTokenUsed(string tokenHash, DateTimeOffset usedAt)
+    {
+        using var command = _dataSource.CreateCommand("""
+            update auth_password_reset_tokens
+            set used_at = @used_at
+            where token_hash = @token_hash and used_at is null
+            """);
+        command.Parameters.AddWithValue("token_hash", tokenHash);
+        command.Parameters.AddWithValue("used_at", usedAt);
+        command.ExecuteNonQuery();
+    }
+
+    public bool DeleteUserById(string userId)
+    {
+        using var command = _dataSource.CreateCommand("""
+            delete from users
+            where id = @user_id
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        return command.ExecuteNonQuery() > 0;
     }
 
     private static void AddGarmentQueryFilters(NpgsqlCommand command, List<string> where, GarmentQuery query)
@@ -868,6 +1059,8 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("created_at", user.CreatedAt);
         command.Parameters.AddWithValue("updated_at", user.UpdatedAt);
         command.Parameters.AddWithValue("last_login_at", DbValue(user.LastLoginAt));
+        command.Parameters.AddWithValue("email_verified_at", DbValue(user.EmailVerifiedAt));
+        command.Parameters.AddWithValue("two_factor_enabled", user.TwoFactorEnabled);
     }
 
     private static void AddExternalLoginParameters(NpgsqlCommand command, ExternalAuthLogin login)
@@ -890,7 +1083,11 @@ public sealed class PostgresOutfitStore :
             reader.IsDBNull(4) ? null : reader.GetString(4),
             reader.GetFieldValue<DateTimeOffset>(5),
             reader.GetFieldValue<DateTimeOffset>(6),
-            reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7));
+            reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7))
+        {
+            EmailVerifiedAt = reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8),
+            TwoFactorEnabled = reader.GetBoolean(9)
+        };
     }
 
     private static ExternalAuthLogin ReadExternalLogin(NpgsqlDataReader reader)
@@ -984,6 +1181,12 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("error", DbValue(job.Error));
         command.Parameters.AddWithValue("created_at", job.CreatedAt);
         command.Parameters.AddWithValue("updated_at", job.UpdatedAt);
+        command.Parameters.AddWithValue("consent_accepted_at", DbValue(job.ConsentAcceptedAt));
+        command.Parameters.AddWithValue("provider_name", DbValue(job.ProviderName));
+        command.Parameters.AddWithValue("provider_request_id", DbValue(job.ProviderRequestId));
+        command.Parameters.AddWithValue("source_body_photo_id", DbValue(job.SourceBodyPhotoId));
+        command.Parameters.AddWithValue("retention_until", DbValue(job.RetentionUntil));
+        command.Parameters.AddWithValue("is_deleted", job.IsDeleted);
     }
 
     private static GarmentItem ReadGarment(NpgsqlDataReader reader)
@@ -1045,7 +1248,15 @@ public sealed class PostgresOutfitStore :
             reader.IsDBNull(7) ? null : reader.GetString(7),
             reader.IsDBNull(8) ? null : reader.GetString(8),
             reader.GetFieldValue<DateTimeOffset>(9),
-            reader.GetFieldValue<DateTimeOffset>(10));
+            reader.GetFieldValue<DateTimeOffset>(10))
+        {
+            ConsentAcceptedAt = reader.IsDBNull(11) ? null : reader.GetFieldValue<DateTimeOffset>(11),
+            ProviderName = reader.IsDBNull(12) ? null : reader.GetString(12),
+            ProviderRequestId = reader.IsDBNull(13) ? null : reader.GetString(13),
+            SourceBodyPhotoId = reader.IsDBNull(14) ? null : reader.GetGuid(14),
+            RetentionUntil = reader.IsDBNull(15) ? null : reader.GetFieldValue<DateTimeOffset>(15),
+            IsDeleted = reader.GetBoolean(16)
+        };
     }
 
     private static object DbValue<T>(T? value)

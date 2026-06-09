@@ -33,6 +33,7 @@ public sealed class TryOnService
         string bodyReferencePhotoUrl,
         bool consentAccepted,
         bool sequentialFlowEnabled = false,
+        Guid? sourceBodyPhotoId = null,
         CancellationToken cancellationToken = default)
     {
         if (!consentAccepted)
@@ -61,6 +62,7 @@ public sealed class TryOnService
         {
             ConsentAcceptedAt = now,
             ProviderName = _provider.Name,
+            SourceBodyPhotoId = sourceBodyPhotoId,
             RetentionUntil = now.Add(_outputRetention),
             IsDeleted = false
         };

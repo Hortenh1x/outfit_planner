@@ -121,13 +121,15 @@ describe('BuilderPage', () => {
     expect(screen.queryByText(/I consent to AI try-on processing/i)).not.toBeInTheDocument();
   });
 
-  it('renders real animated indicators for the segmented toggles', async () => {
+  it('renders category choices and real animated mode indicators', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse([]));
 
     const wardrobe = renderApp('/wardrobe');
 
-    expect(await screen.findByRole('radiogroup', { name: /garment type/i })).toBeInTheDocument();
-    expect(wardrobe.container.querySelector('.segmented-control .toggle-motion-indicator')).toBeInTheDocument();
+    const categoryChoices = await screen.findByRole('radiogroup', { name: /garment type/i });
+    expect(categoryChoices).toBeInTheDocument();
+    expect(within(categoryChoices).getByRole('radio', { name: /dress/i })).toBeInTheDocument();
+    expect(within(categoryChoices).getByRole('radio', { name: /shoes/i })).toBeInTheDocument();
     wardrobe.unmount();
 
     const builder = renderApp('/builder');

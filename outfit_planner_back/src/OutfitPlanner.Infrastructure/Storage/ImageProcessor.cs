@@ -72,14 +72,14 @@ public sealed class ImageProcessor : IImageProcessor
 
     private static void NormalizeMetadataAndSize(Image image, int maxSide)
     {
-        image.Metadata.ExifProfile = null;
-        image.Metadata.IccProfile = null;
-        image.Metadata.XmpProfile = null;
         image.Mutate(operation => operation.AutoOrient().Resize(new ResizeOptions
         {
             Mode = ResizeMode.Max,
             Size = new Size(maxSide, maxSide)
         }));
+        image.Metadata.ExifProfile = null;
+        image.Metadata.IccProfile = null;
+        image.Metadata.XmpProfile = null;
     }
 
     private static Image<Rgba32> ResizeClone(Image<Rgba32> source, int maxSide)
