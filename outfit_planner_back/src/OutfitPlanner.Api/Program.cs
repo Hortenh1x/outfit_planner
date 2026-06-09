@@ -19,7 +19,6 @@ using Microsoft.AspNetCore.WebUtilities;
 using Npgsql;
 using StackExchange.Redis;
 using System.Net.Http.Headers;
-using System.Reflection;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -1069,8 +1068,8 @@ static string CurrentUser(HttpContext context)
 
 static bool IsOpenApiDocumentGeneration()
 {
-    var entryAssemblyName = Assembly.GetEntryAssembly()?.GetName().Name;
-    return string.Equals(entryAssemblyName, "dotnet-getdocument", StringComparison.OrdinalIgnoreCase);
+    return Environment.CommandLine.Contains("dotnet-getdocument", StringComparison.OrdinalIgnoreCase)
+        || Environment.CommandLine.Contains("GetDocument.Insider", StringComparison.OrdinalIgnoreCase);
 }
 
 static bool RequiresAuthenticatedUser(HttpContext context)
