@@ -1,18 +1,20 @@
+import fs from 'node:fs';
 import react from '@vitejs/plugin-react';
 import mkcert from 'vite-plugin-mkcert';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig(({ mode }) => {
   const useHttps = process.env.VITE_DEV_HTTPS === 'true' || mode === 'https';
-  const devApiTarget = process.env.VITE_DEV_API_TARGET ?? 'http://localhost:5000';
+  const devApiTarget = process.env.VITE_DEV_API_TARGET ?? 'https://localhost:5001';
+  const httpsOptions = useHttps ? getHttpsOptions() : undefined;
 
   return {
     plugins: [
       react(),
-      ...(useHttps ? [mkcert()] : [])
+      ...(useHttps && !httpsOptions ? [mkcert()] : [])
     ],
     server: {
-      https: useHttps ? {} : undefined,
+      https: httpsOptions ?? (useHttps ? {} : undefined),
       proxy: {
         '/api': {
           target: devApiTarget,
@@ -34,3 +36,16 @@ export default defineConfig(({ mode }) => {
     }
   };
 });
+
+function getHttpsOptions() {
+  const pfxPath = process.env.VITE_DEV_HTTPS_PFX;
+
+  if (!pfxPath || !fs.existsSync(pfxPath)) {
+    return undefined;
+  }
+
+  return {
+    pfx: fs.readFileSync(pfxPath),
+    passphrase: process.env.VITE_DEV_HTTPS_PFX_PASSPHRASE
+  };
+}

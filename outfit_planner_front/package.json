@@ -4,9 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "vite --host localhost --mode https",
+    "dev:http": "vite --host 127.0.0.1",
     "dev:https": "vite --host localhost --mode https",
-    "dev:docker": "vite --host 0.0.0.0",
+    "dev:docker": "vite --host 0.0.0.0 --mode https",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run"

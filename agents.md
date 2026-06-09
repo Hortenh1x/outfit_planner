@@ -47,17 +47,17 @@ This file is durable working context for Codex agents in this project.
 
 ## Common Commands
 
-Run backend with in-memory storage:
+Run backend with in-memory storage over the default HTTPS launch profile:
 
 ```powershell
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls http://localhost:5000
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
 ```
 
-Run backend with HTTPS for local Google/Apple OAuth:
+Run backend for local Google/Apple OAuth:
 
 ```powershell
 $env:Authentication__PublicOrigin = "https://localhost:5173"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls https://localhost:5001
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
 ```
 
 Run backend against compose PostgreSQL:
@@ -65,7 +65,7 @@ Run backend against compose PostgreSQL:
 ```powershell
 docker compose -f docker-compose.dev.yml up -d postgres minio
 $env:ConnectionStrings__Postgres = "Host=localhost;Port=5433;Database=outfit_planner;Username=outfit;Password=outfit;GSS Encryption Mode=Disable"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls http://localhost:5000
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
 ```
 
 Run backend tests:
@@ -87,14 +87,14 @@ cd outfit_planner_front
 npm ci
 ```
 
-Run frontend dev server:
+Run frontend dev server over HTTPS:
 
 ```powershell
 cd outfit_planner_front
 npm run dev
 ```
 
-Run frontend dev server over HTTPS for local Google/Apple OAuth:
+Run frontend dev server over HTTPS for local Google/Apple OAuth with an explicit API target:
 
 ```powershell
 cd outfit_planner_front
@@ -121,11 +121,15 @@ npm run build
 Run full dev stack:
 
 ```powershell
+New-Item -ItemType Directory -Force .aspnet\https
+dotnet dev-certs https --trust
+dotnet dev-certs https -ep .aspnet\https\outfit-planner-dev.pfx -p outfit-dev-cert
 docker compose -f docker-compose.dev.yml up --build
 ```
 
 Run production-style stack:
 
 ```powershell
+# Requires .secrets\tls\fullchain.pem and .secrets\tls\privkey.pem.
 docker compose up --build
 ```

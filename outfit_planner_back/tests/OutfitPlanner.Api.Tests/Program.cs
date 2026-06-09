@@ -16,8 +16,13 @@ var tests = new List<(string Name, Action Test)>
     ("dockerfile copies database schema into build context", TestDockerfileCopiesDatabaseSchema),
     ("docker compose uses postgres 18 compatible volume path", TestDockerComposeUsesPostgres18CompatibleVolumePath),
     ("docker compose disables postgres gss encryption", TestDockerComposeDisablesPostgresGssEncryption),
-    ("docker compose publishes postgres on a non-default host port", TestDockerComposePublishesPostgresOnNonDefaultHostPort),
+    ("docker compose keeps infrastructure ports internal in production", TestDockerComposeKeepsInfrastructurePortsInternalInProduction),
+    ("development docker publishes postgres on a non-default host port", TestDevelopmentDockerPublishesPostgresOnNonDefaultHostPort),
     ("frontend docker config proxies api through same origin", TestFrontendDockerConfigProxiesApiThroughSameOrigin),
+    ("production docker terminates https at frontend proxy", TestProductionDockerTerminatesHttpsAtFrontendProxy),
+    ("development docker publishes https frontend and api defaults", TestDevelopmentDockerPublishesHttpsDefaults),
+    ("dotnet run defaults api to https localhost 5001", TestDotnetRunDefaultsToHttpsLocalhost5001),
+    ("vite dev defaults to https proxy target", TestViteDevDefaultsToHttpsProxyTarget),
     ("postgres store implements application repository ports", TestPostgresStoreImplementsRepositoryPorts),
     ("postgres schema contains tables required by repository ports", TestPostgresSchemaContainsRepositoryTables),
     ("postgres schema contains production auth tables and indexes", TestPostgresSchemaContainsAuthTables),
@@ -140,12 +145,23 @@ static void TestDockerComposeDisablesPostgresGssEncryption()
     AssertTrue(compose.Contains("GSS Encryption Mode=Disable", StringComparison.Ordinal), "postgres connection string should disable GSS encryption in the Linux API container.");
 }
 
-static void TestDockerComposePublishesPostgresOnNonDefaultHostPort()
+static void TestDockerComposeKeepsInfrastructurePortsInternalInProduction()
 {
     var composePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "docker-compose.yml"));
     var compose = File.ReadAllText(composePath);
 
-    AssertTrue(compose.Contains("\"5433:5432\"", StringComparison.Ordinal), "postgres should publish on host port 5433 to avoid colliding with local PostgreSQL on Windows.");
+    AssertTrue(!compose.Contains("\"5433:5432\"", StringComparison.Ordinal), "production postgres should not publish a host port.");
+    AssertTrue(!compose.Contains("\"6379:6379\"", StringComparison.Ordinal), "production redis should not publish a host port.");
+    AssertTrue(!compose.Contains("\"9000:9000\"", StringComparison.Ordinal), "production minio api should not publish a host port.");
+    AssertTrue(!compose.Contains("\"9001:9001\"", StringComparison.Ordinal), "production minio console should not publish a host port.");
+}
+
+static void TestDevelopmentDockerPublishesPostgresOnNonDefaultHostPort()
+{
+    var composePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "docker-compose.dev.yml"));
+    var compose = File.ReadAllText(composePath);
+
+    AssertTrue(compose.Contains("\"5433:5432\"", StringComparison.Ordinal), "development postgres should publish on host port 5433 to avoid colliding with local PostgreSQL on Windows.");
 }
 
 static void TestFrontendDockerConfigProxiesApiThroughSameOrigin()
@@ -159,6 +175,58 @@ static void TestFrontendDockerConfigProxiesApiThroughSameOrigin()
     AssertTrue(nginx.Contains("location /api/", StringComparison.Ordinal), "frontend nginx should proxy /api requests.");
     AssertTrue(nginx.Contains("proxy_pass http://api:8080/api/", StringComparison.Ordinal), "frontend nginx should proxy to the api service.");
     AssertTrue(nginx.Contains("client_max_body_size 100m", StringComparison.Ordinal), "frontend nginx should allow large photo uploads through the proxy.");
+}
+
+static void TestProductionDockerTerminatesHttpsAtFrontendProxy()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", ".."));
+    var compose = File.ReadAllText(Path.Combine(rootPath, "docker-compose.yml"));
+    var nginx = File.ReadAllText(Path.Combine(rootPath, "outfit_planner_front", "nginx.conf"));
+
+    AssertTrue(compose.Contains("\"443:443\"", StringComparison.Ordinal), "production frontend should publish HTTPS on host port 443.");
+    AssertTrue(compose.Contains("\"80:80\"", StringComparison.Ordinal), "production frontend should publish HTTP only for redirect to HTTPS.");
+    AssertTrue(!compose.Contains("\"5000:8080\"", StringComparison.Ordinal), "production api should not publish a direct HTTP host port.");
+    AssertTrue(!compose.Contains("\"5001:", StringComparison.Ordinal), "production api should stay behind the frontend TLS proxy instead of publishing a direct host port.");
+    AssertTrue(compose.Contains("./.secrets/tls/fullchain.pem:/etc/nginx/certs/fullchain.pem:ro", StringComparison.Ordinal), "production nginx should mount the public TLS certificate.");
+    AssertTrue(compose.Contains("./.secrets/tls/privkey.pem:/etc/nginx/certs/privkey.pem:ro", StringComparison.Ordinal), "production nginx should mount the private TLS key.");
+    AssertTrue(nginx.Contains("listen 443 ssl", StringComparison.Ordinal), "production nginx should serve HTTPS.");
+    AssertTrue(nginx.Contains("ssl_certificate /etc/nginx/certs/fullchain.pem", StringComparison.Ordinal), "production nginx should use the mounted certificate.");
+    AssertTrue(nginx.Contains("return 301 https://$host$request_uri", StringComparison.Ordinal), "production nginx should redirect HTTP to HTTPS.");
+    AssertTrue(nginx.Contains("proxy_set_header X-Forwarded-Proto $scheme", StringComparison.Ordinal), "frontend proxy should forward the browser-facing scheme to the API.");
+}
+
+static void TestDevelopmentDockerPublishesHttpsDefaults()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", ".."));
+    var compose = File.ReadAllText(Path.Combine(rootPath, "docker-compose.dev.yml"));
+
+    AssertTrue(compose.Contains("ASPNETCORE_URLS: https://+:8081", StringComparison.Ordinal), "development api container should listen on HTTPS.");
+    AssertTrue(compose.Contains("\"5001:8081\"", StringComparison.Ordinal), "development api should publish HTTPS on host port 5001.");
+    AssertTrue(!compose.Contains("\"5000:8080\"", StringComparison.Ordinal), "development api should not publish the old HTTP host port.");
+    AssertTrue(compose.Contains("ASPNETCORE_Kestrel__Certificates__Default__Path: /https/outfit-planner-dev.pfx", StringComparison.Ordinal), "development api should load the shared dev HTTPS certificate.");
+    AssertTrue(compose.Contains("VITE_DEV_HTTPS: \"true\"", StringComparison.Ordinal), "development frontend container should run Vite over HTTPS.");
+    AssertTrue(compose.Contains("VITE_DEV_API_TARGET: https://api:8081", StringComparison.Ordinal), "development Vite proxy should target the HTTPS API service.");
+    AssertTrue(compose.Contains("\"5173:5173\"", StringComparison.Ordinal), "development frontend should keep the HTTPS Vite host port.");
+    AssertTrue(compose.Contains("./.aspnet/https:/https:ro", StringComparison.Ordinal), "development containers should share the exported local HTTPS certificate.");
+}
+
+static void TestDotnetRunDefaultsToHttpsLocalhost5001()
+{
+    var launchSettingsPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "OutfitPlanner.Api", "Properties", "launchSettings.json"));
+    var launchSettings = File.ReadAllText(launchSettingsPath);
+
+    AssertTrue(launchSettings.Contains("\"applicationUrl\": \"https://localhost:5001\"", StringComparison.Ordinal), "dotnet run should default the API to https://localhost:5001.");
+}
+
+static void TestViteDevDefaultsToHttpsProxyTarget()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", ".."));
+    var packageJson = File.ReadAllText(Path.Combine(rootPath, "outfit_planner_front", "package.json"));
+    var viteConfig = File.ReadAllText(Path.Combine(rootPath, "outfit_planner_front", "vite.config.ts"));
+
+    AssertTrue(packageJson.Contains("\"dev\": \"vite --host localhost --mode https\"", StringComparison.Ordinal), "npm run dev should start the HTTPS Vite server by default.");
+    AssertTrue(viteConfig.Contains("process.env.VITE_DEV_API_TARGET ?? 'https://localhost:5001'", StringComparison.Ordinal), "Vite should proxy to the HTTPS API by default.");
+    AssertTrue(viteConfig.Contains("VITE_DEV_HTTPS_PFX", StringComparison.Ordinal), "Vite should support the shared Docker HTTPS pfx certificate.");
 }
 
 static void TestPostgresStoreImplementsRepositoryPorts()
