@@ -35,6 +35,7 @@ var tests = new List<(string Name, Action Test)>
     ("api exposes secure auth endpoints and cookie settings", TestApiExposesSecureAuthEndpoints),
     ("api exposes privacy and auth hardening endpoints", TestApiExposesPrivacyAndAuthHardeningEndpoints),
     ("api exposes edit delete filtering and revoke endpoints", TestApiExposesEditDeleteFilterAndRevokeEndpoints),
+    ("api exposes openapi document generation", TestApiExposesOpenApiDocumentGeneration),
     ("maps expanded garment categories to richer body zones", TestCategoryMapping),
     ("wardrobe service updates structured garment metadata without reupload", TestWardrobeServiceUpdatesStructuredMetadata),
     ("wardrobe service filters sorts and paginates garments", TestWardrobeServiceFiltersSortsAndPaginatesGarments),
@@ -452,6 +453,23 @@ static void TestApiExposesEditDeleteFilterAndRevokeEndpoints()
     AssertTrue(program.Contains("MapDelete(\"/share/{token}\"", StringComparison.Ordinal), "api should expose share revocation.");
     AssertTrue(program.Contains("GarmentQuery", StringComparison.Ordinal), "garment list route should bind filter and pagination criteria.");
     AssertTrue(program.Contains("OutfitQuery", StringComparison.Ordinal), "outfit list route should bind filter and pagination criteria.");
+}
+
+static void TestApiExposesOpenApiDocumentGeneration()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var apiProject = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "OutfitPlanner.Api.csproj"));
+    var program = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Program.cs"));
+
+    AssertTrue(apiProject.Contains("Microsoft.AspNetCore.OpenApi", StringComparison.Ordinal), "api project should reference ASP.NET Core OpenAPI runtime package.");
+    AssertTrue(apiProject.Contains("Microsoft.Extensions.ApiDescription.Server", StringComparison.Ordinal), "api project should reference build-time OpenAPI generation package.");
+    AssertTrue(program.Contains("builder.Services.AddOpenApi()", StringComparison.Ordinal), "api startup should register OpenAPI services.");
+    AssertTrue(program.Contains("app.MapOpenApi(\"/api/openapi/{documentName}.json\")", StringComparison.Ordinal), "api startup should map OpenAPI JSON under /api.");
+    AssertTrue(program.Contains("path.StartsWith(\"/openapi/\", StringComparison.OrdinalIgnoreCase)", StringComparison.Ordinal), "OpenAPI endpoint should not require an auth session.");
+    AssertTrue(program.Contains("IsOpenApiDocumentGeneration()", StringComparison.Ordinal), "api startup should detect build-time OpenAPI document generation.");
+    AssertTrue(program.Contains("if (!IsOpenApiDocumentGeneration())", StringComparison.Ordinal), "api startup should skip migration side effects during OpenAPI document generation.");
+    AssertTrue(program.Contains("Assembly.GetEntryAssembly()?.GetName().Name", StringComparison.Ordinal), "OpenAPI generation detection should inspect the entry assembly name.");
+    AssertTrue(program.Contains("dotnet-getdocument", StringComparison.Ordinal), "OpenAPI generation detection should recognize the getdocument tool.");
 }
 
 static void TestWardrobeServiceUpdatesStructuredMetadata()
