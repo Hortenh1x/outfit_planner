@@ -92,8 +92,8 @@ Try-on jobs are queued at request time:
 The frontend uses a same-origin API path by default:
 
 - `VITE_API_URL` defaults to `/api`.
-- Vite proxies `/api` and `/uploads` to `VITE_DEV_API_TARGET` or `http://localhost:5000`.
-- The production Docker frontend builds with `VITE_API_URL=/api` and nginx proxies `/api/` and `/uploads/` to the API service.
+- Vite runs over HTTPS by default and proxies `/api` and `/uploads` to `VITE_DEV_API_TARGET` or `https://localhost:5001`.
+- The production Docker frontend builds with `VITE_API_URL=/api`, terminates public TLS in nginx, and proxies `/api/` and `/uploads/` to the API service over the internal Docker network.
 
 Authentication is cookie-backed:
 
@@ -117,6 +117,14 @@ The frontend visual system is High-Fidelity Claymorphism:
 
 ## Quick Start With Docker
 
+Create and trust the local development HTTPS certificate before running the dev compose stack for the first time:
+
+```powershell
+New-Item -ItemType Directory -Force .aspnet\https
+dotnet dev-certs https --trust
+dotnet dev-certs https -ep .aspnet\https\outfit-planner-dev.pfx -p outfit-dev-cert
+```
+
 Development containers with hot reload:
 
 ```powershell
@@ -125,8 +133,8 @@ docker compose -f docker-compose.dev.yml up --build
 
 Open:
 
-- Frontend: `http://localhost:5173`
-- API: `http://localhost:5000/api/health`
+- Frontend: `https://localhost:5173`
+- API: `https://localhost:5001/api/health`
 - PostgreSQL on host: `localhost:5433`
 - Redis on host: `localhost:6379`
 - MinIO API: `http://localhost:9000`
@@ -134,25 +142,29 @@ Open:
 
 Production-style containers:
 
+Place production TLS files at `.secrets/tls/fullchain.pem` and `.secrets/tls/privkey.pem`, then run:
+
 ```powershell
 docker compose up --build
 ```
 
-The production compose file builds the API and static frontend images. The frontend container serves the React app through nginx and proxies API/upload requests to the API container.
+The production compose file builds the API and static frontend images. Only nginx publishes host ports `80` and `443`; it redirects HTTP to HTTPS, serves the React app, and proxies API/upload requests to the API container over the internal Docker network. PostgreSQL, Redis, MinIO, and the API do not publish host ports in the production compose file.
 
 ## Local Backend Development
 
 Run the API with in-memory storage:
 
 ```powershell
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls http://localhost:5000
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
 ```
 
-For local OAuth testing, run the API on HTTPS:
+The default `launchSettings.json` profile runs the API at `https://localhost:5001`.
+
+For local OAuth testing, keep the default HTTPS URL and set the public origin if needed:
 
 ```powershell
 $env:Authentication__PublicOrigin = "https://localhost:5173"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls https://localhost:5001
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
 ```
 
 Run PostgreSQL and MinIO only:
@@ -166,10 +178,10 @@ Run the API against the compose PostgreSQL service:
 ```powershell
 $env:ConnectionStrings__Postgres = "Host=localhost;Port=5433;Database=outfit_planner;Username=outfit;Password=outfit;GSS Encryption Mode=Disable"
 $env:ConnectionStrings__Redis = "localhost:6379"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls http://localhost:5000
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
 ```
 
-For PostgreSQL plus local OAuth testing, use the same connection strings and run the API at `https://localhost:5001`.
+For PostgreSQL plus local OAuth testing, use the same connection strings; the API still runs at `https://localhost:5001` by default.
 
 The API writes uploaded files below its content root:
 
@@ -194,16 +206,15 @@ Run Vite:
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. During Vite development, the browser calls `/api` and `/uploads`; Vite proxies those requests to `http://localhost:5000` unless `VITE_DEV_API_TARGET` is set.
+Open `https://localhost:5173`. During Vite development, the browser calls `/api` and `/uploads`; Vite proxies those requests to `https://localhost:5001` unless `VITE_DEV_API_TARGET` is set.
 
-Run Vite over HTTPS for Google/Apple OAuth testing:
+Run Vite over HTTP only when you explicitly need it:
 
 ```powershell
-$env:VITE_DEV_API_TARGET = "https://localhost:5001"
-npm run dev:https
+npm run dev:http
 ```
 
-Stop any existing `npm run dev` process on port `5173` before starting the HTTPS server. On the first run, approve the Windows certificate prompt from `mkcert`; this installs a local development CA so the browser can trust `https://localhost:5173`.
+Stop any existing Vite process on port `5173` before switching modes. On the first HTTPS run, approve the Windows certificate prompt from `mkcert`; this installs a local development CA so the browser can trust `https://localhost:5173`.
 
 Open `https://localhost:5173`. The HTTPS dev server uses a local development certificate through `vite-plugin-mkcert` and forwards the browser-facing HTTPS scheme and host to the API. In Google Cloud Console, add this exact Authorized JavaScript origin for local development:
 
@@ -222,7 +233,7 @@ The provider callback path is only for Google/Apple to return to the API. After 
 To target a different local API:
 
 ```powershell
-$env:VITE_DEV_API_TARGET = "http://localhost:5001"
+$env:VITE_DEV_API_TARGET = "https://localhost:5001"
 npm run dev
 ```
 
@@ -271,7 +282,9 @@ Frontend configuration:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `VITE_API_URL` | `/api` | Base URL used by `src/api/client.ts`. |
-| `VITE_DEV_API_TARGET` | `http://localhost:5000` | Vite dev proxy target for `/api` and `/uploads`; use `https://localhost:5001` for local OAuth testing. |
+| `VITE_DEV_API_TARGET` | `https://localhost:5001` | Vite dev proxy target for `/api` and `/uploads`. |
+| `VITE_DEV_HTTPS_PFX` | empty | Optional PFX certificate path for Dockerized HTTPS Vite dev server. |
+| `VITE_DEV_HTTPS_PFX_PASSPHRASE` | empty | Passphrase for `VITE_DEV_HTTPS_PFX`. |
 
 ## Optional Try-On Providers
 
@@ -282,7 +295,7 @@ Enable the FASHN scaffold:
 ```powershell
 $env:TryOn__Provider = "Fashn"
 $env:Fashn__ApiKey = "YOUR_FASHN_API_KEY"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj --urls http://localhost:5000
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
 ```
 
 The FASHN provider submits to `/run` and polls `/status/{id}`. A single-garment outfit maps directly to one provider run. Multi-garment outfits require the Builder page's `Sequential flow` toggle; the provider then applies garments one after another, using the previous output image as the next model image. This can consume one provider run per garment.
@@ -380,7 +393,7 @@ Docker smoke checks:
 
 ```powershell
 docker compose -f docker-compose.dev.yml up -d --build
-Invoke-RestMethod http://localhost:5000/api/health
+curl.exe -k https://localhost:5001/api/health
 ```
 
 ## Current Boundaries
@@ -394,7 +407,7 @@ Invoke-RestMethod http://localhost:5000/api/health
 
 ## Troubleshooting
 
-- If the frontend shows network failures, confirm the API is available at `http://localhost:5000/api/health`.
+- If the frontend shows network failures, confirm the API is available at `https://localhost:5001/api/health`.
 - If running frontend dev against a non-default API port, set `VITE_DEV_API_TARGET`.
 - If PostgreSQL connection fails from local Windows development, confirm the compose database is reachable on host port `5433`, not `5432`.
 - If photo upload fails through Docker production frontend, check nginx `client_max_body_size` and the API upload diagnostics in logs.
