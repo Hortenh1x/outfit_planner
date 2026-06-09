@@ -468,8 +468,10 @@ static void TestApiExposesOpenApiDocumentGeneration()
     AssertTrue(program.Contains("path.StartsWith(\"/openapi/\", StringComparison.OrdinalIgnoreCase)", StringComparison.Ordinal), "OpenAPI endpoint should not require an auth session.");
     AssertTrue(program.Contains("IsOpenApiDocumentGeneration()", StringComparison.Ordinal), "api startup should detect build-time OpenAPI document generation.");
     AssertTrue(program.Contains("if (!IsOpenApiDocumentGeneration())", StringComparison.Ordinal), "api startup should skip migration side effects during OpenAPI document generation.");
-    AssertTrue(program.Contains("Assembly.GetEntryAssembly()?.GetName().Name", StringComparison.Ordinal), "OpenAPI generation detection should inspect the entry assembly name.");
-    AssertTrue(program.Contains("dotnet-getdocument", StringComparison.Ordinal), "OpenAPI generation detection should recognize the getdocument tool.");
+    AssertTrue(program.Contains("Environment.CommandLine", StringComparison.Ordinal), "OpenAPI generation detection should inspect the process command line.");
+    AssertTrue(program.Contains("dotnet-getdocument", StringComparison.Ordinal), "OpenAPI generation detection should recognize the getdocument host tool.");
+    AssertTrue(program.Contains("GetDocument.Insider", StringComparison.Ordinal), "OpenAPI generation detection should recognize the inner getdocument tool.");
+    AssertTrue(!program.Contains("Assembly.GetEntryAssembly()?.GetName().Name", StringComparison.Ordinal), "OpenAPI generation detection should not rely on the entry assembly name.");
 }
 
 static void TestWardrobeServiceUpdatesStructuredMetadata()
