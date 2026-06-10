@@ -64,6 +64,18 @@ public sealed record StartTryOnRequest(string BodyReferencePhotoUrl, bool Consen
 
 public sealed record ShareLinkResponse(string Token, string Url);
 
+public sealed record SharedOutfitResponse(
+    Guid Id,
+    string Name,
+    IReadOnlyList<OutfitItem> Items,
+    IReadOnlyList<string> Tags,
+    IReadOnlyList<string> Occasion,
+    bool IsFavorite,
+    bool IsArchived,
+    string? ClothesOnlyPreviewUrl,
+    string? PersonPreviewUrl,
+    DateTimeOffset CreatedAt);
+
 public sealed record UploadedPhotoResponse(string FileName, string ContentType, long Length, string Url);
 
 public sealed record RegisterRequest(string Email, string Password, string RepeatPassword);
