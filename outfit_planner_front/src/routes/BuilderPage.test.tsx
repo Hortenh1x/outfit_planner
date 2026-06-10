@@ -113,6 +113,59 @@ describe('BuilderPage', () => {
     expect(await within(builder.container).findByRole('button', { name: /clothes only/i })).toBeInTheDocument();
     expect(builder.container.querySelector('.mode-toggle .toggle-motion-indicator')).toBeInTheDocument();
   });
+
+  it('clears the active saved outfit when the draft selection changes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/white.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          },
+          {
+            id: 'top-2',
+            name: 'black tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/black.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/black.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.endsWith('/outfits')) {
+        return jsonResponse([
+          {
+            id: 'outfit-1',
+            name: 'Saved outfit',
+            items: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png' }],
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderBuilder();
+
+    await userEvent.click(await screen.findByRole('button', { name: /saved outfit/i }));
+    expect(screen.getByRole('button', { name: /share/i })).not.toBeDisabled();
+
+    await userEvent.click(await screen.findByRole('button', { name: /black tee/i }));
+
+    expect(screen.getByRole('button', { name: /share/i })).toBeDisabled();
+  });
 });
 
 function jsonResponse(body: unknown, status = 200) {
