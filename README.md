@@ -19,6 +19,7 @@ The app is intentionally small, but it has a real backend/frontend split, signed
 - Privacy endpoints for account export/delete, body photo deletion, and AI output purging.
 - Background AI try-on jobs with a Redis-backed queue in Docker and an in-memory queue fallback for local development.
 - Mock AI try-on by default, optional FASHN `tryon-v1.6`, local VTON/CatVTON, Replicate, and Fal provider adapters.
+- Installable PWA shell with manifest metadata, static shell caching, offline fallback, and responsive mobile bottom navigation.
 
 ## Tech Stack
 
@@ -57,9 +58,12 @@ The app is intentionally small, but it has a real backend/frontend split, signed
     |-- vite.config.ts
     `-- src/
         |-- App.tsx
-        |-- api/client.ts
+        |-- app/
+        |-- routes/
+        |-- api/
         |-- components/
         |-- features/
+        |-- shared/
         `-- types.ts
 ```
 
@@ -107,7 +111,8 @@ The frontend visual system is High-Fidelity Claymorphism:
 
 - Global tokens live in `outfit_planner_front/src/styles.css`.
 - The interface uses Nunito for display text, DM Sans for body copy, lavender canvas color `#F4F1FA`, animated ambient blobs, large rounded panels, recessed inputs, convex gradient buttons, and 4-layer clay shadow stacks.
-- `outfit_planner_front/src/App.tsx` keeps the existing routes and flows while surfacing service metadata endpoints in the shell and try-on job status after generation.
+- Frontend composition is split across `outfit_planner_front/src/app`, route pages under `src/routes`, feature components under `src/features`, and reusable clay UI under `src/shared/ui`. `src/App.tsx` remains a compatibility export.
+- Frontend API response types are generated from the backend OpenAPI document into ignored local artifacts and re-exported through committed aliases.
 
 ## Prerequisites
 
@@ -236,6 +241,14 @@ To target a different local API:
 $env:VITE_DEV_API_TARGET = "https://localhost:5001"
 npm run dev
 ```
+
+Generate frontend API types from the backend OpenAPI document:
+
+```powershell
+npm run generate:api
+```
+
+`npm test` and `npm run build` run this generation step first. Generated OpenAPI and TypeScript schema files are local build artifacts and are not committed.
 
 ## Configuration
 
@@ -389,6 +402,13 @@ npm test
 npm run build
 ```
 
+Playwright e2e smoke:
+
+```powershell
+cd outfit_planner_front
+npm run test:e2e
+```
+
 Docker smoke checks:
 
 ```powershell
@@ -400,9 +420,9 @@ curl.exe -k https://localhost:5001/api/health
 
 - Google and Apple auth require provider credentials. Email/password auth works without external secrets.
 - Password registration requires at least 8 characters, at least one letter, and at least one digit.
-- Uploaded files are stored on local disk, not MinIO. MinIO is present as an infrastructure placeholder.
-- PostgreSQL schema creation is startup-time schema initialization, not a full migration system.
-- Only `Top` and `Bottom` garment categories are supported.
+- Uploaded files default to local object storage; S3-compatible MinIO can be enabled with object storage configuration.
+- PostgreSQL schema changes are applied through DbUp migrations at startup.
+- Garment categories are Top, Bottom, Dress, Outerwear, Shoes, Bag, Accessory, and Hat.
 - The mock try-on provider is the default. FASHN, Replicate, Fal, and local VTON providers require explicit environment configuration.
 
 ## Troubleshooting
