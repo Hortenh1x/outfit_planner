@@ -372,6 +372,10 @@ h3 {
   color: var(--foreground);
 }
 
+.bottom-navigation {
+  display: none;
+}
+
 :root[data-theme="dark"] .sidebar nav a,
 :root[data-theme="dark"] .auth-nav-action,
 :root[data-theme="dark"] .auth-user-pill,
@@ -2188,6 +2192,58 @@ button:active,
 
   .sidebar {
     padding: 0.65rem;
+  }
+
+  .sidebar > nav {
+    display: none;
+  }
+
+  .bottom-navigation {
+    background: color-mix(in srgb, var(--panel) 88%, transparent);
+    backdrop-filter: blur(18px);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    bottom: 12px;
+    box-shadow: var(--shadow-convex);
+    display: block;
+    left: 12px;
+    position: fixed;
+    right: 12px;
+    z-index: 20;
+  }
+
+  .bottom-navigation nav {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 8px;
+  }
+
+  .bottom-navigation a {
+    align-items: center;
+    background: rgba(251, 249, 255, 0.44);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    color: var(--muted);
+    display: flex;
+    font-weight: 800;
+    gap: 0.45rem;
+    justify-content: center;
+    min-height: 48px;
+    padding: 0 0.35rem;
+    text-align: center;
+    text-decoration: none;
+  }
+
+  .bottom-navigation a.active {
+    background: linear-gradient(135deg, rgba(167, 139, 250, 0.28), rgba(219, 39, 119, 0.12));
+    border-color: rgba(124, 58, 237, 0.25);
+    box-shadow: var(--shadow-selected);
+    color: var(--foreground);
+  }
+
+  .main-panel {
+    padding-bottom: 88px;
   }
 
   .brand span:last-child,
