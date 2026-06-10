@@ -45,7 +45,8 @@ services:
 
   frontend:
     build:
-      context: ./outfit_planner_front
+      context: .
+      dockerfile: outfit_planner_front/Dockerfile
       args:
         VITE_API_URL: /api
     ports:
