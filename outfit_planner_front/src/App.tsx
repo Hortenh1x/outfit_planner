@@ -34,7 +34,6 @@ import {
   createOutfit,
   deleteBodyReferencePhoto,
   deleteGarment,
-  getCurrentSession,
   getAuthProviders,
   getSharedOutfit,
   getTryOnJob,
@@ -51,9 +50,11 @@ import {
   uploadBodyReferencePhoto,
   uploadGarmentPhoto
 } from './api/client';
+import { RequireAuth } from './app/RequireAuth';
 import type { AuthProvider, AuthUser } from './api/client';
 import { ModeToggle } from './components/ModeToggle';
 import { ThemeToggle, type ThemeMode } from './components/ThemeToggle';
+import { authSessionQueryKey, useAuthSession } from './features/auth/authQueries';
 import { buildMonthCalendar, weekDayLabels } from './features/calendar/calendarUtils';
 import { CATEGORY_SELECTION_KEYS, GARMENT_CATEGORIES, groupGarmentsByCategory, selectedGarmentIds, selectionLabel } from './features/outfits/outfitUtils';
 import { validateUploadImageFile } from './features/uploads/imageFile';
@@ -68,11 +69,11 @@ function App() {
     return storedTheme === 'dark' ? 'dark' : 'light';
   });
   const authProvidersQuery = useQuery({ queryKey: ['auth-providers'], queryFn: getAuthProviders, retry: 1 });
-  const sessionQuery = useQuery({ queryKey: ['auth-session'], queryFn: getCurrentSession, retry: false });
+  const sessionQuery = useAuthSession();
   const logoutMutation = useMutation({
     mutationFn: logout,
     onSuccess: () => {
-      queryClient.setQueryData(['auth-session'], null);
+      queryClient.setQueryData(authSessionQueryKey, null);
       void queryClient.invalidateQueries();
     }
   });
@@ -115,13 +116,15 @@ function App() {
       </aside>
       <main className="main-panel">
         <Routes>
-          <Route path="/" element={<BuilderPage />} />
           <Route path="/signin" element={<AuthPage mode="signin" providers={authProvidersQuery.data ?? []} />} />
           <Route path="/register" element={<AuthPage mode="register" providers={authProvidersQuery.data ?? []} />} />
-          <Route path="/wardrobe" element={<WardrobePage />} />
-          <Route path="/builder" element={<BuilderPage />} />
-          <Route path="/calendar" element={<CalendarPage />} />
           <Route path="/share/:token" element={<SharePage />} />
+          <Route element={<RequireAuth />}>
+            <Route path="/" element={<BuilderPage />} />
+            <Route path="/wardrobe" element={<WardrobePage />} />
+            <Route path="/builder" element={<BuilderPage />} />
+            <Route path="/calendar" element={<CalendarPage />} />
+          </Route>
         </Routes>
       </main>
     </div>
@@ -191,7 +194,7 @@ function AuthPage({ mode, providers }: { mode: 'signin' | 'register'; providers:
       ? register({ email: form.email, password: form.password, repeatPassword: form.repeatPassword })
       : login({ email: form.email, password: form.password }),
     onSuccess: (session) => {
-      queryClient.setQueryData(['auth-session'], session);
+      queryClient.setQueryData(authSessionQueryKey, session);
       void queryClient.invalidateQueries();
       navigate('/builder');
     }

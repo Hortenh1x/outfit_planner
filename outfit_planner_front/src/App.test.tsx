@@ -39,6 +39,24 @@ describe('BuilderPage', () => {
     expect(screen.getByRole('link', { name: /register/i })).toBeInTheDocument();
   });
 
+  it('redirects anonymous private routes to sign in before loading builder data', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/auth/me')) {
+        return jsonResponse({ error: 'Authentication required' }, 401);
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderApp('/builder?mode=person');
+
+    expect(await screen.findByRole('heading', { name: /^sign in$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save outfit/i })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/garments'))).toBe(false);
+  });
+
   it('uploads missing wardrobe pieces directly from builder empty slots', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
