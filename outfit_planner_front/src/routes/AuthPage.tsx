@@ -11,6 +11,19 @@ export function AuthPage({ mode }: { mode: 'signin' | 'register' }) {
   const { providers } = useOutletContext<{ providers: AuthProvider[] }>();
   const [searchParams] = useSearchParams();
   const returnUrl = readSafeReturnUrl(searchParams.get('returnUrl'));
+
+  return <AuthPageContent mode={mode} providers={providers} returnUrl={returnUrl} />;
+}
+
+export function AuthPageContent({
+  mode,
+  providers,
+  returnUrl
+}: {
+  mode: 'signin' | 'register';
+  providers: AuthProvider[];
+  returnUrl: string;
+}) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [form, setForm] = useState({ email: '', password: '', repeatPassword: '' });
