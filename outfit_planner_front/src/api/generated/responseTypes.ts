@@ -1,4 +1,4 @@
-import type { components, paths } from './schema';
+import type { paths } from './schema';
 
 type JsonResponse<Operation, Status extends number> = Operation extends { responses: infer Responses }
   ? Status extends keyof Responses
@@ -22,8 +22,8 @@ export type CreatedBodyReferencePhoto = JsonResponse<paths['/api/body-reference-
 export type CreatedOutfit = JsonResponse<paths['/api/outfits']['post'], 201>;
 export type StartedTryOnJob = JsonResponse<paths['/api/outfits/{outfitId}/try-on']['post'], 202>;
 
-export type GarmentCategory = components['schemas']['GarmentCategory'];
-export type BodyZone = components['schemas']['BodyZone'];
+export type GarmentCategory = GarmentItem['category'];
+export type BodyZone = GarmentItem['bodyZone'];
 export type LaundryStatus = GarmentItem['laundryStatus'];
-export type TryOnStatus = components['schemas']['TryOnStatus'];
+export type TryOnStatus = TryOnJob['status'];
 export type OutfitItem = ArrayItem<Outfit['items']>;
