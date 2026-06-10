@@ -1,0 +1,49 @@
+import type { CSSProperties, ChangeEvent } from 'react';
+import { GarmentCategoryIcon } from '../../shared/ui/GarmentCategoryControl';
+import type { GarmentCategory, GarmentItem } from '../../types';
+
+const headingStyle: CSSProperties = { fontFamily: 'Nunito, sans-serif' };
+
+export function SlotPicker({
+  title,
+  category,
+  garments,
+  selectedId,
+  onSelect,
+  onQuickAdd,
+  isQuickAdding
+}: {
+  title: string;
+  category: GarmentCategory;
+  garments: GarmentItem[];
+  selectedId?: string;
+  onSelect: (id: string) => void;
+  onQuickAdd: (event: ChangeEvent<HTMLInputElement>) => void;
+  isQuickAdding: boolean;
+}) {
+  const lowerTitle = title.toLowerCase();
+
+  return (
+    <div className="slot-picker">
+      <h3 style={headingStyle}>{title}</h3>
+      {garments.map((garment) => (
+        <button
+          type="button"
+          key={garment.id}
+          className={selectedId === garment.id ? 'garment-button selected' : 'garment-button'}
+          onClick={() => onSelect(garment.id)}
+        >
+          <img src={garment.thumbnailUrl} alt="" />
+          <span>{garment.name}</span>
+        </button>
+      ))}
+      {garments.length === 0 ? (
+        <label className="inline-empty" aria-disabled={isQuickAdding}>
+          <GarmentCategoryIcon category={category} size={18} />
+          <span>{isQuickAdding ? `Adding ${lowerTitle}` : `Add a ${lowerTitle} in Wardrobe`}</span>
+          <input type="file" accept="image/png,image/jpeg,image/webp" disabled={isQuickAdding} onChange={onQuickAdd} data-category={category} />
+        </label>
+      ) : null}
+    </div>
+  );
+}
