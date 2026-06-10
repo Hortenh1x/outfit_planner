@@ -33,18 +33,35 @@ const openApiTypescriptBinForShell = path.join(
 
 fs.mkdirSync(openApiDir, { recursive: true });
 fs.mkdirSync(path.dirname(schemaOutput), { recursive: true });
-fs.rmSync(openApiCache, { force: true });
 
-run('dotnet', [
-  'build',
-  apiProject,
-  '/p:OpenApiGenerateDocuments=true',
-  `/p:OpenApiDocumentsDirectory=${openApiDir}`
-]);
+const configuredOpenApiDocument = process.env.OUTFIT_PLANNER_OPENAPI_DOCUMENT;
+const openApiDocument = configuredOpenApiDocument
+  ? path.resolve(configuredOpenApiDocument)
+  : generateOpenApiDocument();
 
-const openApiDocument = newestJsonFile(openApiDir);
+if (!fs.existsSync(openApiDocument)) {
+  throw new Error(`OpenAPI JSON document not found at ${openApiDocument}`);
+}
 
 runOpenApiTypescript(openApiDocument, schemaOutput);
+
+function generateOpenApiDocument() {
+  fs.rmSync(openApiCache, { force: true });
+  for (const entry of fs.readdirSync(openApiDir, { withFileTypes: true })) {
+    if (entry.isFile() && entry.name.endsWith('.json')) {
+      fs.rmSync(path.join(openApiDir, entry.name), { force: true });
+    }
+  }
+
+  run('dotnet', [
+    'build',
+    apiProject,
+    '/p:OpenApiGenerateDocuments=true',
+    `/p:OpenApiDocumentsDirectory=${openApiDir}`
+  ]);
+
+  return newestJsonFile(openApiDir);
+}
 
 function newestJsonFile(directory) {
   const files = fs

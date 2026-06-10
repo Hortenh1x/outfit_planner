@@ -170,10 +170,17 @@ static void TestFrontendDockerConfigProxiesApiThroughSameOrigin()
 {
     var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", ".."));
     var compose = File.ReadAllText(Path.Combine(rootPath, "docker-compose.yml"));
+    var dockerfile = File.ReadAllText(Path.Combine(rootPath, "outfit_planner_front", "Dockerfile"));
     var nginx = File.ReadAllText(Path.Combine(rootPath, "outfit_planner_front", "nginx.conf"));
 
     AssertTrue(compose.Contains("VITE_API_URL: /api", StringComparison.Ordinal), "frontend docker build should use same-origin /api.");
     AssertTrue(!compose.Contains("VITE_API_URL: http://localhost:5000/api", StringComparison.Ordinal), "frontend docker build should not bake cross-origin localhost API URL.");
+    AssertTrue(compose.Contains("frontend:\n    build:\n      context: .\n      dockerfile: outfit_planner_front/Dockerfile", StringComparison.Ordinal), "production frontend should build from repo root with the frontend Dockerfile.");
+    AssertTrue(dockerfile.Contains("FROM mcr.microsoft.com/dotnet/sdk:10.0 AS openapi", StringComparison.Ordinal), "frontend Dockerfile should generate OpenAPI in a dotnet SDK stage.");
+    AssertTrue(dockerfile.Contains("COPY outfit_planner_back/ ./outfit_planner_back/", StringComparison.Ordinal), "frontend Dockerfile should copy backend sources before OpenAPI generation.");
+    AssertTrue(dockerfile.Contains("OUTFIT_PLANNER_OPENAPI_DOCUMENT", StringComparison.Ordinal), "frontend Dockerfile should pass generated OpenAPI JSON to npm build.");
+    AssertTrue(dockerfile.Contains("COPY outfit_planner_front/package*.json ./", StringComparison.Ordinal), "frontend Dockerfile should copy frontend package files from root context.");
+    AssertTrue(dockerfile.Contains("COPY outfit_planner_front/ ./", StringComparison.Ordinal), "frontend Dockerfile should copy frontend sources from root context.");
     AssertTrue(nginx.Contains("location /api/", StringComparison.Ordinal), "frontend nginx should proxy /api requests.");
     AssertTrue(nginx.Contains("proxy_pass http://api:8080/api/", StringComparison.Ordinal), "frontend nginx should proxy to the api service.");
     AssertTrue(nginx.Contains("client_max_body_size 100m", StringComparison.Ordinal), "frontend nginx should allow large photo uploads through the proxy.");
