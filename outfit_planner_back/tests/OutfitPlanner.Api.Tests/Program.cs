@@ -171,7 +171,29 @@ static void TestFrontendDockerConfigProxiesApiThroughSameOrigin()
     var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", ".."));
     var compose = File.ReadAllText(Path.Combine(rootPath, "docker-compose.yml"));
     var dockerfile = File.ReadAllText(Path.Combine(rootPath, "outfit_planner_front", "Dockerfile"));
+    var dockerignorePath = Path.Combine(rootPath, ".dockerignore");
     var nginx = File.ReadAllText(Path.Combine(rootPath, "outfit_planner_front", "nginx.conf"));
+
+    AssertTrue(File.Exists(dockerignorePath), "root .dockerignore should exist because production frontend uses the repo root build context.");
+    var dockerignore = File.ReadAllText(dockerignorePath);
+    foreach (var pattern in new[]
+    {
+        "**/node_modules",
+        "**/dist",
+        "**/.generated",
+        "**/bin",
+        "**/obj",
+        "**/.aspnet",
+        "**/.secrets",
+        "**/storage",
+        "**/uploads",
+        "**/*.log",
+        ".git",
+        ".superpowers"
+    })
+    {
+        AssertTrue(dockerignore.Contains(pattern, StringComparison.Ordinal), $"root .dockerignore should exclude {pattern}.");
+    }
 
     AssertTrue(compose.Contains("VITE_API_URL: /api", StringComparison.Ordinal), "frontend docker build should use same-origin /api.");
     AssertTrue(!compose.Contains("VITE_API_URL: http://localhost:5000/api", StringComparison.Ordinal), "frontend docker build should not bake cross-origin localhost API URL.");

@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/.generated
+**/bin
+**/obj
+**/.aspnet
+**/.secrets
+**/storage
+**/uploads
+**/*.log
+.git
+.superpowers
