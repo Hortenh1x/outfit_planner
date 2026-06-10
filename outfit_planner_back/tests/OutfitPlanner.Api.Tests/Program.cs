@@ -501,6 +501,7 @@ static void TestApiDocumentsFrontendResponseBodies()
         ".Produces<TryOnJob>(StatusCodes.Status202Accepted)",
         ".Produces<IReadOnlyList<ScheduledOutfit>>(StatusCodes.Status200OK)",
         ".Produces<ScheduledOutfit>(StatusCodes.Status200OK)",
+        ".Produces<ShareLinkResponse>(StatusCodes.Status200OK)",
         ".Produces<SharedOutfitResponse>(StatusCodes.Status200OK)"
     })
     {

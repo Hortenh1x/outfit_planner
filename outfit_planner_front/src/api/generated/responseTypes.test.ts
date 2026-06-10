@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { getSharedOutfit } from '../client';
+import type { SharedOutfit } from '../../types';
+
+type Expect<T extends true> = T;
+type GetSharedOutfitReturnsSharedOutfit = Expect<ReturnType<typeof getSharedOutfit> extends Promise<SharedOutfit> ? true : false>;
 
 const frontendRoot = path.resolve(__dirname, '../../..');
 const repoRoot = path.resolve(frontendRoot, '..');
@@ -37,10 +42,12 @@ describe('generated API workflow', () => {
     expect(schema).toContain('"application/json": components["schemas"]["TryOnJob"];');
     expect(schema).toContain('"application/json": components["schemas"]["ScheduledOutfit"][];');
     expect(schema).toContain('"application/json": components["schemas"]["ScheduledOutfit"];');
+    expect(schema).toContain('"application/json": components["schemas"]["ShareLinkResponse"];');
     expect(schema).toContain('"application/json": components["schemas"]["SharedOutfitResponse"];');
 
     expect(responseSection(schema, '/api/garments', 'get', 200)).not.toContain('content?: never;');
     expect(responseSection(schema, '/api/outfits', 'get', 200)).not.toContain('content?: never;');
+    expect(responseSection(schema, '/api/outfits/{outfitId}/share', 'post', 200)).not.toContain('content?: never;');
     expect(responseSection(schema, '/api/share/{token}', 'get', 200)).not.toContain('content?: never;');
   });
 });

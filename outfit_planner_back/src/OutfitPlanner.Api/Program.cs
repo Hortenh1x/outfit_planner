@@ -897,7 +897,8 @@ api.MapPost("/outfits/{outfitId:guid}/share", (Guid outfitId, ShareService share
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+})
+    .Produces<ShareLinkResponse>(StatusCodes.Status200OK);
 
 api.MapGet("/share/{token}", (string token, ShareService share) =>
 {
