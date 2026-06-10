@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Outfit Planner">
+  <rect width="512" height="512" rx="112" fill="#F4F1FA"/>
+  <circle cx="176" cy="176" r="86" fill="#C7B8FF"/>
+  <circle cx="336" cy="184" r="72" fill="#9BD9E7"/>
+  <path d="M150 306c32-32 180-34 212 0 24 26 19 88-21 111-38 22-146 23-184 0-38-23-32-85-7-111Z" fill="#FF9FCB"/>
+  <path d="M214 120h84l21 70-63 47-63-47 21-70Z" fill="#FFFFFF" opacity=".92"/>
+</svg>
