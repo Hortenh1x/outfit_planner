@@ -38,7 +38,8 @@ This file is durable working context for Codex agents in this project.
 - Frontend state/data uses TanStack Query; routing uses React Router.
 - Main UI surfaces are Wardrobe, Builder, Calendar, and shared outfit view.
 - Frontend visual system is High-Fidelity Claymorphism in `src/styles.css`: Nunito headings, DM Sans body, lavender canvas, animated blobs, large rounded clay panels, recessed inputs, convex gradient buttons, and 4-layer shadows.
-- `src/App.tsx` should preserve Wardrobe, Builder, Calendar, and Share routes while keeping service metadata endpoints available in the shell and try-on job status available after generation.
+- Frontend app composition is split across `src/app`, route pages under `src/routes`, feature components under `src/features`, and reusable clay UI under `src/shared/ui`; `src/App.tsx` is only a compatibility export.
+- Frontend generated OpenAPI artifacts live under ignored paths and should be regenerated with `npm run generate:api`, not committed.
 - Authentication uses backend-issued `outfit_session` HttpOnly cookies plus `outfit_csrf` CSRF cookies. Frontend calls `/api` with credentials and sends `X-CSRF-Token` for mutating authenticated requests.
 - Email/password auth works locally with email verification/password reset token storage, login/registration rate limiting, session list/revoke-all, and expired session cleanup support. Google OAuth and Apple OIDC are enabled only when `Authentication__Google__ClientId`/`Authentication__Google__ClientSecret` or `Authentication__Apple__ClientId`/`Authentication__Apple__ClientSecret` are configured.
 - Privacy endpoints include `DELETE /api/account`, `GET /api/account/export`, `DELETE /api/body-reference-photos/{id}`, `DELETE /api/try-on-jobs/{id}/output`, and `POST /api/privacy/purge-ai-outputs`.
