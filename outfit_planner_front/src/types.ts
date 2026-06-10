@@ -10,6 +10,7 @@ export type {
   Outfit,
   OutfitItem,
   ScheduledOutfit,
+  ShareLinkResponse,
   SharedOutfit,
   StartedTryOnJob,
   TryOnJob,

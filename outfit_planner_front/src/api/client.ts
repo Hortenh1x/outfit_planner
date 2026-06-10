@@ -1,4 +1,14 @@
-import type { BodyReferencePhoto, GarmentCategory, GarmentItem, LaundryStatus, Outfit, ScheduledOutfit, TryOnJob } from '../types';
+import type {
+  BodyReferencePhoto,
+  GarmentCategory,
+  GarmentItem,
+  LaundryStatus,
+  Outfit,
+  ScheduledOutfit,
+  ShareLinkResponse,
+  SharedOutfit,
+  TryOnJob
+} from '../types';
 
 const apiBaseUrl = import.meta.env.VITE_API_URL ?? '/api';
 const csrfCookieName = 'outfit_csrf';
@@ -434,8 +444,8 @@ export function unscheduleOutfit(date: string): Promise<void> {
   });
 }
 
-export function shareOutfit(outfitId: string): Promise<{ token: string; url: string }> {
-  return request<{ token: string; url: string }>(`/outfits/${outfitId}/share`, {
+export function shareOutfit(outfitId: string): Promise<ShareLinkResponse> {
+  return request<ShareLinkResponse>(`/outfits/${outfitId}/share`, {
     method: 'POST'
   });
 }
@@ -446,6 +456,6 @@ export function revokeShare(token: string): Promise<void> {
   });
 }
 
-export function getSharedOutfit(token: string): Promise<Outfit> {
-  return request<Outfit>(`/share/${token}`);
+export function getSharedOutfit(token: string): Promise<SharedOutfit> {
+  return request<SharedOutfit>(`/share/${token}`);
 }

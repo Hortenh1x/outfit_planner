@@ -21,6 +21,7 @@ export type CreatedGarment = JsonResponse<paths['/api/garments']['post'], 201>;
 export type CreatedBodyReferencePhoto = JsonResponse<paths['/api/body-reference-photos']['post'], 201>;
 export type CreatedOutfit = JsonResponse<paths['/api/outfits']['post'], 201>;
 export type StartedTryOnJob = JsonResponse<paths['/api/outfits/{outfitId}/try-on']['post'], 202>;
+export type ShareLinkResponse = JsonResponse<paths['/api/outfits/{outfitId}/share']['post'], 200>;
 
 export type GarmentCategory = GarmentItem['category'];
 export type BodyZone = GarmentItem['bodyZone'];
