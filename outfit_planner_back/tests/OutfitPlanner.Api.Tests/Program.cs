@@ -36,6 +36,7 @@ var tests = new List<(string Name, Action Test)>
     ("api exposes privacy and auth hardening endpoints", TestApiExposesPrivacyAndAuthHardeningEndpoints),
     ("api exposes edit delete filtering and revoke endpoints", TestApiExposesEditDeleteFilterAndRevokeEndpoints),
     ("api exposes openapi document generation", TestApiExposesOpenApiDocumentGeneration),
+    ("api documents frontend response bodies for generated types", TestApiDocumentsFrontendResponseBodies),
     ("maps expanded garment categories to richer body zones", TestCategoryMapping),
     ("wardrobe service updates structured garment metadata without reupload", TestWardrobeServiceUpdatesStructuredMetadata),
     ("wardrobe service filters sorts and paginates garments", TestWardrobeServiceFiltersSortsAndPaginatesGarments),
@@ -472,6 +473,35 @@ static void TestApiExposesOpenApiDocumentGeneration()
     AssertTrue(program.Contains("dotnet-getdocument", StringComparison.Ordinal), "OpenAPI generation detection should recognize the getdocument host tool.");
     AssertTrue(program.Contains("GetDocument.Insider", StringComparison.Ordinal), "OpenAPI generation detection should recognize the inner getdocument tool.");
     AssertTrue(!program.Contains("Assembly.GetEntryAssembly()?.GetName().Name", StringComparison.Ordinal), "OpenAPI generation detection should not rely on the entry assembly name.");
+}
+
+static void TestApiDocumentsFrontendResponseBodies()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var program = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Program.cs"));
+    var contracts = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Contracts", "ApiContracts.cs"));
+
+    foreach (var requiredMetadata in new[]
+    {
+        ".Produces<IReadOnlyList<BodyReferencePhoto>>(StatusCodes.Status200OK)",
+        ".Produces<BodyReferencePhoto>(StatusCodes.Status201Created)",
+        ".Produces<IReadOnlyList<GarmentItem>>(StatusCodes.Status200OK)",
+        ".Produces<GarmentItem>(StatusCodes.Status200OK)",
+        ".Produces<GarmentItem>(StatusCodes.Status201Created)",
+        ".Produces<IReadOnlyList<Outfit>>(StatusCodes.Status200OK)",
+        ".Produces<Outfit>(StatusCodes.Status200OK)",
+        ".Produces<Outfit>(StatusCodes.Status201Created)",
+        ".Produces<TryOnJob>(StatusCodes.Status202Accepted)",
+        ".Produces<IReadOnlyList<ScheduledOutfit>>(StatusCodes.Status200OK)",
+        ".Produces<ScheduledOutfit>(StatusCodes.Status200OK)",
+        ".Produces<SharedOutfitResponse>(StatusCodes.Status200OK)"
+    })
+    {
+        AssertTrue(program.Contains(requiredMetadata, StringComparison.Ordinal), $"api should document response metadata {requiredMetadata}.");
+    }
+
+    AssertTrue(program.Contains(".Produces(StatusCodes.Status404NotFound)", StringComparison.Ordinal), "detail routes should document 404 responses.");
+    AssertTrue(contracts.Contains("public sealed record SharedOutfitResponse", StringComparison.Ordinal), "shared outfit response should be a named API contract.");
 }
 
 static void TestWardrobeServiceUpdatesStructuredMetadata()

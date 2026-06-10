@@ -613,10 +613,12 @@ api.MapPost("/body-reference-photos", (CreateBodyReferencePhotoRequest request, 
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+})
+    .Produces<BodyReferencePhoto>(StatusCodes.Status201Created);
 
 api.MapGet("/body-reference-photos", (WardrobeService wardrobe, HttpContext context) =>
-    Results.Ok(wardrobe.ListBodyReferencePhotos(CurrentUser(context))));
+    Results.Ok(wardrobe.ListBodyReferencePhotos(CurrentUser(context))))
+    .Produces<IReadOnlyList<BodyReferencePhoto>>(StatusCodes.Status200OK);
 
 api.MapDelete("/body-reference-photos/{photoId:guid}", (Guid photoId, WardrobeService wardrobe, HttpContext context) =>
     wardrobe.DeleteBodyReferencePhoto(CurrentUser(context), photoId) ? Results.NoContent() : Results.NotFound());
@@ -648,13 +650,16 @@ api.MapGet("/garments", (
         archived,
         occasion,
         brand,
-        material))));
+        material))))
+    .Produces<IReadOnlyList<GarmentItem>>(StatusCodes.Status200OK);
 
 api.MapGet("/garments/{garmentId:guid}", (Guid garmentId, WardrobeService wardrobe, HttpContext context) =>
 {
     var garment = wardrobe.GetGarment(CurrentUser(context), garmentId);
     return garment is null ? Results.NotFound() : Results.Ok(garment);
-});
+})
+    .Produces<GarmentItem>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status404NotFound);
 
 api.MapPost("/uploads/garment-photo", async (HttpRequest request, PhotoUploadService photos, ILogger<Program> logger, CancellationToken cancellationToken) =>
 {
@@ -700,7 +705,8 @@ api.MapPost("/garments", (CreateGarmentRequest request, WardrobeService wardrobe
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+})
+    .Produces<GarmentItem>(StatusCodes.Status201Created);
 
 api.MapPatch("/garments/{garmentId:guid}", (Guid garmentId, UpdateGarmentRequest request, WardrobeService wardrobe, HttpContext context) =>
 {
@@ -732,7 +738,9 @@ api.MapPatch("/garments/{garmentId:guid}", (Guid garmentId, UpdateGarmentRequest
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+})
+    .Produces<GarmentItem>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status404NotFound);
 
 api.MapDelete("/garments/{garmentId:guid}", (Guid garmentId, WardrobeService wardrobe, HttpContext context) =>
     wardrobe.DeleteGarment(CurrentUser(context), garmentId) ? Results.NoContent() : Results.NotFound());
@@ -747,13 +755,16 @@ api.MapGet("/outfits", (
     string? sort,
     int? offset,
     int? limit) =>
-    Results.Ok(outfits.ListOutfits(CurrentUser(context), new OutfitQuery(q, occasion, favorite, archived, sort, offset, limit))));
+    Results.Ok(outfits.ListOutfits(CurrentUser(context), new OutfitQuery(q, occasion, favorite, archived, sort, offset, limit))))
+    .Produces<IReadOnlyList<Outfit>>(StatusCodes.Status200OK);
 
 api.MapGet("/outfits/{outfitId:guid}", (Guid outfitId, OutfitService outfits, HttpContext context) =>
 {
     var outfit = outfits.GetOutfit(CurrentUser(context), outfitId);
     return outfit is null ? Results.NotFound() : Results.Ok(outfit);
-});
+})
+    .Produces<Outfit>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status404NotFound);
 
 api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, HttpContext context) =>
 {
@@ -766,7 +777,8 @@ api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, Htt
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+})
+    .Produces<Outfit>(StatusCodes.Status201Created);
 
 api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest request, OutfitService outfits, HttpContext context) =>
 {
@@ -785,7 +797,9 @@ api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest req
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+})
+    .Produces<Outfit>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status404NotFound);
 
 api.MapDelete("/outfits/{outfitId:guid}", (Guid outfitId, OutfitService outfits, HttpContext context) =>
     outfits.DeleteOutfit(CurrentUser(context), outfitId) ? Results.NoContent() : Results.NotFound());
@@ -813,13 +827,16 @@ api.MapPost("/outfits/{outfitId:guid}/try-on", async (
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+})
+    .Produces<TryOnJob>(StatusCodes.Status202Accepted);
 
 api.MapGet("/try-on-jobs/{jobId:guid}", (Guid jobId, TryOnService tryOn, HttpContext context) =>
 {
     var job = tryOn.GetJob(CurrentUser(context), jobId);
     return job is null ? Results.NotFound() : Results.Ok(job);
-});
+})
+    .Produces<TryOnJob>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status404NotFound);
 
 api.MapDelete("/try-on-jobs/{jobId:guid}/output", (Guid jobId, TryOnService tryOn, HttpContext context) =>
     tryOn.DeleteOutput(CurrentUser(context), jobId) ? Results.NoContent() : Results.NotFound());
@@ -838,7 +855,8 @@ api.MapPost("/schedule", (ScheduleOutfitRequest request, ScheduleService schedul
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+})
+    .Produces<ScheduledOutfit>(StatusCodes.Status200OK);
 
 api.MapGet("/schedule", (string from, string to, ScheduleService schedule, HttpContext context) =>
 {
@@ -855,7 +873,8 @@ api.MapGet("/schedule", (string from, string to, ScheduleService schedule, HttpC
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+})
+    .Produces<IReadOnlyList<ScheduledOutfit>>(StatusCodes.Status200OK);
 
 api.MapDelete("/schedule/{date}", (string date, ScheduleService schedule, HttpContext context) =>
 {
@@ -883,20 +902,22 @@ api.MapPost("/outfits/{outfitId:guid}/share", (Guid outfitId, ShareService share
 api.MapGet("/share/{token}", (string token, ShareService share) =>
 {
     var outfit = share.GetSharedOutfit(token);
-    return outfit is null ? Results.NotFound() : Results.Ok(new
-    {
-        outfit.Id,
-        outfit.Name,
-        outfit.Items,
-        outfit.Tags,
-        outfit.Occasion,
-        outfit.IsFavorite,
-        outfit.IsArchived,
-        outfit.ClothesOnlyPreviewUrl,
-        outfit.PersonPreviewUrl,
-        outfit.CreatedAt
-    });
-});
+    return outfit is null
+        ? Results.NotFound()
+        : Results.Ok(new SharedOutfitResponse(
+            outfit.Id,
+            outfit.Name,
+            outfit.Items,
+            outfit.Tags,
+            outfit.Occasion,
+            outfit.IsFavorite,
+            outfit.IsArchived,
+            outfit.ClothesOnlyPreviewUrl,
+            outfit.PersonPreviewUrl,
+            outfit.CreatedAt));
+})
+    .Produces<SharedOutfitResponse>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status404NotFound);
 
 api.MapDelete("/share/{token}", (string token, ShareService share, HttpContext context) =>
     share.RevokeShareLink(CurrentUser(context), token) ? Results.NoContent() : Results.NotFound());
