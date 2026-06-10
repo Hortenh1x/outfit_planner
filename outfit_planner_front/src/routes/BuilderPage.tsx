@@ -93,6 +93,7 @@ export function BuilderPage() {
         ...current,
         [CATEGORY_SELECTION_KEYS[garment.category]]: garment.id
       }));
+      setActiveOutfit(null);
       setQuickAddGarmentError(null);
       void queryClient.invalidateQueries({ queryKey: ['garments'] });
     },
@@ -146,6 +147,20 @@ export function BuilderPage() {
     }
   }
 
+  function updateSelection(selectionKey: keyof OutfitSelection, id: string) {
+    setSelection((current) => {
+      if (current[selectionKey] === id) {
+        return current;
+      }
+
+      return { ...current, [selectionKey]: id };
+    });
+
+    if (selection[selectionKey] !== id) {
+      setActiveOutfit(null);
+    }
+  }
+
   return (
     <section className="builder-layout">
       <aside className="inventory-panel">
@@ -163,7 +178,7 @@ export function BuilderPage() {
                   category={category}
                   garments={grouped[category]}
                   selectedId={selection[selectionKey]}
-                  onSelect={(id) => setSelection({ ...selection, [selectionKey]: id })}
+                  onSelect={(id) => updateSelection(selectionKey, id)}
                   onQuickAdd={(event) => handleQuickAddGarment(category, event)}
                   isQuickAdding={quickAddGarmentMutation.isPending && quickAddGarmentMutation.variables?.category === category}
                 />
