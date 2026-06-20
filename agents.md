@@ -37,8 +37,9 @@ This file is durable working context for Codex agents in this project.
 - Frontend is React + TypeScript + Vite under `outfit_planner_front/`.
 - Frontend state/data uses TanStack Query; routing uses React Router.
 - Main UI surfaces are Wardrobe, Builder, Calendar, and shared outfit view.
-- Frontend visual system is High-Fidelity Claymorphism in `src/styles.css`: Nunito headings, DM Sans body, lavender canvas, animated blobs, large rounded clay panels, recessed inputs, convex gradient buttons, and 4-layer shadows.
-- Frontend app composition is split across `src/app`, route pages under `src/routes`, feature components under `src/features`, and reusable clay UI under `src/shared/ui`; `src/App.tsx` is only a compatibility export.
+- Legacy frontend visual system is High-Fidelity Claymorphism in `src/styles.css`: Nunito headings, DM Sans body, lavender canvas, animated blobs, large rounded clay panels, recessed inputs, convex gradient buttons, and 4-layer shadows.
+- New UX redesign slices should migrate visible surfaces toward the user's editorial fashion references instead of extending claymorphism: Obra Studio dark, Crimson Plinth light, warm paper/dark ink themes, serif display headings, italic crimson emphasis, hairline borders, flat panels, restrained shadows, and tactile crimson primary buttons.
+- Frontend app composition is split across `src/app`, route pages under `src/routes`, feature components under `src/features`, and reusable UI under `src/shared/ui`; `src/App.tsx` is only a compatibility export.
 - Frontend generated OpenAPI artifacts live under ignored paths and should be regenerated with `npm run generate:api`, not committed.
 - Authentication uses backend-issued `outfit_session` HttpOnly cookies plus `outfit_csrf` CSRF cookies. Frontend calls `/api` with credentials and sends `X-CSRF-Token` for mutating authenticated requests.
 - Email/password auth works locally with email verification/password reset token storage, login/registration rate limiting, session list/revoke-all, and expired session cleanup support. Google OAuth and Apple OIDC are enabled only when `Authentication__Google__ClientId`/`Authentication__Google__ClientSecret` or `Authentication__Apple__ClientId`/`Authentication__Apple__ClientSecret` are configured.
