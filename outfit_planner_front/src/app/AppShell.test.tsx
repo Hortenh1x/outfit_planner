@@ -47,9 +47,12 @@ describe('AppShell editorial frame', () => {
 
   it('renders private routes inside the editorial shell without clay ambient blobs', async () => {
     const { container } = renderShell();
+    const routeHeading = await screen.findByRole('heading', { name: /wardrobe route/i });
+    const editorialShell = container.querySelector('.editorial-shell');
 
-    expect(await screen.findByRole('heading', { name: /wardrobe route/i })).toBeInTheDocument();
-    expect(container.querySelector('.editorial-shell')).toBeInTheDocument();
+    expect(routeHeading).toBeInTheDocument();
+    expect(editorialShell).toBeInTheDocument();
+    expect(editorialShell).toContainElement(routeHeading);
     expect(container.querySelector('.editorial-sidebar')).toBeInTheDocument();
     expect(container.querySelector('.clay-ambient')).not.toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: /^primary navigation$/i })).toBeInTheDocument();
