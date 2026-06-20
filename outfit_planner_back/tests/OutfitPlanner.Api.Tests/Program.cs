@@ -169,7 +169,7 @@ static void TestDevelopmentDockerPublishesPostgresOnNonDefaultHostPort()
 static void TestFrontendDockerConfigProxiesApiThroughSameOrigin()
 {
     var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", ".."));
-    var compose = File.ReadAllText(Path.Combine(rootPath, "docker-compose.yml"));
+    var compose = File.ReadAllText(Path.Combine(rootPath, "docker-compose.yml")).ReplaceLineEndings("\n");
     var dockerfile = File.ReadAllText(Path.Combine(rootPath, "outfit_planner_front", "Dockerfile"));
     var dockerignorePath = Path.Combine(rootPath, ".dockerignore");
     var nginx = File.ReadAllText(Path.Combine(rootPath, "outfit_planner_front", "nginx.conf"));
