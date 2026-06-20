@@ -88,4 +88,23 @@ describe('wardrobeUpload', () => {
     expect(updated).toMatchObject({ name: 'Black evening shirt', tags: ['black', 'evening'] });
     expect(row.name).toBe('Black shirt');
   });
+
+  it('uses unique row ids across separate queue creation calls', () => {
+    const originalDateNow = Date.now;
+    Date.now = () => 123;
+
+    try {
+      const defaults = { category: 'Top' as const, color: 'black', season: [], existingTags: [] };
+      const [first] = createUploadQueueItems([
+        new File(['shirt'], 'black-shirt.png', { type: 'image/png' })
+      ], defaults);
+      const [second] = createUploadQueueItems([
+        new File(['shirt'], 'black-shirt.png', { type: 'image/png' })
+      ], defaults);
+
+      expect(first.id).not.toBe(second.id);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
 });

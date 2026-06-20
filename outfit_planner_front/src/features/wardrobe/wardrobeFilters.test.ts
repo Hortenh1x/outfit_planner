@@ -105,4 +105,21 @@ describe('wardrobeFilters', () => {
       laundryStatus: 'clean'
     });
   });
+
+  it('normalizes numeric response strings when duplicating a garment', () => {
+    expect(duplicateGarmentInput({
+      ...baseGarment,
+      weatherMinTemp: '18',
+      weatherMaxTemp: '30',
+      formalityScore: '4',
+      warmthScore: '1',
+      comfortScore: '4'
+    })).toMatchObject({
+      weatherMinTemp: 18,
+      weatherMaxTemp: 30,
+      formalityScore: 4,
+      warmthScore: 1,
+      comfortScore: 4
+    });
+  });
 });
