@@ -65,12 +65,12 @@ export function duplicateGarmentInput(garment: GarmentItem): {
     brand: garment.brand,
     size: garment.size,
     season: [...(garment.season ?? [])],
-    weatherMinTemp: garment.weatherMinTemp,
-    weatherMaxTemp: garment.weatherMaxTemp,
+    weatherMinTemp: normalizeNullableNumber(garment.weatherMinTemp),
+    weatherMaxTemp: normalizeNullableNumber(garment.weatherMaxTemp),
     occasion: [...(garment.occasion ?? [])],
-    formalityScore: garment.formalityScore,
-    warmthScore: garment.warmthScore,
-    comfortScore: garment.comfortScore,
+    formalityScore: normalizeNullableNumber(garment.formalityScore),
+    warmthScore: normalizeNullableNumber(garment.warmthScore),
+    comfortScore: normalizeNullableNumber(garment.comfortScore),
     isFavorite: false,
     isArchived: false,
     laundryStatus: garment.laundryStatus
@@ -79,4 +79,17 @@ export function duplicateGarmentInput(garment: GarmentItem): {
 
 function normalizeTag(tag: string): string {
   return tag.trim().toLowerCase();
+}
+
+function normalizeNullableNumber(value: string | number | null | undefined): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
 }

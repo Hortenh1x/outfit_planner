@@ -60,7 +60,7 @@ export function createUploadQueueItem(file: File, defaults: UploadQueueDefaults,
   });
 
   return {
-    id: `${Date.now()}-${index}-${file.name}`,
+    id: createUploadQueueItemId(file.name, index),
     file,
     name: inferGarmentName(file.name),
     category: defaults.category,
@@ -158,6 +158,18 @@ function uniqueTokens(tokens: string[]): string[] {
       seen.add(token);
       return true;
     });
+}
+
+function createUploadQueueItemId(fileName: string, index: number): string {
+  return `${Date.now()}-${index}-${createRandomId()}-${fileName}`;
+}
+
+function createRandomId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return Math.random().toString(36).slice(2, 10);
 }
 
 function isGenericFileName(fileName: string): boolean {
