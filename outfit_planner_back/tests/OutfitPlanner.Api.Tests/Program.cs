@@ -68,6 +68,7 @@ var tests = new List<(string Name, Action Test)>
     ("postgres schema contains privacy storage auth hardening and try-on retention fields", TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields),
     ("api uses DbUp migrations instead of startup schema initializer", TestApiUsesDbUpMigrations),
     ("new try-on provider adapters implement provider port", TestProviderAdaptersImplementPort),
+    ("fashn provider sends only body try-on items for normal modes", TestFashnProviderSendsOnlyBodyTryOnItems),
     ("fashn provider requires api key before network call", TestFashnProviderRequiresApiKey),
     ("fashn provider submits try-on request and polls status", TestFashnProviderSubmitsRequestAndPollsStatus),
     ("fashn provider rejects multi-garment outfits when sequential flow is off", TestFashnProviderRejectsMultiGarmentOutfitsWhenSequentialOff),
@@ -1255,6 +1256,9 @@ static void TestProviderAdaptersImplementPort()
         typeof(ReplicateProvider),
         typeof(FalProvider),
         typeof(FashnTryOnProvider),
+        typeof(CompositeFashnTryOnProvider),
+        typeof(SelfHostedCatVtonProvider),
+        typeof(GeneralImageEditTryOnProvider),
         typeof(MockTryOnProvider)
     };
 
@@ -1262,6 +1266,37 @@ static void TestProviderAdaptersImplementPort()
     {
         AssertTrue(typeof(ITryOnProvider).IsAssignableFrom(providerType), $"{providerType.Name} should implement ITryOnProvider.");
     }
+}
+
+static void TestFashnProviderSendsOnlyBodyTryOnItems()
+{
+    var handler = new RecordingFashnHandler();
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-top\",\"error\":null}");
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-top\",\"status\":\"completed\",\"output\":[\"https://cdn.fashn.ai/top.png\"],\"error\":null}");
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-bottom\",\"error\":null}");
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-bottom\",\"status\":\"completed\",\"output\":[\"https://cdn.fashn.ai/final.png\"],\"error\":null}");
+    var outfit = CreateOutfitWithItems(
+        new OutfitItem(Guid.NewGuid(), "white tee", GarmentCategory.Top, BodyZone.Torso, "https://app.test/shirt.png"),
+        new OutfitItem(Guid.NewGuid(), "jeans", GarmentCategory.Bottom, BodyZone.Legs, "https://app.test/jeans.png"),
+        new OutfitItem(Guid.NewGuid(), "bag", GarmentCategory.Bag, BodyZone.Accessory, "https://app.test/bag.png"));
+    var bodyItems = outfit.Items.Where(item => item.Category is GarmentCategory.Top or GarmentCategory.Bottom).ToArray();
+    var visualItems = outfit.Items.Where(item => item.Category == GarmentCategory.Bag).ToArray();
+    var provider = new FashnTryOnProvider(
+        new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
+        new FashnTryOnSettings("test-key", "tryon-v1.6", "balanced", 2, TimeSpan.Zero));
+
+    var generation = provider.Generate(new TryOnProviderRequest(
+        "user-a",
+        outfit.Id,
+        TryOnMode.SequentialOutfitTryOn,
+        "https://app.test/user.jpg",
+        bodyItems,
+        visualItems,
+        new TryOnGenerationSettings("tryon-v1.6", "balanced", "settings-a")));
+
+    AssertEqual("https://cdn.fashn.ai/final.png", generation.OutputImageUrl, "fashn should return the final normal-mode output.");
+    AssertEqual(4, handler.Requests.Count, "fashn should run once per body try-on item.");
+    AssertTrue(!handler.Requests.Any(request => request.Body.Contains("bag.png", StringComparison.Ordinal)), "normal FASHN runs must not send visual-only items.");
 }
 
 static void TestFashnProviderRequiresApiKey()
@@ -1272,7 +1307,7 @@ static void TestFashnProviderRequiresApiKey()
         new FashnTryOnSettings("", "tryon-v1.6", "balanced", 1, TimeSpan.Zero));
 
     AssertThrows<InvalidOperationException>(
-        () => provider.Generate("user-a", CreateSingleGarmentOutfit(), "https://app.test/user.jpg", new TryOnOptions(false)),
+        () => provider.Generate(CreateProviderRequest(CreateSingleGarmentOutfit(), TryOnMode.SingleGarmentTryOn)),
         "fashn provider should require an API key");
     AssertEqual(0, handler.Requests.Count, "missing key must stop before network call");
 }
@@ -1286,7 +1321,7 @@ static void TestFashnProviderSubmitsRequestAndPollsStatus()
         new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
         new FashnTryOnSettings("test-key", "tryon-v1.6", "performance", 2, TimeSpan.Zero));
 
-    var generation = provider.Generate("user-a", CreateSingleGarmentOutfit(), "https://app.test/user.jpg", new TryOnOptions(false));
+    var generation = provider.Generate(CreateProviderRequest(CreateSingleGarmentOutfit(), TryOnMode.SingleGarmentTryOn));
 
     AssertEqual("prediction-1", generation.ProviderJobId, "provider job id should come from FASHN");
     AssertEqual("https://cdn.fashn.ai/output.png", generation.OutputImageUrl, "output url should come from completed status");
@@ -1311,7 +1346,7 @@ static void TestFashnProviderRejectsMultiGarmentOutfitsWhenSequentialOff()
         new FashnTryOnSettings("test-key", "tryon-v1.6", "balanced", 1, TimeSpan.Zero));
 
     AssertThrows<InvalidOperationException>(
-        () => provider.Generate("user-a", CreateTwoGarmentOutfit(), "https://app.test/user.jpg", new TryOnOptions(false)),
+        () => provider.Generate(CreateProviderRequest(CreateTwoGarmentOutfit(), TryOnMode.SingleGarmentTryOn)),
         "fashn provider should fail clearly for multi-garment outfits when sequential flow is off");
     AssertEqual(0, handler.Requests.Count, "unsupported outfit shape must stop before network call");
 }
@@ -1327,7 +1362,7 @@ static void TestFashnProviderRunsSequentialMultiGarmentOutfits()
         new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
         new FashnTryOnSettings("test-key", "tryon-v1.6", "balanced", 2, TimeSpan.Zero));
 
-    var generation = provider.Generate("user-a", CreateTwoGarmentOutfit(), "https://app.test/user.jpg", new TryOnOptions(true));
+    var generation = provider.Generate(CreateProviderRequest(CreateTwoGarmentOutfit(), TryOnMode.SequentialOutfitTryOn));
 
     AssertEqual("prediction-bottom", generation.ProviderJobId, "sequential flow should expose the final provider job id");
     AssertEqual("https://cdn.fashn.ai/final.png", generation.OutputImageUrl, "sequential flow should return the final generated image");
@@ -1395,6 +1430,24 @@ static Outfit CreateTwoGarmentOutfit()
         null,
         null,
         DateTimeOffset.UtcNow);
+}
+
+static TryOnProviderRequest CreateProviderRequest(Outfit outfit, TryOnMode mode)
+{
+    var bodyItems = outfit.Items
+        .Where(item => item.Category is GarmentCategory.Top or GarmentCategory.Bottom or GarmentCategory.Dress or GarmentCategory.Outerwear)
+        .ToArray();
+    var visualItems = outfit.Items
+        .Where(item => item.Category is GarmentCategory.Shoes or GarmentCategory.Bag or GarmentCategory.Accessory or GarmentCategory.Hat)
+        .ToArray();
+    return new TryOnProviderRequest(
+        outfit.UserId,
+        outfit.Id,
+        mode,
+        "https://app.test/user.jpg",
+        bodyItems,
+        visualItems,
+        new TryOnGenerationSettings("tryon-v1.6", "balanced", "tryon-v1.6:balanced"));
 }
 
 static Outfit CreateOutfitWithItems(params OutfitItem[] items)
@@ -1465,6 +1518,12 @@ sealed class CountingTryOnProvider : ITryOnProvider
     {
         Calls++;
         LastOptions = options;
+        return new TryOnGeneration("test-provider-job", "https://example.com/output.jpg");
+    }
+
+    public TryOnGeneration Generate(TryOnProviderRequest request)
+    {
+        Calls++;
         return new TryOnGeneration("test-provider-job", "https://example.com/output.jpg");
     }
 }

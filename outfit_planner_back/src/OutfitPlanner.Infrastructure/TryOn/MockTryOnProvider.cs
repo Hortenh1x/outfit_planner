@@ -5,10 +5,25 @@ namespace OutfitPlanner.Infrastructure.TryOn;
 
 public sealed class MockTryOnProvider : ITryOnProvider
 {
-    public TryOnGeneration Generate(string userId, Outfit outfit, string bodyReferencePhotoUrl, TryOnOptions options)
+    public string Name => nameof(MockTryOnProvider);
+
+    public TryOnProviderCapabilities Capabilities => new(
+        Name,
+        "mock",
+        "mock",
+        "mock",
+        new HashSet<TryOnMode>
+        {
+            TryOnMode.ClothesOnlyPreview,
+            TryOnMode.SingleGarmentTryOn,
+            TryOnMode.SequentialOutfitTryOn,
+            TryOnMode.ExperimentalCompositeTryOn
+        });
+
+    public TryOnGeneration Generate(TryOnProviderRequest request)
     {
         var providerJobId = $"mock_{Guid.NewGuid():N}";
-        var encodedOutfit = Uri.EscapeDataString(outfit.Name.ToLowerInvariant().Replace(' ', '-'));
-        return new TryOnGeneration(providerJobId, $"/generated/try-on/{outfit.Id:N}-{encodedOutfit}.png");
+        var encodedMode = Uri.EscapeDataString(request.Mode.ToString().ToLowerInvariant());
+        return new TryOnGeneration(providerJobId, $"/generated/try-on/{request.OutfitId:N}-{encodedMode}.png");
     }
 }
