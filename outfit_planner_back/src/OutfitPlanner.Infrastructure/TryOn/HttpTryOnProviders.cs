@@ -46,6 +46,30 @@ public sealed class FalProvider : JsonTryOnProvider
     }
 }
 
+public sealed class SelfHostedCatVtonProvider : JsonTryOnProvider
+{
+    public SelfHostedCatVtonProvider(HttpClient http, HttpTryOnProviderSettings settings)
+        : base(http, settings, nameof(SelfHostedCatVtonProvider))
+    {
+    }
+}
+
+public sealed class CompositeFashnTryOnProvider : JsonTryOnProvider
+{
+    public CompositeFashnTryOnProvider(HttpClient http, HttpTryOnProviderSettings settings)
+        : base(http, settings, nameof(CompositeFashnTryOnProvider))
+    {
+    }
+}
+
+public sealed class GeneralImageEditTryOnProvider : JsonTryOnProvider
+{
+    public GeneralImageEditTryOnProvider(HttpClient http, HttpTryOnProviderSettings settings)
+        : base(http, settings, nameof(GeneralImageEditTryOnProvider))
+    {
+    }
+}
+
 public abstract class JsonTryOnProvider : ITryOnProvider
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -66,7 +90,22 @@ public abstract class JsonTryOnProvider : ITryOnProvider
         }
     }
 
-    public TryOnGeneration Generate(string userId, Outfit outfit, string bodyReferencePhotoUrl, TryOnOptions options)
+    public string Name => _providerName;
+
+    public TryOnProviderCapabilities Capabilities => new(
+        Name,
+        _settings.ModelName,
+        "default",
+        $"{_settings.ModelName}:default",
+        new HashSet<TryOnMode>
+        {
+            TryOnMode.ClothesOnlyPreview,
+            TryOnMode.SingleGarmentTryOn,
+            TryOnMode.SequentialOutfitTryOn,
+            TryOnMode.ExperimentalCompositeTryOn
+        });
+
+    public TryOnGeneration Generate(TryOnProviderRequest request)
     {
         if (_settings.RequiresApiKey && string.IsNullOrWhiteSpace(_settings.ApiKey))
         {
@@ -78,25 +117,30 @@ public abstract class JsonTryOnProvider : ITryOnProvider
             throw new InvalidOperationException($"{_providerName} provider endpoint is not configured.");
         }
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, _settings.Endpoint);
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, _settings.Endpoint);
         if (!string.IsNullOrWhiteSpace(_settings.ApiKey))
         {
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey);
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey);
         }
 
-        request.Content = JsonContent.Create(new HttpTryOnRequest(
+        httpRequest.Content = JsonContent.Create(new HttpTryOnRequest(
             _settings.ModelName,
-            userId,
-            outfit.Id,
-            bodyReferencePhotoUrl,
-            options.SequentialFlowEnabled,
-            outfit.Items.Select(item => new HttpTryOnGarment(
+            request.UserId,
+            request.OutfitId,
+            request.BodyReferencePhotoUrl,
+            request.Mode.ToString(),
+            request.BodyTryOnItems.Select(item => new HttpTryOnGarment(
+                item.GarmentId,
+                item.Name,
+                item.Category.ToString(),
+                item.ThumbnailUrl)).ToArray(),
+            request.VisualOnlyItems.Select(item => new HttpTryOnGarment(
                 item.GarmentId,
                 item.Name,
                 item.Category.ToString(),
                 item.ThumbnailUrl)).ToArray()), options: JsonOptions);
 
-        using var response = _http.Send(request);
+        using var response = _http.Send(httpRequest);
         var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
         if (!response.IsSuccessStatusCode)
         {
@@ -152,8 +196,9 @@ file sealed record HttpTryOnRequest(
     [property: JsonPropertyName("user_id")] string UserId,
     [property: JsonPropertyName("outfit_id")] Guid OutfitId,
     [property: JsonPropertyName("model_image")] string ModelImage,
-    [property: JsonPropertyName("sequential_flow_enabled")] bool SequentialFlowEnabled,
-    [property: JsonPropertyName("garments")] IReadOnlyList<HttpTryOnGarment> Garments);
+    [property: JsonPropertyName("try_on_mode")] string TryOnMode,
+    [property: JsonPropertyName("body_try_on_items")] IReadOnlyList<HttpTryOnGarment> BodyTryOnItems,
+    [property: JsonPropertyName("visual_only_items")] IReadOnlyList<HttpTryOnGarment> VisualOnlyItems);
 
 file sealed record HttpTryOnGarment(
     [property: JsonPropertyName("id")] Guid Id,

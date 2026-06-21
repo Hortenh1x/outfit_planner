@@ -24,30 +24,48 @@ public sealed class FashnTryOnProvider : ITryOnProvider
     private readonly HttpClient _http;
     private readonly FashnTryOnSettings _settings;
 
+    public string Name => nameof(FashnTryOnProvider);
+
+    public TryOnProviderCapabilities Capabilities => new(
+        Name,
+        _settings.ModelName,
+        _settings.Mode,
+        $"{_settings.ModelName}:{_settings.Mode}",
+        new HashSet<TryOnMode>
+        {
+            TryOnMode.SingleGarmentTryOn,
+            TryOnMode.SequentialOutfitTryOn
+        });
+
     public FashnTryOnProvider(HttpClient http, FashnTryOnSettings settings)
     {
         _http = http;
         _settings = settings;
     }
 
-    public TryOnGeneration Generate(string userId, Outfit outfit, string bodyReferencePhotoUrl, TryOnOptions options)
+    public TryOnGeneration Generate(TryOnProviderRequest request)
     {
         if (string.IsNullOrWhiteSpace(_settings.ApiKey))
         {
             throw new InvalidOperationException("FASHN API key is not configured.");
         }
 
-        if (outfit.Items.Count == 0)
+        if (!Capabilities.SupportedModes.Contains(request.Mode))
+        {
+            throw new InvalidOperationException($"FASHN does not support {request.Mode}.");
+        }
+
+        if (request.BodyTryOnItems.Count == 0)
         {
             throw new InvalidOperationException("At least one garment is required for FASHN try-on.");
         }
 
-        if (outfit.Items.Count > 1 && !options.SequentialFlowEnabled)
+        if (request.Mode == TryOnMode.SingleGarmentTryOn && request.BodyTryOnItems.Count != 1)
         {
             throw new InvalidOperationException("Enable sequential flow before sending a multi-garment outfit to FASHN.");
         }
 
-        return GenerateSequentially(bodyReferencePhotoUrl, outfit.Items);
+        return GenerateSequentially(request.BodyReferencePhotoUrl, request.BodyTryOnItems);
     }
 
     private TryOnGeneration GenerateSequentially(string bodyReferencePhotoUrl, IReadOnlyList<OutfitItem> items)

@@ -46,6 +46,7 @@ This file is durable working context for Codex agents in this project.
 - Privacy endpoints include `DELETE /api/account`, `GET /api/account/export`, `DELETE /api/body-reference-photos/{id}`, `DELETE /api/try-on-jobs/{id}/output`, and `POST /api/privacy/purge-ai-outputs`.
 - Try-on defaults to `MockTryOnProvider`. FASHN is opt-in with `TryOn__Provider=Fashn` and `Fashn__ApiKey`.
 - Try-on cost estimates use Domain `TryOnMode` and Application `TryOnCostEstimator`; body try-on categories are top, bottom, dress, and outerwear, while shoes, bags, accessories, and hats are visual-only outside composite mode.
+- Try-on providers use Application `TryOnProviderRequest` with explicit `TryOnMode`, body try-on items, visual-only items, and provider generation settings; the legacy outfit/options overload is temporary compatibility for `TryOnService`.
 - Multi-garment FASHN generation needs the Builder page `Sequential flow` toggle.
 
 ## Common Commands

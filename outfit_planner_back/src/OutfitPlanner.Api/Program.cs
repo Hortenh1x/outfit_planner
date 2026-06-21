@@ -200,6 +200,9 @@ builder.Services.AddHttpClient("local-vton");
 builder.Services.AddHttpClient("local-cat-vton");
 builder.Services.AddHttpClient("replicate");
 builder.Services.AddHttpClient("fal");
+builder.Services.AddHttpClient("composite-fashn");
+builder.Services.AddHttpClient("self-hosted-catvton");
+builder.Services.AddHttpClient("general-image-edit");
 builder.Services.AddSingleton<ITryOnProvider>(provider => CreateTryOnProvider(provider, builder.Configuration));
 var redisConnectionString = builder.Configuration["ConnectionStrings:Redis"] ?? builder.Configuration.GetConnectionString("Redis");
 if (string.IsNullOrWhiteSpace(redisConnectionString))
@@ -1036,6 +1039,15 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
         "fal" => new FalProvider(
             httpFactory.CreateClient("fal"),
             HttpProviderSettings(configuration, "Fal", "https://fal.run/", "/try-on", requiresApiKey: true)),
+        "compositefashn" or "composite-fashn" => new CompositeFashnTryOnProvider(
+            httpFactory.CreateClient("composite-fashn"),
+            HttpProviderSettings(configuration, "CompositeFashn", "https://api.fashn.ai/v1/", "/try-on", requiresApiKey: true)),
+        "selfhostedcatvton" or "self-hosted-catvton" => new SelfHostedCatVtonProvider(
+            httpFactory.CreateClient("self-hosted-catvton"),
+            HttpProviderSettings(configuration, "SelfHostedCatVton", "http://localhost:7861/", "/try-on", requiresApiKey: false)),
+        "generalimageedit" or "general-image-edit" => new GeneralImageEditTryOnProvider(
+            httpFactory.CreateClient("general-image-edit"),
+            HttpProviderSettings(configuration, "GeneralImageEdit", "https://api.openai.com/v1/", "/images/edits", requiresApiKey: true)),
         _ => new MockTryOnProvider()
     };
 }
