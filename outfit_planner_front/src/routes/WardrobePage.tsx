@@ -1,171 +1,197 @@
-import { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ImagePlus, Plus } from 'lucide-react';
-import { createGarment, deleteGarment, listGarments, uploadGarmentPhoto } from '../api/client';
-import { GARMENT_CATEGORIES, groupGarmentsByCategory } from '../features/outfits/outfitUtils';
-import { validateUploadImageFile } from '../features/uploads/imageFile';
-import { GarmentColumn } from '../features/wardrobe/GarmentColumn';
-import { CategorySegmentedControl } from '../shared/ui/GarmentCategoryControl';
-import { FilePicker } from '../shared/ui/FilePicker';
-import { MetricOrb } from '../shared/ui/MetricOrb';
-import { PageHeader } from '../shared/ui/PageHeader';
-import { PanelTitle } from '../shared/ui/PanelTitle';
-import { SkeletonGrid } from '../shared/ui/Skeletons';
-import type { GarmentCategory } from '../types';
+import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { listGarments, type UpdateGarmentInput } from '../api/client';
+import { GarmentCard } from '../features/wardrobe/GarmentCard';
+import { GarmentEditor, type GarmentEditorSaveInput } from '../features/wardrobe/GarmentEditor';
+import { WardrobeFilters, type WardrobeViewMode } from '../features/wardrobe/WardrobeFilterControls';
+import { WardrobeUploadPanel, type WardrobeUploadDefaults } from '../features/wardrobe/WardrobeUploadPanel';
+import {
+  defaultWardrobeFilters,
+  filterGarmentsByLocalTags,
+  toGarmentFilters,
+  type WardrobeFilterState
+} from '../features/wardrobe/wardrobeFilters';
+import { useWardrobeMutations, wardrobeQueryKey } from '../features/wardrobe/wardrobeMutations';
+import {
+  createUploadQueueItems,
+  updateUploadQueueItem,
+  type UploadQueueItem,
+  type UploadQueueItemUpdates
+} from '../features/wardrobe/wardrobeUpload';
+import type { GarmentItem } from '../types';
+
+const defaultUploadDefaults: WardrobeUploadDefaults = {
+  category: 'Top',
+  color: '',
+  season: [],
+  tags: []
+};
 
 export function WardrobePage() {
-  const queryClient = useQueryClient();
-  const garmentsQuery = useQuery({ queryKey: ['garments'], queryFn: listGarments });
-  const [form, setForm] = useState({
-    name: '',
-    category: 'Top' as GarmentCategory,
-    tags: ''
+  const [filters, setFilters] = useState<WardrobeFilterState>(defaultWardrobeFilters);
+  const [viewMode, setViewMode] = useState<WardrobeViewMode>('grid');
+  const [editingGarment, setEditingGarment] = useState<GarmentItem | null>(null);
+  const [uploadDefaults, setUploadDefaults] = useState<WardrobeUploadDefaults>(defaultUploadDefaults);
+  const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+  const apiFilters = useMemo(() => toGarmentFilters(filters), [filters]);
+  const garmentsQuery = useQuery({
+    queryKey: [...wardrobeQueryKey, apiFilters],
+    queryFn: () => listGarments(apiFilters)
   });
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
-  const [photoPreviewUrl, setPhotoPreviewUrl] = useState('');
-  const [fileInputKey, setFileInputKey] = useState(0);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const createMutation = useMutation({
-    mutationFn: async (input: { name: string; category: GarmentCategory; photo: File; tags: string[] }) => {
-      const uploadedPhoto = await uploadGarmentPhoto(input.photo);
-      return await createGarment({
-        name: input.name,
-        category: input.category,
-        imageUrl: uploadedPhoto.url,
-        thumbnailUrl: uploadedPhoto.url,
-        tags: input.tags
-      });
-    },
-    onSuccess: () => {
-      setForm({ name: '', category: 'Top', tags: '' });
-      setPhotoFile(null);
-      setPhotoPreviewUrl('');
-      setFileInputKey((key) => key + 1);
-      setUploadError(null);
-      void queryClient.invalidateQueries({ queryKey: ['garments'] });
-    }
-  });
-  const deleteGarmentMutation = useMutation({
-    mutationFn: deleteGarment,
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['garments'] });
-    }
-  });
-  const garments = garmentsQuery.data ?? [];
-  const grouped = groupGarmentsByCategory(garments);
+  const mutations = useWardrobeMutations();
+  const allGarments = garmentsQuery.data ?? [];
+  const garments = filterGarmentsByLocalTags(allGarments, filters.tag);
+  const existingTags = useMemo(
+    () => Array.from(new Set([...uploadDefaults.tags, ...allGarments.flatMap((garment) => garment.tags)])).slice(0, 8),
+    [allGarments, uploadDefaults.tags]
+  );
 
-  useEffect(() => {
-    return () => {
-      if (photoPreviewUrl) {
-        URL.revokeObjectURL(photoPreviewUrl);
+  function addFiles(files: File[]) {
+    if (files.length === 0) {
+      return;
+    }
+
+    setEditingGarment(null);
+    setUploadQueue((current) => [
+      ...current,
+      ...createUploadQueueItems(files, {
+        category: uploadDefaults.category,
+        color: uploadDefaults.color,
+        season: uploadDefaults.season,
+        existingTags
+      })
+    ]);
+  }
+
+  function changeQueueItem(itemId: string, updates: UploadQueueItemUpdates) {
+    setUploadQueue((current) => current.map((item) => (item.id === itemId ? updateUploadQueueItem(item, updates) : item)));
+  }
+
+  function acceptSuggestedTag(itemId: string, tag: string) {
+    setUploadQueue((current) => current.map((item) => {
+      if (item.id !== itemId || item.tags.includes(tag)) {
+        return item;
       }
-    };
-  }, [photoPreviewUrl]);
+
+      return updateUploadQueueItem(item, { tags: [...item.tags, tag] });
+    }));
+  }
+
+  function resetFilters() {
+    setFilters(defaultWardrobeFilters);
+  }
+
+  function saveEditedGarment(garmentId: string, input: GarmentEditorSaveInput) {
+    const { imageUrl: _imageUrl, thumbnailUrl: _thumbnailUrl, ...metadataInput } = input;
+    mutations.editMutation.mutate(
+      { garmentId, input: metadataInput satisfies UpdateGarmentInput },
+      { onSuccess: () => setEditingGarment(null) }
+    );
+  }
+
+  const hasActiveFilters = JSON.stringify(filters) !== JSON.stringify(defaultWardrobeFilters);
 
   return (
-    <section className="page-grid wardrobe-view">
-      <div className="workspace">
-        <PageHeader
-          eyebrow="Wardrobe"
-          title="Shape a tactile closet from your photos"
-          text="Upload clean garment photos, keep categories strict, and build outfits from pieces that feel ready to touch."
+    <section className="wardrobe-editorial-page">
+      <div className="wardrobe-main">
+        <header className="wardrobe-hero">
+          <span>My wardrobe</span>
+          <h1>Every piece has <em>a purpose.</em></h1>
+        </header>
+        <WardrobeFilters
+          filters={filters}
+          itemCount={garments.length}
+          viewMode={viewMode}
+          onChange={setFilters}
+          onReset={resetFilters}
+          onViewModeChange={setViewMode}
         />
-        <div className="wardrobe-summary">
-          <MetricOrb label="Tops" value={grouped.Top.length} tone="violet" />
-          <MetricOrb label="Bottoms" value={grouped.Bottom.length} tone="blue" />
-          <MetricOrb label="Pieces" value={garments.length} tone="pink" />
-        </div>
         {garmentsQuery.isLoading ? (
-          <SkeletonGrid />
+          <div className="wardrobe-skeleton-grid" aria-label="Loading wardrobe">
+            {Array.from({ length: 8 }).map((_, index) => <span key={index} />)}
+          </div>
+        ) : garments.length === 0 ? (
+          <WardrobeEmptyState filtered={hasActiveFilters} onReset={resetFilters} />
         ) : (
-          <div className="wardrobe-columns">
-            {GARMENT_CATEGORIES.map((category) => (
-              <GarmentColumn
-                key={category}
-                title={category}
-                items={grouped[category]}
-                deletingId={deleteGarmentMutation.isPending ? deleteGarmentMutation.variables : undefined}
-                onDelete={(id) => deleteGarmentMutation.mutate(id)}
+          <div className={`wardrobe-catalog ${viewMode}`} aria-label="Wardrobe catalog">
+            {garments.map((garment) => (
+              <GarmentCard
+                key={garment.id}
+                garment={garment}
+                needsBetterPhoto={needsBetterPhoto(garment)}
+                pendingAction={pendingActionFor(garment, mutations)}
+                onArchive={(item) => mutations.archiveMutation.mutate(item)}
+                onDelete={(item) => mutations.deleteMutation.mutate(item.id)}
+                onDuplicate={(item) => mutations.duplicateMutation.mutate(item)}
+                onEdit={setEditingGarment}
+                onFavorite={(item) => mutations.favoriteMutation.mutate(item)}
               />
             ))}
           </div>
         )}
-        {deleteGarmentMutation.error ? <p className="error">{deleteGarmentMutation.error.message}</p> : null}
+        {[
+          garmentsQuery.error,
+          mutations.favoriteMutation.error,
+          mutations.archiveMutation.error,
+          mutations.editMutation.error,
+          mutations.duplicateMutation.error,
+          mutations.deleteMutation.error,
+          mutations.uploadQueueMutation.error
+        ].filter(Boolean).map((error) => (
+          <p className="wardrobe-error" key={(error as Error).message}>{(error as Error).message}</p>
+        ))}
       </div>
-      <aside className="tool-panel add-garment-panel">
-        <PanelTitle icon={<ImagePlus size={19} />} title="Add garment" />
-        <form
-          className="stack"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!photoFile) {
-              setUploadError('Choose a JPG, PNG, or WebP photo from your device.');
-              return;
-            }
-
-            createMutation.mutate({
-              name: form.name,
-              category: form.category,
-              photo: photoFile,
-              tags: form.tags.split(',').map((tag) => tag.trim()).filter(Boolean)
-            });
-          }}
-        >
-          <label>
-            <span>Name</span>
-            <input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
-          </label>
-          <CategorySegmentedControl
-            value={form.category}
-            onChange={(category) => setForm({ ...form, category })}
-          />
-          <FilePicker
-            key={fileInputKey}
-            label="Garment photo"
-            fileName={photoFile?.name}
-            onChange={(file) => {
-              if (!file) {
-                setPhotoFile(null);
-                setPhotoPreviewUrl('');
-                return;
-              }
-
-              try {
-                validateUploadImageFile(file);
-              } catch (error) {
-                setPhotoFile(null);
-                setPhotoPreviewUrl('');
-                setUploadError((error as Error).message);
-                return;
-              }
-
-              if (photoPreviewUrl) {
-                URL.revokeObjectURL(photoPreviewUrl);
-              }
-
-              setPhotoFile(file);
-              setPhotoPreviewUrl(URL.createObjectURL(file));
-              setUploadError(null);
-            }}
-          />
-          {photoPreviewUrl ? (
-            <div className="upload-preview">
-              <img src={photoPreviewUrl} alt={`${form.name || 'Garment'} upload preview`} />
-              <span>{photoFile?.name}</span>
-            </div>
-          ) : null}
-          <label>
-            <span>Tags</span>
-            <input value={form.tags} onChange={(event) => setForm({ ...form, tags: event.target.value })} />
-          </label>
-          <button type="submit" className="clay-button primary-action" disabled={createMutation.isPending || !photoFile}>
-            <Plus size={16} />
-            {createMutation.isPending ? 'Uploading' : 'Add piece'}
-          </button>
-          {uploadError ? <p className="error">{uploadError}</p> : null}
-          {createMutation.error ? <p className="error">{createMutation.error.message}</p> : null}
-        </form>
-      </aside>
+      {editingGarment ? (
+        <GarmentEditor
+          garment={editingGarment}
+          isSaving={mutations.editMutation.isPending}
+          onCancel={() => setEditingGarment(null)}
+          onSave={saveEditedGarment}
+        />
+      ) : (
+        <WardrobeUploadPanel
+          queue={uploadQueue}
+          isUploading={mutations.uploadQueueMutation.isPending}
+          defaults={uploadDefaults}
+          onAcceptTag={acceptSuggestedTag}
+          onAddFiles={addFiles}
+          onChangeItem={changeQueueItem}
+          onDefaultsChange={setUploadDefaults}
+          onRemoveItem={(itemId) => setUploadQueue((current) => current.filter((item) => item.id !== itemId))}
+          onSubmitAll={() => mutations.uploadQueueMutation.mutate(uploadQueue, { onSuccess: () => setUploadQueue([]) })}
+        />
+      )}
     </section>
   );
+}
+
+function WardrobeEmptyState({ filtered, onReset }: { filtered: boolean; onReset: () => void }) {
+  return (
+    <section className="wardrobe-empty">
+      <h2>{filtered ? 'No pieces match these filters' : 'Start with a front-view shirt, jeans, shoes, and one outer layer.'}</h2>
+      <p>{filtered ? 'Reset filters to return to the full closet.' : 'A few clean photos are enough to make Builder and Calendar useful.'}</p>
+      {filtered ? <button type="button" className="wardrobe-secondary-button" onClick={onReset}>Reset filters</button> : null}
+    </section>
+  );
+}
+
+function pendingActionFor(garment: GarmentItem, mutations: ReturnType<typeof useWardrobeMutations>): string | undefined {
+  if (mutations.favoriteMutation.isPending && mutations.favoriteMutation.variables?.id === garment.id) {
+    return 'favorite';
+  }
+  if (mutations.archiveMutation.isPending && mutations.archiveMutation.variables?.id === garment.id) {
+    return 'archive';
+  }
+  if (mutations.duplicateMutation.isPending && mutations.duplicateMutation.variables?.id === garment.id) {
+    return 'duplicate';
+  }
+  if (mutations.deleteMutation.isPending && mutations.deleteMutation.variables === garment.id) {
+    return 'delete';
+  }
+  return undefined;
+}
+
+function needsBetterPhoto(garment: GarmentItem): boolean {
+  const imageName = `${garment.imageUrl} ${garment.thumbnailUrl ?? ''}`.toLowerCase();
+  return !garment.thumbnailUrl || /\b(img|image|photo|dsc|pxl)[_-]?\d+\b/.test(imageName);
 }
