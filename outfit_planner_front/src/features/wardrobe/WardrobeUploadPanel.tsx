@@ -39,12 +39,25 @@ export function WardrobeUploadPanel({
 }: WardrobeUploadPanelProps) {
   const submitDisabled = isUploading || queue.every((item) => item.status === 'invalid');
 
-  function addInputFiles(fileList: FileList | null) {
+  function addInputFiles(fileList: FileList | null): boolean {
+    if (isUploading) {
+      return false;
+    }
+
     onAddFiles(Array.from(fileList ?? []));
+    return true;
+  }
+
+  function handleDragOver(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
   }
 
   function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
+    if (isUploading) {
+      return;
+    }
+
     onAddFiles(Array.from(event.dataTransfer.files));
   }
 
@@ -62,6 +75,7 @@ export function WardrobeUploadPanel({
           <span>Type</span>
           <select
             value={defaults.category}
+            disabled={isUploading}
             onChange={(event) => onDefaultsChange({ ...defaults, category: event.target.value as GarmentCategory })}
           >
             {GARMENT_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
@@ -69,12 +83,17 @@ export function WardrobeUploadPanel({
         </label>
         <label>
           <span>Color</span>
-          <input value={defaults.color} onChange={(event) => onDefaultsChange({ ...defaults, color: event.target.value })} />
+          <input
+            value={defaults.color}
+            disabled={isUploading}
+            onChange={(event) => onDefaultsChange({ ...defaults, color: event.target.value })}
+          />
         </label>
         <label>
           <span>Season</span>
           <input
             value={defaults.season.join(', ')}
+            disabled={isUploading}
             onChange={(event) => onDefaultsChange({ ...defaults, season: splitTokens(event.target.value) })}
           />
         </label>
@@ -82,11 +101,12 @@ export function WardrobeUploadPanel({
           <span>Tags</span>
           <input
             value={defaults.tags.join(', ')}
+            disabled={isUploading}
             onChange={(event) => onDefaultsChange({ ...defaults, tags: splitTokens(event.target.value) })}
           />
         </label>
       </div>
-      <label className="wardrobe-drop-zone" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>
+      <label className="wardrobe-drop-zone" aria-disabled={isUploading} onDragOver={handleDragOver} onDrop={handleDrop}>
         <CloudUpload size={24} aria-hidden="true" />
         <strong>Upload photos</strong>
         <span>Drag and drop or click to browse. JPG, PNG, WebP, up to 50 MB.</span>
@@ -95,7 +115,11 @@ export function WardrobeUploadPanel({
           type="file"
           accept="image/png,image/jpeg,image/webp"
           multiple
-          onChange={(event) => addInputFiles(event.target.files)}
+          disabled={isUploading}
+          onChange={(event) => {
+            addInputFiles(event.target.files);
+            event.target.value = '';
+          }}
         />
       </label>
       <label className="wardrobe-camera-input">
@@ -106,10 +130,20 @@ export function WardrobeUploadPanel({
           type="file"
           accept="image/*"
           capture="environment"
-          onChange={(event) => addInputFiles(event.target.files)}
+          disabled={isUploading}
+          onChange={(event) => {
+            addInputFiles(event.target.files);
+            event.target.value = '';
+          }}
         />
       </label>
-      <UploadQueue items={queue} onAcceptTag={onAcceptTag} onChangeItem={onChangeItem} onRemove={onRemoveItem} />
+      <UploadQueue
+        items={queue}
+        disabled={isUploading}
+        onAcceptTag={onAcceptTag}
+        onChangeItem={onChangeItem}
+        onRemove={onRemoveItem}
+      />
       <button type="button" className="wardrobe-primary-button" disabled={submitDisabled} onClick={onSubmitAll}>
         <Plus size={16} aria-hidden="true" />
         {isUploading ? 'Uploading' : 'Add garments'}
