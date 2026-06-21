@@ -3,9 +3,7 @@ import { Camera, CloudUpload, Plus } from 'lucide-react';
 import type { GarmentCategory } from '../../types';
 import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
 import { UploadQueue } from './UploadQueue';
-import { cleanPhotoChecklist, type UploadQueueItem } from './wardrobeUpload';
-
-type UploadQueueItemUpdates = Partial<Pick<UploadQueueItem, 'name' | 'category' | 'tags' | 'primaryColor' | 'season'>>;
+import { cleanPhotoChecklist, type UploadQueueItem, type UploadQueueItemUpdates } from './wardrobeUpload';
 
 export interface WardrobeUploadDefaults {
   category: GarmentCategory;
@@ -37,7 +35,8 @@ export function WardrobeUploadPanel({
   onRemoveItem,
   onSubmitAll
 }: WardrobeUploadPanelProps) {
-  const submitDisabled = isUploading || queue.every((item) => item.status === 'invalid');
+  const hasUploadableItem = queue.some((item) => item.status === 'ready' || item.status === 'failed');
+  const submitDisabled = isUploading || !hasUploadableItem;
 
   function addInputFiles(fileList: FileList | null): boolean {
     if (isUploading) {

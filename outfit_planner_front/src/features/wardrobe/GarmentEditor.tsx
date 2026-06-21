@@ -30,10 +30,31 @@ interface GarmentEditorFormState {
 
 export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEditorProps) {
   const [form, setForm] = useState<GarmentEditorFormState>(() => formFromGarment(garment));
+  const [isDirty, setIsDirty] = useState(false);
+  const [source, setSource] = useState(() => sourceFromGarment(garment));
 
   useEffect(() => {
-    setForm(formFromGarment(garment));
-  }, [garment.id]);
+    const nextSource = sourceFromGarment(garment);
+
+    if (nextSource.garmentId !== source.garmentId) {
+      setForm(nextSource.form);
+      setSource(nextSource);
+      setIsDirty(false);
+      return;
+    }
+
+    if (nextSource.signature !== source.signature) {
+      setSource(nextSource);
+      if (!isDirty) {
+        setForm(nextSource.form);
+      }
+    }
+  }, [garment, isDirty, source]);
+
+  function updateForm(updates: Partial<GarmentEditorFormState>) {
+    setIsDirty(true);
+    setForm((current) => ({ ...current, ...updates }));
+  }
 
   return (
     <form
@@ -60,7 +81,7 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
         <span>Name</span>
         <input
           value={form.name}
-          onChange={(event) => setForm({ ...form, name: event.target.value })}
+          onChange={(event) => updateForm({ name: event.target.value })}
           required
           disabled={isSaving}
         />
@@ -69,7 +90,7 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
         <span>Type</span>
         <select
           value={form.category}
-          onChange={(event) => setForm({ ...form, category: event.target.value as GarmentCategory })}
+          onChange={(event) => updateForm({ category: event.target.value as GarmentCategory })}
           disabled={isSaving}
         >
           {GARMENT_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
@@ -84,7 +105,7 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
         <span>Color</span>
         <input
           value={form.primaryColor}
-          onChange={(event) => setForm({ ...form, primaryColor: event.target.value })}
+          onChange={(event) => updateForm({ primaryColor: event.target.value })}
           disabled={isSaving}
         />
       </label>
@@ -92,7 +113,7 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
         <span>Season</span>
         <input
           value={form.season}
-          onChange={(event) => setForm({ ...form, season: event.target.value })}
+          onChange={(event) => updateForm({ season: event.target.value })}
           disabled={isSaving}
         />
       </label>
@@ -100,7 +121,7 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
         <span>Tags</span>
         <input
           value={form.tags}
-          onChange={(event) => setForm({ ...form, tags: event.target.value })}
+          onChange={(event) => updateForm({ tags: event.target.value })}
           disabled={isSaving}
         />
       </label>
@@ -123,6 +144,19 @@ function formFromGarment(garment: GarmentItem): GarmentEditorFormState {
     primaryColor: garment.primaryColor ?? '',
     season: (garment.season ?? []).join(', '),
     tags: garment.tags.join(', ')
+  };
+}
+
+function sourceFromGarment(garment: GarmentItem): {
+  garmentId: string;
+  form: GarmentEditorFormState;
+  signature: string;
+} {
+  const form = formFromGarment(garment);
+  return {
+    garmentId: garment.id,
+    form,
+    signature: JSON.stringify(form)
   };
 }
 
