@@ -68,6 +68,9 @@ var tests = new List<(string Name, Action Test)>
     ("postgres schema contains privacy storage auth hardening and try-on retention fields", TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields),
     ("api uses DbUp migrations instead of startup schema initializer", TestApiUsesDbUpMigrations),
     ("new try-on provider adapters implement provider port", TestProviderAdaptersImplementPort),
+    ("json try-on provider posts mode-aware payloads without dropping base path", TestJsonProviderPayloadAndEndpointPath),
+    ("json try-on provider capabilities are mode specific", TestJsonProviderCapabilitiesAreModeSpecific),
+    ("json try-on provider rejects unsupported modes before network call", TestJsonProviderRejectsUnsupportedModesBeforeNetworkCall),
     ("fashn provider sends only body try-on items for normal modes", TestFashnProviderSendsOnlyBodyTryOnItems),
     ("fashn provider requires api key before network call", TestFashnProviderRequiresApiKey),
     ("fashn provider submits try-on request and polls status", TestFashnProviderSubmitsRequestAndPollsStatus),
@@ -929,6 +932,9 @@ static void TestApiRegistersRedisQueueAndProviderChoices()
     AssertTrue(program.Contains("LocalCatVton", StringComparison.Ordinal), "api should allow selecting the local CatVTON provider.");
     AssertTrue(program.Contains("Replicate", StringComparison.Ordinal), "api should allow selecting the Replicate provider.");
     AssertTrue(program.Contains("Fal", StringComparison.Ordinal), "api should allow selecting the Fal provider.");
+    AssertTrue(program.Contains("compositefashntryonprovider", StringComparison.Ordinal), "api should allow selecting the composite FASHN provider by full class-name alias.");
+    AssertTrue(program.Contains("selfhostedcatvtonprovider", StringComparison.Ordinal), "api should allow selecting the self-hosted CatVTON provider by full class-name alias.");
+    AssertTrue(program.Contains("generalimageedittryonprovider", StringComparison.Ordinal), "api should allow selecting the general image edit provider by full class-name alias.");
 }
 
 static void TestDailySchedulePerUser()
@@ -1268,6 +1274,105 @@ static void TestProviderAdaptersImplementPort()
     }
 }
 
+static void TestJsonProviderPayloadAndEndpointPath()
+{
+    var handler = new RecordingHttpProviderHandler();
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"provider_job_id\":\"provider-job-1\",\"output_image_url\":\"https://cdn.test/output.png\"}");
+    var outfitId = Guid.Parse("20000000-0000-0000-0000-000000000001");
+    var bodyItemId = Guid.Parse("20000000-0000-0000-0000-000000000002");
+    var visualItemId = Guid.Parse("20000000-0000-0000-0000-000000000003");
+    var provider = new CompositeFashnTryOnProvider(
+        new HttpClient(handler),
+        new HttpTryOnProviderSettings("https://api.test/v1/", "/try-on", "test-key", "composite-v1", RequiresApiKey: true));
+
+    var generation = provider.Generate(new TryOnProviderRequest(
+        "user-a",
+        outfitId,
+        TryOnMode.ExperimentalCompositeTryOn,
+        "https://app.test/body.jpg",
+        new[]
+        {
+            new OutfitItem(bodyItemId, "white tee", GarmentCategory.Top, BodyZone.Torso, "https://app.test/top.png")
+        },
+        new[]
+        {
+            new OutfitItem(visualItemId, "leather bag", GarmentCategory.Bag, BodyZone.Accessory, "https://app.test/bag.png")
+        },
+        new TryOnGenerationSettings("composite-v1", "experimental-composite", "settings-a")));
+
+    AssertEqual("provider-job-1", generation.ProviderJobId, "json provider should return provider job id from response");
+    AssertEqual("https://cdn.test/output.png", generation.OutputImageUrl, "json provider should return output image url from response");
+    AssertEqual(1, handler.Requests.Count, "json provider should post one request");
+    AssertEqual(HttpMethod.Post, handler.Requests[0].Method, "json provider should use POST");
+    AssertEqual("/v1/try-on", handler.Requests[0].Path, "json provider should preserve the base URI path when endpoint starts with slash");
+    AssertEqual("Bearer", handler.Requests[0].Authorization?.Scheme, "json provider should use bearer auth when api key is configured");
+    AssertEqual("test-key", handler.Requests[0].Authorization?.Parameter, "json provider should send configured api key");
+
+    using var body = JsonDocument.Parse(handler.Requests[0].Body);
+    var root = body.RootElement;
+    AssertEqual("composite-v1", root.GetProperty("model_name").GetString(), "json provider should send configured model");
+    AssertEqual("user-a", root.GetProperty("user_id").GetString(), "json provider should send user id");
+    AssertEqual(outfitId, root.GetProperty("outfit_id").GetGuid(), "json provider should send outfit id");
+    AssertEqual("https://app.test/body.jpg", root.GetProperty("model_image").GetString(), "json provider should send body reference image");
+    AssertEqual("ExperimentalCompositeTryOn", root.GetProperty("try_on_mode").GetString(), "json provider should send try-on mode");
+
+    var bodyItems = root.GetProperty("body_try_on_items");
+    AssertEqual(1, bodyItems.GetArrayLength(), "json provider should send body try-on item count");
+    AssertEqual(bodyItemId, bodyItems[0].GetProperty("id").GetGuid(), "json provider should send body item id");
+    AssertEqual("white tee", bodyItems[0].GetProperty("name").GetString(), "json provider should send body item name");
+    AssertEqual("Top", bodyItems[0].GetProperty("category").GetString(), "json provider should send body item category");
+    AssertEqual("https://app.test/top.png", bodyItems[0].GetProperty("image_url").GetString(), "json provider should send body item image");
+
+    var visualItems = root.GetProperty("visual_only_items");
+    AssertEqual(1, visualItems.GetArrayLength(), "json provider should send visual-only item count");
+    AssertEqual(visualItemId, visualItems[0].GetProperty("id").GetGuid(), "json provider should send visual-only item id");
+    AssertEqual("leather bag", visualItems[0].GetProperty("name").GetString(), "json provider should send visual-only item name");
+    AssertEqual("Bag", visualItems[0].GetProperty("category").GetString(), "json provider should send visual-only item category");
+    AssertEqual("https://app.test/bag.png", visualItems[0].GetProperty("image_url").GetString(), "json provider should send visual-only item image");
+}
+
+static void TestJsonProviderCapabilitiesAreModeSpecific()
+{
+    var settings = new HttpTryOnProviderSettings("https://api.test/v1/", "try-on", "test-key", "model-x", RequiresApiKey: true);
+    var composite = new CompositeFashnTryOnProvider(new HttpClient(new RecordingHttpProviderHandler()), settings);
+    var selfHosted = new SelfHostedCatVtonProvider(new HttpClient(new RecordingHttpProviderHandler()), settings);
+    var imageEdit = new GeneralImageEditTryOnProvider(new HttpClient(new RecordingHttpProviderHandler()), settings);
+
+    AssertSupportedModes(
+        composite,
+        new[] { TryOnMode.ExperimentalCompositeTryOn },
+        "composite FASHN should only advertise composite mode");
+    AssertEqual("experimental-composite", composite.Capabilities.ProviderMode, "composite FASHN should expose its provider mode");
+    AssertEqual("model-x:experimental-composite", composite.Capabilities.SettingsHash, "composite FASHN settings hash should include explicit provider mode");
+
+    AssertSupportedModes(
+        selfHosted,
+        new[] { TryOnMode.SingleGarmentTryOn, TryOnMode.SequentialOutfitTryOn },
+        "self-hosted CatVTON should only advertise body try-on modes");
+    AssertEqual("cat-vton", selfHosted.Capabilities.ProviderMode, "self-hosted CatVTON should expose its provider mode");
+    AssertEqual("model-x:cat-vton", selfHosted.Capabilities.SettingsHash, "self-hosted CatVTON settings hash should include explicit provider mode");
+
+    AssertSupportedModes(
+        imageEdit,
+        new[] { TryOnMode.ExperimentalCompositeTryOn },
+        "general image edit should only advertise composite mode");
+    AssertEqual("image-edit", imageEdit.Capabilities.ProviderMode, "general image edit should expose its provider mode");
+    AssertEqual("model-x:image-edit", imageEdit.Capabilities.SettingsHash, "general image edit settings hash should include explicit provider mode");
+}
+
+static void TestJsonProviderRejectsUnsupportedModesBeforeNetworkCall()
+{
+    var handler = new RecordingHttpProviderHandler();
+    var provider = new CompositeFashnTryOnProvider(
+        new HttpClient(handler),
+        new HttpTryOnProviderSettings("https://api.test/v1/", "try-on", "test-key", "composite-v1", RequiresApiKey: true));
+
+    AssertThrows<InvalidOperationException>(
+        () => provider.Generate(CreateProviderRequest(CreateSingleGarmentOutfit(), TryOnMode.SingleGarmentTryOn)),
+        "json provider should reject unsupported modes");
+    AssertEqual(0, handler.Requests.Count, "unsupported mode must stop before network call");
+}
+
 static void TestFashnProviderSendsOnlyBodyTryOnItems()
 {
     var handler = new RecordingFashnHandler();
@@ -1497,6 +1602,19 @@ static void AssertTrue(bool condition, string message)
     }
 }
 
+static void AssertSupportedModes(ITryOnProvider provider, IReadOnlyCollection<TryOnMode> expectedModes, string message)
+{
+    var supportedModes = provider.Capabilities.SupportedModes;
+
+    AssertEqual(expectedModes.Count, supportedModes.Count, $"{message}: supported mode count");
+    foreach (var mode in expectedModes)
+    {
+        AssertTrue(supportedModes.Contains(mode), $"{message}: should include {mode}.");
+    }
+
+    AssertTrue(!supportedModes.Contains(TryOnMode.ClothesOnlyPreview), $"{message}: HTTP providers should not advertise clothes-only preview.");
+}
+
 static void AssertAssemblyDoesNotReference(IEnumerable<string> references, IEnumerable<string> forbidden, string message)
 {
     var referenceSet = references.ToHashSet(StringComparer.Ordinal);
@@ -1507,6 +1625,56 @@ static void AssertAssemblyDoesNotReference(IEnumerable<string> references, IEnum
         throw new InvalidOperationException($"{message} Forbidden references: {string.Join(", ", forbiddenMatches)}.");
     }
 }
+
+sealed class RecordingHttpProviderHandler : HttpMessageHandler
+{
+    private readonly Queue<HttpResponseMessage> _responses = new();
+
+    public List<RecordedHttpProviderRequest> Requests { get; } = new();
+
+    public void EnqueueJson(HttpStatusCode statusCode, string body)
+    {
+        _responses.Enqueue(new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        });
+    }
+
+    protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        RecordRequest(request, cancellationToken);
+        return NextResponse();
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Requests.Add(await RecordedRequestAsync(request, cancellationToken));
+        return NextResponse();
+    }
+
+    private void RecordRequest(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Requests.Add(RecordedRequestAsync(request, cancellationToken).GetAwaiter().GetResult());
+    }
+
+    private async Task<RecordedHttpProviderRequest> RecordedRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        return new RecordedHttpProviderRequest(
+            request.Method,
+            request.RequestUri?.AbsolutePath ?? "",
+            request.Headers.Authorization,
+            request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken));
+    }
+
+    private HttpResponseMessage NextResponse()
+    {
+        return _responses.Count > 0
+            ? _responses.Dequeue()
+            : new HttpResponseMessage(HttpStatusCode.InternalServerError);
+    }
+}
+
+sealed record RecordedHttpProviderRequest(HttpMethod Method, string Path, AuthenticationHeaderValue? Authorization, string Body);
 
 sealed class CountingTryOnProvider : ITryOnProvider
 {

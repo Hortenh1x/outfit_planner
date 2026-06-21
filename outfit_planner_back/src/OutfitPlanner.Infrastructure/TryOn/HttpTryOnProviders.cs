@@ -17,7 +17,7 @@ public sealed record HttpTryOnProviderSettings(
 public sealed class LocalVtonProvider : JsonTryOnProvider
 {
     public LocalVtonProvider(HttpClient http, HttpTryOnProviderSettings settings)
-        : base(http, settings, "LocalVton")
+        : base(http, settings, "LocalVton", "single-garment", TryOnMode.SingleGarmentTryOn)
     {
     }
 }
@@ -25,7 +25,7 @@ public sealed class LocalVtonProvider : JsonTryOnProvider
 public sealed class LocalCatVtonProvider : JsonTryOnProvider
 {
     public LocalCatVtonProvider(HttpClient http, HttpTryOnProviderSettings settings)
-        : base(http, settings, "LocalCatVton")
+        : base(http, settings, "LocalCatVton", "cat-vton", TryOnMode.SingleGarmentTryOn, TryOnMode.SequentialOutfitTryOn)
     {
     }
 }
@@ -33,7 +33,7 @@ public sealed class LocalCatVtonProvider : JsonTryOnProvider
 public sealed class ReplicateProvider : JsonTryOnProvider
 {
     public ReplicateProvider(HttpClient http, HttpTryOnProviderSettings settings)
-        : base(http, settings, "Replicate")
+        : base(http, settings, "Replicate", "single-garment", TryOnMode.SingleGarmentTryOn)
     {
     }
 }
@@ -41,7 +41,7 @@ public sealed class ReplicateProvider : JsonTryOnProvider
 public sealed class FalProvider : JsonTryOnProvider
 {
     public FalProvider(HttpClient http, HttpTryOnProviderSettings settings)
-        : base(http, settings, "Fal")
+        : base(http, settings, "Fal", "single-garment", TryOnMode.SingleGarmentTryOn)
     {
     }
 }
@@ -49,7 +49,7 @@ public sealed class FalProvider : JsonTryOnProvider
 public sealed class SelfHostedCatVtonProvider : JsonTryOnProvider
 {
     public SelfHostedCatVtonProvider(HttpClient http, HttpTryOnProviderSettings settings)
-        : base(http, settings, nameof(SelfHostedCatVtonProvider))
+        : base(http, settings, nameof(SelfHostedCatVtonProvider), "cat-vton", TryOnMode.SingleGarmentTryOn, TryOnMode.SequentialOutfitTryOn)
     {
     }
 }
@@ -57,7 +57,7 @@ public sealed class SelfHostedCatVtonProvider : JsonTryOnProvider
 public sealed class CompositeFashnTryOnProvider : JsonTryOnProvider
 {
     public CompositeFashnTryOnProvider(HttpClient http, HttpTryOnProviderSettings settings)
-        : base(http, settings, nameof(CompositeFashnTryOnProvider))
+        : base(http, settings, nameof(CompositeFashnTryOnProvider), "experimental-composite", TryOnMode.ExperimentalCompositeTryOn)
     {
     }
 }
@@ -65,7 +65,7 @@ public sealed class CompositeFashnTryOnProvider : JsonTryOnProvider
 public sealed class GeneralImageEditTryOnProvider : JsonTryOnProvider
 {
     public GeneralImageEditTryOnProvider(HttpClient http, HttpTryOnProviderSettings settings)
-        : base(http, settings, nameof(GeneralImageEditTryOnProvider))
+        : base(http, settings, nameof(GeneralImageEditTryOnProvider), "image-edit", TryOnMode.ExperimentalCompositeTryOn)
     {
     }
 }
@@ -77,16 +77,25 @@ public abstract class JsonTryOnProvider : ITryOnProvider
     private readonly HttpClient _http;
     private readonly HttpTryOnProviderSettings _settings;
     private readonly string _providerName;
+    private readonly string _providerMode;
+    private readonly HashSet<TryOnMode> _supportedModes;
 
-    protected JsonTryOnProvider(HttpClient http, HttpTryOnProviderSettings settings, string providerName)
+    protected JsonTryOnProvider(
+        HttpClient http,
+        HttpTryOnProviderSettings settings,
+        string providerName,
+        string providerMode,
+        params TryOnMode[] supportedModes)
     {
         _http = http;
         _settings = settings;
         _providerName = providerName;
+        _providerMode = providerMode;
+        _supportedModes = supportedModes.ToHashSet();
 
         if (!string.IsNullOrWhiteSpace(settings.BaseUrl))
         {
-            _http.BaseAddress = new Uri(settings.BaseUrl);
+            _http.BaseAddress = NormalizeBaseUri(settings.BaseUrl);
         }
     }
 
@@ -95,15 +104,9 @@ public abstract class JsonTryOnProvider : ITryOnProvider
     public TryOnProviderCapabilities Capabilities => new(
         Name,
         _settings.ModelName,
-        "default",
-        $"{_settings.ModelName}:default",
-        new HashSet<TryOnMode>
-        {
-            TryOnMode.ClothesOnlyPreview,
-            TryOnMode.SingleGarmentTryOn,
-            TryOnMode.SequentialOutfitTryOn,
-            TryOnMode.ExperimentalCompositeTryOn
-        });
+        _providerMode,
+        $"{_settings.ModelName}:{_providerMode}",
+        new HashSet<TryOnMode>(_supportedModes));
 
     public TryOnGeneration Generate(TryOnProviderRequest request)
     {
@@ -112,12 +115,17 @@ public abstract class JsonTryOnProvider : ITryOnProvider
             throw new InvalidOperationException($"{_providerName} provider requires an API key.");
         }
 
+        if (!_supportedModes.Contains(request.Mode))
+        {
+            throw new InvalidOperationException($"{_providerName} provider does not support {request.Mode}.");
+        }
+
         if (string.IsNullOrWhiteSpace(_settings.Endpoint))
         {
             throw new InvalidOperationException($"{_providerName} provider endpoint is not configured.");
         }
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, _settings.Endpoint);
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, NormalizeEndpoint(_settings.Endpoint));
         if (!string.IsNullOrWhiteSpace(_settings.ApiKey))
         {
             httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.ApiKey);
@@ -166,6 +174,20 @@ public abstract class JsonTryOnProvider : ITryOnProvider
         }
 
         return new TryOnGeneration(providerJobId, outputImageUrl);
+    }
+
+    private static Uri NormalizeBaseUri(string baseUrl)
+    {
+        var trimmed = baseUrl.Trim();
+        return new Uri(trimmed.EndsWith("/", StringComparison.Ordinal) ? trimmed : $"{trimmed}/");
+    }
+
+    private static string NormalizeEndpoint(string endpoint)
+    {
+        var trimmed = endpoint.Trim();
+        return Uri.TryCreate(trimmed, UriKind.Absolute, out _)
+            ? trimmed
+            : trimmed.TrimStart('/');
     }
 
     private static string? ReadString(JsonElement element, string propertyName)
