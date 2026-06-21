@@ -19,6 +19,7 @@ import {
   type UploadQueueItemUpdates
 } from '../features/wardrobe/wardrobeUpload';
 import type { GarmentItem } from '../types';
+import '../features/wardrobe/wardrobe.css';
 
 const defaultUploadDefaults: WardrobeUploadDefaults = {
   category: 'Top',
