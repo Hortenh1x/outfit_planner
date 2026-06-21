@@ -1,16 +1,27 @@
 import type { DragEvent } from 'react';
 import { Camera, CloudUpload, Plus } from 'lucide-react';
+import type { GarmentCategory } from '../../types';
+import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
 import { UploadQueue } from './UploadQueue';
 import { cleanPhotoChecklist, type UploadQueueItem } from './wardrobeUpload';
 
 type UploadQueueItemUpdates = Partial<Pick<UploadQueueItem, 'name' | 'category' | 'tags' | 'primaryColor' | 'season'>>;
 
+export interface WardrobeUploadDefaults {
+  category: GarmentCategory;
+  color: string;
+  season: string[];
+  tags: string[];
+}
+
 interface WardrobeUploadPanelProps {
   queue: UploadQueueItem[];
   isUploading: boolean;
+  defaults: WardrobeUploadDefaults;
   onAcceptTag: (itemId: string, tag: string) => void;
   onAddFiles: (files: File[]) => void;
   onChangeItem: (itemId: string, updates: UploadQueueItemUpdates) => void;
+  onDefaultsChange: (defaults: WardrobeUploadDefaults) => void;
   onRemoveItem: (itemId: string) => void;
   onSubmitAll: () => void;
 }
@@ -18,9 +29,11 @@ interface WardrobeUploadPanelProps {
 export function WardrobeUploadPanel({
   queue,
   isUploading,
+  defaults,
   onAcceptTag,
   onAddFiles,
   onChangeItem,
+  onDefaultsChange,
   onRemoveItem,
   onSubmitAll
 }: WardrobeUploadPanelProps) {
@@ -43,6 +56,35 @@ export function WardrobeUploadPanel({
       </div>
       <div className="clean-checklist" aria-label="Clean photo checklist">
         {cleanPhotoChecklist.map((item) => <span key={item}>{item}</span>)}
+      </div>
+      <div className="wardrobe-upload-defaults" aria-label="Upload defaults">
+        <label>
+          <span>Type</span>
+          <select
+            value={defaults.category}
+            onChange={(event) => onDefaultsChange({ ...defaults, category: event.target.value as GarmentCategory })}
+          >
+            {GARMENT_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>Color</span>
+          <input value={defaults.color} onChange={(event) => onDefaultsChange({ ...defaults, color: event.target.value })} />
+        </label>
+        <label>
+          <span>Season</span>
+          <input
+            value={defaults.season.join(', ')}
+            onChange={(event) => onDefaultsChange({ ...defaults, season: splitTokens(event.target.value) })}
+          />
+        </label>
+        <label>
+          <span>Tags</span>
+          <input
+            value={defaults.tags.join(', ')}
+            onChange={(event) => onDefaultsChange({ ...defaults, tags: splitTokens(event.target.value) })}
+          />
+        </label>
       </div>
       <label className="wardrobe-drop-zone" onDragOver={(event) => event.preventDefault()} onDrop={handleDrop}>
         <CloudUpload size={24} aria-hidden="true" />
@@ -74,4 +116,8 @@ export function WardrobeUploadPanel({
       </button>
     </section>
   );
+}
+
+function splitTokens(value: string): string[] {
+  return value.split(',').map((token) => token.trim()).filter(Boolean);
 }
