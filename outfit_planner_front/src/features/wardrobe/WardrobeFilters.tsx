@@ -5,14 +5,25 @@ import type { WardrobeFilterState } from './wardrobeFilters';
 const colorOptions = ['', 'black', 'cream', 'brown', 'blue', 'red', 'green'];
 const seasonOptions = ['', 'spring', 'summer', 'fall', 'winter'];
 
+export type WardrobeViewMode = 'grid' | 'list';
+
 interface WardrobeFiltersProps {
   filters: WardrobeFilterState;
   itemCount: number;
+  viewMode: WardrobeViewMode;
   onChange: (filters: WardrobeFilterState) => void;
   onReset: () => void;
+  onViewModeChange: (viewMode: WardrobeViewMode) => void;
 }
 
-export function WardrobeFilters({ filters, itemCount, onChange, onReset }: WardrobeFiltersProps) {
+export function WardrobeFilters({
+  filters,
+  itemCount,
+  viewMode,
+  onChange,
+  onReset,
+  onViewModeChange
+}: WardrobeFiltersProps) {
   return (
     <section className="wardrobe-controls" aria-label="Wardrobe filters">
       <div className="wardrobe-search-row">
@@ -36,24 +47,23 @@ export function WardrobeFilters({ filters, itemCount, onChange, onReset }: Wardr
           </select>
         </label>
         <div className="wardrobe-view-buttons" aria-label="Catalog view">
-          <button type="button" aria-label="Grid view" aria-pressed="true">
+          <button type="button" aria-label="Grid view" aria-pressed={viewMode === 'grid'} onClick={() => onViewModeChange('grid')}>
             <Grid2X2 size={16} aria-hidden="true" />
           </button>
-          <button type="button" aria-label="List view" aria-pressed="false">
+          <button type="button" aria-label="List view" aria-pressed={viewMode === 'list'} onClick={() => onViewModeChange('list')}>
             <List size={16} aria-hidden="true" />
           </button>
         </div>
       </div>
-      <div className="wardrobe-tab-row" role="tablist" aria-label="Garment categories">
-        <button type="button" role="tab" aria-selected={filters.category === 'All'} onClick={() => onChange({ ...filters, category: 'All' })}>
+      <div className="wardrobe-tab-row" aria-label="Garment categories">
+        <button type="button" aria-pressed={filters.category === 'All'} onClick={() => onChange({ ...filters, category: 'All' })}>
           All
         </button>
         {GARMENT_CATEGORIES.map((category) => (
           <button
             key={category}
             type="button"
-            role="tab"
-            aria-selected={filters.category === category}
+            aria-pressed={filters.category === category}
             onClick={() => onChange({ ...filters, category })}
           >
             {category}

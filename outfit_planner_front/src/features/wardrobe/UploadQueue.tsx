@@ -41,6 +41,13 @@ export function UploadQueue({ items, onAcceptTag, onChangeItem, onRemove }: Uplo
             <input value={item.primaryColor} onChange={(event) => onChangeItem(item.id, { primaryColor: event.target.value })} />
           </label>
           <label>
+            <span>Season</span>
+            <input
+              value={item.season.join(', ')}
+              onChange={(event) => onChangeItem(item.id, { season: splitTokens(event.target.value) })}
+            />
+          </label>
+          <label>
             <span>Tags</span>
             <input
               value={item.tags.join(', ')}

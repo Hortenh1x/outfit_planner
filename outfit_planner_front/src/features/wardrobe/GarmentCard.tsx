@@ -1,8 +1,9 @@
-import { Archive, Copy, Heart, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { AlertTriangle, Archive, Copy, Heart, Pencil, Trash2 } from 'lucide-react';
 import type { GarmentItem } from '../../types';
 
 interface GarmentCardProps {
   garment: GarmentItem;
+  needsBetterPhoto?: boolean;
   pendingAction?: string;
   onArchive: (garment: GarmentItem) => void;
   onDelete: (garment: GarmentItem) => void;
@@ -13,6 +14,7 @@ interface GarmentCardProps {
 
 export function GarmentCard({
   garment,
+  needsBetterPhoto = false,
   pendingAction,
   onArchive,
   onDelete,
@@ -46,6 +48,17 @@ export function GarmentCard({
           <h3>{garment.name}</h3>
           <p>{garment.category}</p>
         </div>
+        {garment.tags.length > 0 ? (
+          <ul className="wardrobe-card-tags" aria-label={`Tags for ${garment.name}`}>
+            {garment.tags.map((tag) => <li key={tag}>{tag}</li>)}
+          </ul>
+        ) : null}
+        {needsBetterPhoto ? (
+          <span className="wardrobe-photo-warning" role="status" aria-label={`Needs better photo for ${garment.name}`}>
+            <AlertTriangle size={14} aria-hidden="true" />
+            Needs better photo?
+          </span>
+        ) : null}
         <div className="wardrobe-card-actions" aria-label={`Actions for ${garment.name}`}>
           <button type="button" aria-label={`Edit ${garment.name}`} disabled={disabled} onClick={() => onEdit(garment)}>
             <Pencil size={15} aria-hidden="true" />
@@ -64,7 +77,6 @@ export function GarmentCard({
           <button type="button" aria-label={`Delete ${garment.name}`} disabled={disabled} onClick={() => onDelete(garment)}>
             <Trash2 size={15} aria-hidden="true" />
           </button>
-          <MoreHorizontal size={15} aria-hidden="true" />
         </div>
       </div>
     </article>
