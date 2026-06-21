@@ -26,6 +26,8 @@ export interface UploadQueueItem {
   previewUrl?: string;
 }
 
+export type UploadQueueItemUpdates = Partial<Pick<UploadQueueItem, 'name' | 'category' | 'tags' | 'primaryColor' | 'season'>>;
+
 export interface SuggestedTagInput {
   fileName: string;
   category: GarmentCategory;

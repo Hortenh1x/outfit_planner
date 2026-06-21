@@ -1,8 +1,6 @@
 import type { GarmentCategory } from '../../types';
 import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
-import type { UploadQueueItem } from './wardrobeUpload';
-
-type UploadQueueItemUpdates = Partial<Pick<UploadQueueItem, 'name' | 'category' | 'tags' | 'primaryColor' | 'season'>>;
+import type { UploadQueueItem, UploadQueueItemUpdates } from './wardrobeUpload';
 
 interface UploadQueueProps {
   items: UploadQueueItem[];
