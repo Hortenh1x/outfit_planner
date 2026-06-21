@@ -770,6 +770,7 @@ static void TestTryOnCostEstimatorClassifiesAndPricesModes()
     AssertEqual(4, sequential.IncludedGarmentIds.Count, "sequential estimate should include only body try-on items.");
     AssertEqual(4, sequential.ExcludedGarmentIds.Count, "sequential estimate should exclude visual-only items.");
     AssertTrue(sequential.CacheKey.Length == 64, "cache key should be a SHA-256 hex string.");
+    AssertTrue(sequential.CacheKey.All(character => char.IsDigit(character) || character is >= 'a' and <= 'f'), "cache key should be lowercase SHA-256 hex.");
 
     AssertEqual(1, composite.EstimatedCredits, "composite estimate should cost one credit.");
     AssertEqual(8, composite.IncludedGarmentIds.Count, "composite estimate should include body and visual items.");
@@ -793,6 +794,12 @@ static void TestTryOnCostEstimatorMarksUnavailableModes()
         "body:body-1",
         "settings-a",
         hasCachedResult: false));
+    var visualOnlySingle = estimator.Estimate(visualOnlyOutfit, new TryOnEstimateInput(
+        TryOnMode.SingleGarmentTryOn,
+        "FashnTryOnProvider",
+        "body:body-1",
+        "settings-a",
+        hasCachedResult: false));
     var visualOnly = estimator.Estimate(visualOnlyOutfit, new TryOnEstimateInput(
         TryOnMode.SequentialOutfitTryOn,
         "FashnTryOnProvider",
@@ -808,6 +815,14 @@ static void TestTryOnCostEstimatorMarksUnavailableModes()
 
     AssertTrue(!single.IsAvailable, "single mode should reject multiple body try-on items.");
     AssertTrue(single.Summary.Contains("one body garment", StringComparison.OrdinalIgnoreCase), "single mode should explain the shape issue.");
+    AssertEqual(0, single.IncludedGarmentIds.Count, "invalid single mode should not include multiple body try-on items.");
+    AssertEqual(
+        TryOnCostEstimator.BuildCacheKey("body:body-1", Array.Empty<Guid>(), "FashnTryOnProvider", TryOnMode.SingleGarmentTryOn, "settings-a"),
+        single.CacheKey,
+        "invalid single mode cache key should not be based on multiple garments.");
+    AssertTrue(!visualOnlySingle.IsAvailable, "single paid mode should reject visual-only outfits.");
+    AssertEqual(0, visualOnlySingle.IncludedGarmentIds.Count, "visual-only single mode should not include garments.");
+    AssertTrue(visualOnlySingle.Warnings.Any(warning => warning.Contains("ClothesOnlyPreview", StringComparison.Ordinal)), "visual-only single estimate should recommend clothes-only mode.");
     AssertTrue(!visualOnly.IsAvailable, "paid normal modes should reject visual-only outfits.");
     AssertTrue(visualOnly.Warnings.Any(warning => warning.Contains("ClothesOnlyPreview", StringComparison.Ordinal)), "visual-only estimate should recommend clothes-only mode.");
     AssertTrue(clothesOnly.IsAvailable, "clothes-only mode should be available for visual-only outfits.");
