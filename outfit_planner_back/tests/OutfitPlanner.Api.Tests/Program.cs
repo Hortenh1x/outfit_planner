@@ -732,8 +732,12 @@ static void TestTryOnCostEstimatorClassifiesAndPricesModes()
     var outfit = CreateOutfitWithItems(
         new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000001"), "white tee", GarmentCategory.Top, BodyZone.Torso, "https://app.test/top.png"),
         new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000002"), "jeans", GarmentCategory.Bottom, BodyZone.Legs, "https://app.test/bottom.png"),
-        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000003"), "loafers", GarmentCategory.Shoes, BodyZone.Feet, "https://app.test/shoes.png"),
-        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000004"), "bag", GarmentCategory.Bag, BodyZone.Accessory, "https://app.test/bag.png"));
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000003"), "silk dress", GarmentCategory.Dress, BodyZone.FullBody, "https://app.test/dress.png"),
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000004"), "trench coat", GarmentCategory.Outerwear, BodyZone.OuterLayer, "https://app.test/outerwear.png"),
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000005"), "loafers", GarmentCategory.Shoes, BodyZone.Feet, "https://app.test/shoes.png"),
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000006"), "bag", GarmentCategory.Bag, BodyZone.Accessory, "https://app.test/bag.png"),
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000007"), "scarf", GarmentCategory.Accessory, BodyZone.Accessory, "https://app.test/scarf.png"),
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000008"), "hat", GarmentCategory.Hat, BodyZone.Head, "https://app.test/hat.png"));
     var estimator = new TryOnCostEstimator();
 
     var sequential = estimator.Estimate(outfit, new TryOnEstimateInput(
@@ -749,18 +753,26 @@ static void TestTryOnCostEstimatorClassifiesAndPricesModes()
         "settings-a",
         hasCachedResult: true));
 
-    AssertEqual(2, sequential.BodyTryOnItems.Count, "sequential estimate should classify body try-on items.");
-    AssertEqual(2, sequential.VisualOnlyItems.Count, "sequential estimate should classify visual-only items.");
-    AssertEqual(2, sequential.EstimatedCredits, "sequential estimate should cost one credit per body try-on item.");
+    AssertEqual(4, sequential.BodyTryOnItems.Count, "sequential estimate should classify body try-on items.");
+    AssertTrue(sequential.BodyTryOnItems.Any(item => item.Category == GarmentCategory.Top), "top should be a body try-on category.");
+    AssertTrue(sequential.BodyTryOnItems.Any(item => item.Category == GarmentCategory.Bottom), "bottom should be a body try-on category.");
+    AssertTrue(sequential.BodyTryOnItems.Any(item => item.Category == GarmentCategory.Dress), "dress should be a body try-on category.");
+    AssertTrue(sequential.BodyTryOnItems.Any(item => item.Category == GarmentCategory.Outerwear), "outerwear should be a body try-on category.");
+    AssertEqual(4, sequential.VisualOnlyItems.Count, "sequential estimate should classify visual-only items.");
+    AssertTrue(sequential.VisualOnlyItems.Any(item => item.Category == GarmentCategory.Shoes), "shoes should be a visual-only category.");
+    AssertTrue(sequential.VisualOnlyItems.Any(item => item.Category == GarmentCategory.Bag), "bag should be a visual-only category.");
+    AssertTrue(sequential.VisualOnlyItems.Any(item => item.Category == GarmentCategory.Accessory), "accessory should be a visual-only category.");
+    AssertTrue(sequential.VisualOnlyItems.Any(item => item.Category == GarmentCategory.Hat), "hat should be a visual-only category.");
+    AssertEqual(4, sequential.EstimatedCredits, "sequential estimate should cost one credit per body try-on item.");
     AssertTrue(sequential.IsAvailable, "sequential estimate should be available for multiple body items.");
     AssertTrue(sequential.RequiresAi, "sequential estimate should require AI.");
     AssertTrue(!sequential.RequiresPremiumConfirmation, "sequential estimate should not be premium.");
-    AssertEqual(2, sequential.IncludedGarmentIds.Count, "sequential estimate should include only body try-on items.");
-    AssertEqual(2, sequential.ExcludedGarmentIds.Count, "sequential estimate should exclude visual-only items.");
+    AssertEqual(4, sequential.IncludedGarmentIds.Count, "sequential estimate should include only body try-on items.");
+    AssertEqual(4, sequential.ExcludedGarmentIds.Count, "sequential estimate should exclude visual-only items.");
     AssertTrue(sequential.CacheKey.Length == 64, "cache key should be a SHA-256 hex string.");
 
     AssertEqual(1, composite.EstimatedCredits, "composite estimate should cost one credit.");
-    AssertEqual(4, composite.IncludedGarmentIds.Count, "composite estimate should include body and visual items.");
+    AssertEqual(8, composite.IncludedGarmentIds.Count, "composite estimate should include body and visual items.");
     AssertTrue(composite.RequiresPremiumConfirmation, "composite estimate should require premium confirmation.");
     AssertTrue(composite.HasCachedResult, "estimate should carry cache hit status from the caller.");
 }
