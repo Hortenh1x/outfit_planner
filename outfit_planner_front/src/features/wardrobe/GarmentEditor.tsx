@@ -1,0 +1,112 @@
+import { useEffect, useState } from 'react';
+import type { UpdateGarmentInput } from '../../api/client';
+import type { GarmentCategory, GarmentItem } from '../../types';
+import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
+
+interface GarmentEditorProps {
+  garment: GarmentItem;
+  isSaving: boolean;
+  onCancel: () => void;
+  onSave: (garmentId: string, input: UpdateGarmentInput) => void;
+}
+
+interface GarmentEditorFormState {
+  name: string;
+  category: GarmentCategory;
+  primaryColor: string;
+  season: string;
+  tags: string;
+}
+
+export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEditorProps) {
+  const [form, setForm] = useState<GarmentEditorFormState>(() => formFromGarment(garment));
+
+  useEffect(() => {
+    setForm(formFromGarment(garment));
+  }, [garment]);
+
+  return (
+    <form
+      className="wardrobe-rail-form"
+      aria-label={`Edit ${garment.name}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave(garment.id, {
+          name: form.name.trim(),
+          category: form.category,
+          tags: splitTokens(form.tags),
+          primaryColor: form.primaryColor.trim() || null,
+          season: splitTokens(form.season)
+        });
+      }}
+    >
+      <div className="wardrobe-rail-heading">
+        <span>Edit garment</span>
+        <h2>{garment.name}</h2>
+      </div>
+      <label>
+        <span>Name</span>
+        <input
+          value={form.name}
+          onChange={(event) => setForm({ ...form, name: event.target.value })}
+          required
+          disabled={isSaving}
+        />
+      </label>
+      <label>
+        <span>Type</span>
+        <select
+          value={form.category}
+          onChange={(event) => setForm({ ...form, category: event.target.value as GarmentCategory })}
+          disabled={isSaving}
+        >
+          {GARMENT_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Color</span>
+        <input
+          value={form.primaryColor}
+          onChange={(event) => setForm({ ...form, primaryColor: event.target.value })}
+          disabled={isSaving}
+        />
+      </label>
+      <label>
+        <span>Season</span>
+        <input
+          value={form.season}
+          onChange={(event) => setForm({ ...form, season: event.target.value })}
+          disabled={isSaving}
+        />
+      </label>
+      <label>
+        <span>Tags</span>
+        <input
+          value={form.tags}
+          onChange={(event) => setForm({ ...form, tags: event.target.value })}
+          disabled={isSaving}
+        />
+      </label>
+      <button type="submit" className="wardrobe-primary-button" disabled={isSaving}>
+        {isSaving ? 'Saving' : 'Save changes'}
+      </button>
+      <button type="button" className="wardrobe-secondary-button" onClick={onCancel} disabled={isSaving}>
+        Cancel
+      </button>
+    </form>
+  );
+}
+
+function formFromGarment(garment: GarmentItem): GarmentEditorFormState {
+  return {
+    name: garment.name,
+    category: garment.category,
+    primaryColor: garment.primaryColor ?? '',
+    season: (garment.season ?? []).join(', '),
+    tags: garment.tags.join(', ')
+  };
+}
+
+function splitTokens(value: string): string[] {
+  return value.split(',').map((token) => token.trim()).filter(Boolean);
+}
