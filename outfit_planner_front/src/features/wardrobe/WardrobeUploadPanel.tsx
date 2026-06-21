@@ -5,8 +5,6 @@ import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
 import { UploadQueue } from './UploadQueue';
 import {
   cleanPhotoChecklist,
-  parseTokenText,
-  tokenListSignature,
   type UploadQueueItem,
   type UploadQueueItemUpdates
 } from './wardrobeUpload';
@@ -196,4 +194,12 @@ function syncDefaultsTextDraft(
     : defaults.tags.join(', ');
 
   return seasonText === current.seasonText && tagsText === current.tagsText ? current : { seasonText, tagsText };
+}
+
+function parseTokenText(value: string): string[] {
+  return value.split(',').map((token) => token.trim()).filter(Boolean);
+}
+
+function tokenListSignature(tokens: string[]): string {
+  return JSON.stringify(tokens);
 }

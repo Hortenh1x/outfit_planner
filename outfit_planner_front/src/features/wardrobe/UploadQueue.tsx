@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { GarmentCategory } from '../../types';
 import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
-import { parseTokenText, tokenListSignature, type UploadQueueItem, type UploadQueueItemUpdates } from './wardrobeUpload';
+import type { UploadQueueItem, UploadQueueItemUpdates } from './wardrobeUpload';
 
 interface UploadQueueTextDraft {
   seasonText: string;
@@ -163,4 +163,12 @@ function textDraftFromItem(item: UploadQueueItem): UploadQueueTextDraft {
     seasonText: item.season.join(', '),
     tagsText: item.tags.join(', ')
   };
+}
+
+function parseTokenText(value: string): string[] {
+  return value.split(',').map((token) => token.trim()).filter(Boolean);
+}
+
+function tokenListSignature(tokens: string[]): string {
+  return JSON.stringify(tokens);
 }
