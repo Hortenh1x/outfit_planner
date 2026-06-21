@@ -59,7 +59,7 @@ export function GarmentCard({
             Needs better photo?
           </span>
         ) : null}
-        <div className="wardrobe-card-actions" aria-label={`Actions for ${garment.name}`}>
+        <div className="wardrobe-card-actions" role="group" aria-label={`Actions for ${garment.name}`}>
           <button type="button" aria-label={`Edit ${garment.name}`} disabled={disabled} onClick={() => onEdit(garment)}>
             <Pencil size={15} aria-hidden="true" />
           </button>

@@ -1,15 +1,26 @@
-import type { DragEvent } from 'react';
+import { useEffect, useState, type DragEvent } from 'react';
 import { Camera, CloudUpload, Plus } from 'lucide-react';
 import type { GarmentCategory } from '../../types';
 import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
 import { UploadQueue } from './UploadQueue';
-import { cleanPhotoChecklist, type UploadQueueItem, type UploadQueueItemUpdates } from './wardrobeUpload';
+import {
+  cleanPhotoChecklist,
+  parseTokenText,
+  tokenListSignature,
+  type UploadQueueItem,
+  type UploadQueueItemUpdates
+} from './wardrobeUpload';
 
 export interface WardrobeUploadDefaults {
   category: GarmentCategory;
   color: string;
   season: string[];
   tags: string[];
+}
+
+interface WardrobeUploadDefaultsTextDraft {
+  seasonText: string;
+  tagsText: string;
 }
 
 interface WardrobeUploadPanelProps {
@@ -37,6 +48,11 @@ export function WardrobeUploadPanel({
 }: WardrobeUploadPanelProps) {
   const hasUploadableItem = queue.some((item) => item.status === 'ready' || item.status === 'failed');
   const submitDisabled = isUploading || !hasUploadableItem;
+  const [defaultsTextDraft, setDefaultsTextDraft] = useState<WardrobeUploadDefaultsTextDraft>(() => defaultsTextDraftFromDefaults(defaults));
+
+  useEffect(() => {
+    setDefaultsTextDraft((current) => syncDefaultsTextDraft(current, defaults));
+  }, [defaults]);
 
   function addInputFiles(fileList: FileList | null): boolean {
     if (isUploading) {
@@ -91,17 +107,17 @@ export function WardrobeUploadPanel({
         <label>
           <span>Season</span>
           <input
-            value={defaults.season.join(', ')}
+            value={defaultsTextDraft.seasonText}
             disabled={isUploading}
-            onChange={(event) => onDefaultsChange({ ...defaults, season: splitTokens(event.target.value) })}
+            onChange={(event) => changeDefaultsTextDraft({ seasonText: event.target.value })}
           />
         </label>
         <label>
           <span>Tags</span>
           <input
-            value={defaults.tags.join(', ')}
+            value={defaultsTextDraft.tagsText}
             disabled={isUploading}
-            onChange={(event) => onDefaultsChange({ ...defaults, tags: splitTokens(event.target.value) })}
+            onChange={(event) => changeDefaultsTextDraft({ tagsText: event.target.value })}
           />
         </label>
       </div>
@@ -149,8 +165,35 @@ export function WardrobeUploadPanel({
       </button>
     </section>
   );
+
+  function changeDefaultsTextDraft(updates: Partial<WardrobeUploadDefaultsTextDraft>) {
+    const nextDraft = { ...defaultsTextDraft, ...updates };
+    setDefaultsTextDraft(nextDraft);
+    onDefaultsChange({
+      ...defaults,
+      ...(updates.seasonText !== undefined ? { season: parseTokenText(nextDraft.seasonText) } : {}),
+      ...(updates.tagsText !== undefined ? { tags: parseTokenText(nextDraft.tagsText) } : {})
+    });
+  }
 }
 
-function splitTokens(value: string): string[] {
-  return value.split(',').map((token) => token.trim()).filter(Boolean);
+function defaultsTextDraftFromDefaults(defaults: WardrobeUploadDefaults): WardrobeUploadDefaultsTextDraft {
+  return {
+    seasonText: defaults.season.join(', '),
+    tagsText: defaults.tags.join(', ')
+  };
+}
+
+function syncDefaultsTextDraft(
+  current: WardrobeUploadDefaultsTextDraft,
+  defaults: WardrobeUploadDefaults
+): WardrobeUploadDefaultsTextDraft {
+  const seasonText = tokenListSignature(parseTokenText(current.seasonText)) === tokenListSignature(defaults.season)
+    ? current.seasonText
+    : defaults.season.join(', ');
+  const tagsText = tokenListSignature(parseTokenText(current.tagsText)) === tokenListSignature(defaults.tags)
+    ? current.tagsText
+    : defaults.tags.join(', ');
+
+  return seasonText === current.seasonText && tagsText === current.tagsText ? current : { seasonText, tagsText };
 }

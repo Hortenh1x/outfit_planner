@@ -69,7 +69,7 @@ export function WardrobeFilters({
             {category}
           </button>
         ))}
-        <span className="wardrobe-item-count">{itemCount} items</span>
+        <span className="wardrobe-item-count">{itemCount} {itemCount === 1 ? 'item' : 'items'}</span>
       </div>
       <div className="wardrobe-filter-row">
         <SlidersHorizontal size={16} aria-hidden="true" />

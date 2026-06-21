@@ -81,6 +81,14 @@ export function updateUploadQueueItem(item: UploadQueueItem, updates: Partial<Om
   return { ...item, ...updates };
 }
 
+export function parseTokenText(value: string): string[] {
+  return value.split(',').map((token) => token.trim()).filter(Boolean);
+}
+
+export function tokenListSignature(tokens: string[]): string {
+  return JSON.stringify(tokens);
+}
+
 export function validateQueueFile(file: File): string | null {
   try {
     validateUploadImageFile(file);
