@@ -33,7 +33,7 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
 
   useEffect(() => {
     setForm(formFromGarment(garment));
-  }, [garment]);
+  }, [garment.id]);
 
   return (
     <form
@@ -75,23 +75,11 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
           {GARMENT_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
         </select>
       </label>
-      <label>
-        <span>Image URL</span>
-        <input
-          value={form.imageUrl}
-          onChange={(event) => setForm({ ...form, imageUrl: event.target.value })}
-          required
-          disabled={isSaving}
-        />
-      </label>
-      <label>
-        <span>Thumbnail URL</span>
-        <input
-          value={form.thumbnailUrl}
-          onChange={(event) => setForm({ ...form, thumbnailUrl: event.target.value })}
-          disabled={isSaving}
-        />
-      </label>
+      <div className="wardrobe-editor-photo" aria-label={`Current photo for ${garment.name}`}>
+        <img src={form.thumbnailUrl || form.imageUrl} alt={`${garment.name} current photo`} />
+        <p>Current photo is preserved.</p>
+        <p>Photo replacement will use the upload or re-add flow later.</p>
+      </div>
       <label>
         <span>Color</span>
         <input
