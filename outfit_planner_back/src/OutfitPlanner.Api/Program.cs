@@ -1019,7 +1019,7 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
 
     return configuredProvider.Trim().ToLowerInvariant() switch
     {
-        "fashn" => new FashnTryOnProvider(
+        "fashn" or "fashntryonprovider" => new FashnTryOnProvider(
             httpFactory.CreateClient("fashn"),
             new FashnTryOnSettings(
                 configuration["Fashn:ApiKey"] ?? "",
@@ -1027,27 +1027,27 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
                 configuration["Fashn:Mode"] ?? "balanced",
                 configuration.GetValue("Fashn:MaxPollingAttempts", 30),
                 TimeSpan.FromSeconds(configuration.GetValue("Fashn:PollIntervalSeconds", 2)))),
-        "localvton" or "local-vton" => new LocalVtonProvider(
+        "localvton" or "local-vton" or "localvtonprovider" => new LocalVtonProvider(
             httpFactory.CreateClient("local-vton"),
-            HttpProviderSettings(configuration, "LocalVton", "http://localhost:7860/", "/try-on", requiresApiKey: false)),
+            HttpProviderSettings(configuration, "LocalVton", "http://localhost:7860/", "try-on", requiresApiKey: false)),
         "localcatvton" or "local-cat-vton" or "localcatvtonprovider" => new LocalCatVtonProvider(
             httpFactory.CreateClient("local-cat-vton"),
-            HttpProviderSettings(configuration, "LocalCatVton", "http://localhost:7861/", "/try-on", requiresApiKey: false)),
-        "replicate" => new ReplicateProvider(
+            HttpProviderSettings(configuration, "LocalCatVton", "http://localhost:7861/", "try-on", requiresApiKey: false)),
+        "replicate" or "replicateprovider" => new ReplicateProvider(
             httpFactory.CreateClient("replicate"),
-            HttpProviderSettings(configuration, "Replicate", "https://api.replicate.com/v1/", "/predictions", requiresApiKey: true)),
-        "fal" => new FalProvider(
+            HttpProviderSettings(configuration, "Replicate", "https://api.replicate.com/v1/", "predictions", requiresApiKey: true)),
+        "fal" or "falprovider" => new FalProvider(
             httpFactory.CreateClient("fal"),
-            HttpProviderSettings(configuration, "Fal", "https://fal.run/", "/try-on", requiresApiKey: true)),
-        "compositefashn" or "composite-fashn" => new CompositeFashnTryOnProvider(
+            HttpProviderSettings(configuration, "Fal", "https://fal.run/", "try-on", requiresApiKey: true)),
+        "compositefashn" or "composite-fashn" or "compositefashntryonprovider" => new CompositeFashnTryOnProvider(
             httpFactory.CreateClient("composite-fashn"),
-            HttpProviderSettings(configuration, "CompositeFashn", "https://api.fashn.ai/v1/", "/try-on", requiresApiKey: true)),
-        "selfhostedcatvton" or "self-hosted-catvton" => new SelfHostedCatVtonProvider(
+            HttpProviderSettings(configuration, "CompositeFashn", "https://api.fashn.ai/v1/", "try-on", requiresApiKey: true)),
+        "selfhostedcatvton" or "self-hosted-catvton" or "selfhostedcatvtonprovider" => new SelfHostedCatVtonProvider(
             httpFactory.CreateClient("self-hosted-catvton"),
-            HttpProviderSettings(configuration, "SelfHostedCatVton", "http://localhost:7861/", "/try-on", requiresApiKey: false)),
-        "generalimageedit" or "general-image-edit" => new GeneralImageEditTryOnProvider(
+            HttpProviderSettings(configuration, "SelfHostedCatVton", "http://localhost:7861/", "try-on", requiresApiKey: false)),
+        "generalimageedit" or "general-image-edit" or "generalimageedittryonprovider" => new GeneralImageEditTryOnProvider(
             httpFactory.CreateClient("general-image-edit"),
-            HttpProviderSettings(configuration, "GeneralImageEdit", "https://api.openai.com/v1/", "/images/edits", requiresApiKey: true)),
+            HttpProviderSettings(configuration, "GeneralImageEdit", "https://api.openai.com/v1/", "images/edits", requiresApiKey: true)),
         _ => new MockTryOnProvider()
     };
 }
