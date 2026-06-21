@@ -45,6 +45,7 @@ This file is durable working context for Codex agents in this project.
 - Email/password auth works locally with email verification/password reset token storage, login/registration rate limiting, session list/revoke-all, and expired session cleanup support. Google OAuth and Apple OIDC are enabled only when `Authentication__Google__ClientId`/`Authentication__Google__ClientSecret` or `Authentication__Apple__ClientId`/`Authentication__Apple__ClientSecret` are configured.
 - Privacy endpoints include `DELETE /api/account`, `GET /api/account/export`, `DELETE /api/body-reference-photos/{id}`, `DELETE /api/try-on-jobs/{id}/output`, and `POST /api/privacy/purge-ai-outputs`.
 - Try-on defaults to `MockTryOnProvider`. FASHN is opt-in with `TryOn__Provider=Fashn` and `Fashn__ApiKey`.
+- Try-on cost estimates use Domain `TryOnMode` and Application `TryOnCostEstimator`; body try-on categories are top, bottom, dress, and outerwear, while shoes, bags, accessories, and hats are visual-only outside composite mode.
 - Multi-garment FASHN generation needs the Builder page `Sequential flow` toggle.
 
 ## Common Commands

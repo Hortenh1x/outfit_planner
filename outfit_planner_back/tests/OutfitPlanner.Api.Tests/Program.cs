@@ -44,6 +44,8 @@ var tests = new List<(string Name, Action Test)>
     ("outfit service applies slot compatibility rules", TestOutfitSlotCompatibilityRules),
     ("schedule service can unschedule a planned date", TestScheduleServiceUnschedulesDate),
     ("share service can revoke current user share links", TestShareServiceRevokesShareLinks),
+    ("try-on estimator classifies outfit items and prices modes", TestTryOnCostEstimatorClassifiesAndPricesModes),
+    ("try-on estimator marks unavailable modes", TestTryOnCostEstimatorMarksUnavailableModes),
     ("try-on service requires explicit AI consent before provider call", TestTryOnConsentRequired),
     ("try-on service queues jobs without calling provider inline", TestTryOnServiceQueuesJobsWithoutInlineProviderCall),
     ("try-on processor completes queued jobs through provider", TestTryOnProcessorCompletesQueuedJobs),
@@ -725,6 +727,82 @@ static void TestShareServiceRevokesShareLinks()
     AssertTrue(share.GetSharedOutfit(link.Token) is null, "revoked share link should no longer resolve.");
 }
 
+static void TestTryOnCostEstimatorClassifiesAndPricesModes()
+{
+    var outfit = CreateOutfitWithItems(
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000001"), "white tee", GarmentCategory.Top, BodyZone.Torso, "https://app.test/top.png"),
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000002"), "jeans", GarmentCategory.Bottom, BodyZone.Legs, "https://app.test/bottom.png"),
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000003"), "loafers", GarmentCategory.Shoes, BodyZone.Feet, "https://app.test/shoes.png"),
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000004"), "bag", GarmentCategory.Bag, BodyZone.Accessory, "https://app.test/bag.png"));
+    var estimator = new TryOnCostEstimator();
+
+    var sequential = estimator.Estimate(outfit, new TryOnEstimateInput(
+        TryOnMode.SequentialOutfitTryOn,
+        "FashnTryOnProvider",
+        "body:body-1",
+        "settings-a",
+        hasCachedResult: false));
+    var composite = estimator.Estimate(outfit, new TryOnEstimateInput(
+        TryOnMode.ExperimentalCompositeTryOn,
+        "CompositeFashnTryOnProvider",
+        "body:body-1",
+        "settings-a",
+        hasCachedResult: true));
+
+    AssertEqual(2, sequential.BodyTryOnItems.Count, "sequential estimate should classify body try-on items.");
+    AssertEqual(2, sequential.VisualOnlyItems.Count, "sequential estimate should classify visual-only items.");
+    AssertEqual(2, sequential.EstimatedCredits, "sequential estimate should cost one credit per body try-on item.");
+    AssertTrue(sequential.IsAvailable, "sequential estimate should be available for multiple body items.");
+    AssertTrue(sequential.RequiresAi, "sequential estimate should require AI.");
+    AssertTrue(!sequential.RequiresPremiumConfirmation, "sequential estimate should not be premium.");
+    AssertEqual(2, sequential.IncludedGarmentIds.Count, "sequential estimate should include only body try-on items.");
+    AssertEqual(2, sequential.ExcludedGarmentIds.Count, "sequential estimate should exclude visual-only items.");
+    AssertTrue(sequential.CacheKey.Length == 64, "cache key should be a SHA-256 hex string.");
+
+    AssertEqual(1, composite.EstimatedCredits, "composite estimate should cost one credit.");
+    AssertEqual(4, composite.IncludedGarmentIds.Count, "composite estimate should include body and visual items.");
+    AssertTrue(composite.RequiresPremiumConfirmation, "composite estimate should require premium confirmation.");
+    AssertTrue(composite.HasCachedResult, "estimate should carry cache hit status from the caller.");
+}
+
+static void TestTryOnCostEstimatorMarksUnavailableModes()
+{
+    var outfit = CreateOutfitWithItems(
+        new OutfitItem(Guid.NewGuid(), "white tee", GarmentCategory.Top, BodyZone.Torso, "https://app.test/top.png"),
+        new OutfitItem(Guid.NewGuid(), "jeans", GarmentCategory.Bottom, BodyZone.Legs, "https://app.test/bottom.png"),
+        new OutfitItem(Guid.NewGuid(), "bag", GarmentCategory.Bag, BodyZone.Accessory, "https://app.test/bag.png"));
+    var visualOnlyOutfit = CreateOutfitWithItems(
+        new OutfitItem(Guid.NewGuid(), "bag", GarmentCategory.Bag, BodyZone.Accessory, "https://app.test/bag.png"));
+    var estimator = new TryOnCostEstimator();
+
+    var single = estimator.Estimate(outfit, new TryOnEstimateInput(
+        TryOnMode.SingleGarmentTryOn,
+        "FashnTryOnProvider",
+        "body:body-1",
+        "settings-a",
+        hasCachedResult: false));
+    var visualOnly = estimator.Estimate(visualOnlyOutfit, new TryOnEstimateInput(
+        TryOnMode.SequentialOutfitTryOn,
+        "FashnTryOnProvider",
+        "body:body-1",
+        "settings-a",
+        hasCachedResult: false));
+    var clothesOnly = estimator.Estimate(visualOnlyOutfit, new TryOnEstimateInput(
+        TryOnMode.ClothesOnlyPreview,
+        "MockTryOnProvider",
+        "body:body-1",
+        "settings-a",
+        hasCachedResult: false));
+
+    AssertTrue(!single.IsAvailable, "single mode should reject multiple body try-on items.");
+    AssertTrue(single.Summary.Contains("one body garment", StringComparison.OrdinalIgnoreCase), "single mode should explain the shape issue.");
+    AssertTrue(!visualOnly.IsAvailable, "paid normal modes should reject visual-only outfits.");
+    AssertTrue(visualOnly.Warnings.Any(warning => warning.Contains("ClothesOnlyPreview", StringComparison.Ordinal)), "visual-only estimate should recommend clothes-only mode.");
+    AssertTrue(clothesOnly.IsAvailable, "clothes-only mode should be available for visual-only outfits.");
+    AssertEqual(0, clothesOnly.EstimatedCredits, "clothes-only mode should be free.");
+    AssertTrue(!clothesOnly.RequiresAi, "clothes-only mode should not require AI.");
+}
+
 static void TestTryOnConsentRequired()
 {
     var store = new InMemoryOutfitStore();
@@ -1283,6 +1361,22 @@ static Outfit CreateTwoGarmentOutfit()
             new OutfitItem(Guid.NewGuid(), "white tee", GarmentCategory.Top, BodyZone.Torso, "https://app.test/shirt.png"),
             new OutfitItem(Guid.NewGuid(), "jeans", GarmentCategory.Bottom, BodyZone.Legs, "https://app.test/jeans.png")
         },
+        Array.Empty<string>(),
+        Array.Empty<string>(),
+        false,
+        false,
+        null,
+        null,
+        DateTimeOffset.UtcNow);
+}
+
+static Outfit CreateOutfitWithItems(params OutfitItem[] items)
+{
+    return new Outfit(
+        Guid.NewGuid(),
+        "user-a",
+        "test outfit",
+        items,
         Array.Empty<string>(),
         Array.Empty<string>(),
         false,
