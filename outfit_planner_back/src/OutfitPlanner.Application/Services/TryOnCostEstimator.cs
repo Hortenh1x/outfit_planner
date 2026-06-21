@@ -128,7 +128,7 @@ public sealed class TryOnCostEstimator
         return mode switch
         {
             TryOnMode.ClothesOnlyPreview => Array.Empty<OutfitItem>(),
-            TryOnMode.SingleGarmentTryOn => bodyItems,
+            TryOnMode.SingleGarmentTryOn => bodyItems.Count == 1 ? bodyItems : Array.Empty<OutfitItem>(),
             TryOnMode.SequentialOutfitTryOn => bodyItems,
             TryOnMode.ExperimentalCompositeTryOn => bodyItems.Concat(visualItems).ToList(),
             _ => throw new InvalidOperationException($"Unsupported try-on mode {mode}.")
