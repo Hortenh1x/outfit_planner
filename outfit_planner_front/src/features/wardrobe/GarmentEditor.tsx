@@ -1,18 +1,28 @@
 import { useEffect, useState } from 'react';
-import type { UpdateGarmentInput } from '../../api/client';
+import type { GarmentMetadataInput } from '../../api/client';
 import type { GarmentCategory, GarmentItem } from '../../types';
 import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
+
+export type GarmentEditorSaveInput = {
+  name: string;
+  category: GarmentCategory;
+  imageUrl: string;
+  thumbnailUrl?: string;
+  tags: string[];
+} & GarmentMetadataInput;
 
 interface GarmentEditorProps {
   garment: GarmentItem;
   isSaving: boolean;
   onCancel: () => void;
-  onSave: (garmentId: string, input: UpdateGarmentInput) => void;
+  onSave: (garmentId: string, input: GarmentEditorSaveInput) => void;
 }
 
 interface GarmentEditorFormState {
   name: string;
   category: GarmentCategory;
+  imageUrl: string;
+  thumbnailUrl: string;
   primaryColor: string;
   season: string;
   tags: string;
@@ -34,6 +44,8 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
         onSave(garment.id, {
           name: form.name.trim(),
           category: form.category,
+          imageUrl: form.imageUrl.trim(),
+          thumbnailUrl: form.thumbnailUrl.trim() || undefined,
           tags: splitTokens(form.tags),
           primaryColor: form.primaryColor.trim() || null,
           season: splitTokens(form.season)
@@ -62,6 +74,23 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
         >
           {GARMENT_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
         </select>
+      </label>
+      <label>
+        <span>Image URL</span>
+        <input
+          value={form.imageUrl}
+          onChange={(event) => setForm({ ...form, imageUrl: event.target.value })}
+          required
+          disabled={isSaving}
+        />
+      </label>
+      <label>
+        <span>Thumbnail URL</span>
+        <input
+          value={form.thumbnailUrl}
+          onChange={(event) => setForm({ ...form, thumbnailUrl: event.target.value })}
+          disabled={isSaving}
+        />
       </label>
       <label>
         <span>Color</span>
@@ -101,6 +130,8 @@ function formFromGarment(garment: GarmentItem): GarmentEditorFormState {
   return {
     name: garment.name,
     category: garment.category,
+    imageUrl: garment.imageUrl,
+    thumbnailUrl: garment.thumbnailUrl ?? '',
     primaryColor: garment.primaryColor ?? '',
     season: (garment.season ?? []).join(', '),
     tags: garment.tags.join(', ')
