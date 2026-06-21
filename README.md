@@ -8,6 +8,7 @@ The app is intentionally small, but it has a real backend/frontend split, signed
 
 - Wardrobe catalog for Top, Bottom, Dress, Outerwear, Shoes, Bag, Accessory, and Hat garments with editable structured metadata for colors, material, brand, size, season, weather, occasion, scoring, favorites, archive state, last worn date, and laundry status.
 - Garment photo uploads from the browser.
+- Wardrobe uses an editorial Obra/Crimson-inspired interface for catalog search, filters, edit, duplicate, archive, favorite, bulk upload, drag-and-drop upload, mobile camera capture, clean photo guidance, local tag suggestions, and photo quality warnings.
 - Private body reference photo uploads for try-on generation.
 - Outfit builder with slot compatibility rules instead of one-garment-per-category rules.
 - Clothes-only and generated person preview modes.
@@ -107,11 +108,11 @@ Authentication is cookie-backed:
 - Google and Apple sign-in start from backend challenge endpoints and complete through backend callbacks. If the external account is new, the API creates it automatically. If the provider returns a verified email that already exists, the external login is linked to that user.
 - All private `/api` routes require a valid session. `/api/health`, `/api/system/status`, `/api/auth/*`, `/api/storage/signed/*`, and `/api/share/{token}` remain public; signed storage access is protected by URL signature and expiry.
 
-The frontend visual system is High-Fidelity Claymorphism:
+The frontend has legacy claymorphism surfaces plus newer editorial fashion slices:
 
-- Global tokens live in `outfit_planner_front/src/styles.css`.
-- The interface uses Nunito for display text, DM Sans for body copy, lavender canvas color `#F4F1FA`, animated ambient blobs, large rounded panels, recessed inputs, convex gradient buttons, and 4-layer clay shadow stacks.
-- Frontend composition is split across `outfit_planner_front/src/app`, route pages under `src/routes`, feature components under `src/features`, and reusable clay UI under `src/shared/ui`. `src/App.tsx` remains a compatibility export.
+- Legacy global tokens live in `outfit_planner_front/src/styles.css` for older surfaces.
+- The authenticated shell and Wardrobe slice use scoped editorial CSS with warm paper and dark ink themes, serif display headings, crimson emphasis, hairline borders, flat panels, restrained shadows, and tactile crimson primary buttons.
+- Frontend composition is split across `outfit_planner_front/src/app`, route pages under `src/routes`, feature components under `src/features`, and reusable UI under `src/shared/ui`. `src/App.tsx` remains a compatibility export.
 - Frontend API response types are generated from the backend OpenAPI document into ignored local artifacts and re-exported through committed aliases.
 
 ## Prerequisites
