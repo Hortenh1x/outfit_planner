@@ -520,10 +520,32 @@ public interface ITryOnProvider
         });
 
     TryOnGeneration Generate(TryOnProviderRequest request);
+
+    TryOnGeneration Generate(string userId, Outfit outfit, string bodyReferencePhotoUrl, TryOnOptions options)
+    {
+        var mode = options.SequentialFlowEnabled ? TryOnMode.SequentialOutfitTryOn : TryOnMode.SingleGarmentTryOn;
+        var bodyItems = outfit.Items
+            .Where(item => item.Category is GarmentCategory.Top or GarmentCategory.Bottom or GarmentCategory.Dress or GarmentCategory.Outerwear)
+            .ToArray();
+        var visualItems = outfit.Items
+            .Where(item => item.Category is GarmentCategory.Shoes or GarmentCategory.Bag or GarmentCategory.Accessory or GarmentCategory.Hat)
+            .ToArray();
+        return Generate(new TryOnProviderRequest(
+            userId,
+            outfit.Id,
+            mode,
+            bodyReferencePhotoUrl,
+            bodyItems,
+            visualItems,
+            new TryOnGenerationSettings(
+                Capabilities.ModelName,
+                Capabilities.ProviderMode,
+                Capabilities.SettingsHash)));
+    }
 }
 ```
 
-Keep `TryOnOptions` temporarily so older service tests compile until Task 3 updates `TryOnService`.
+Keep `TryOnOptions` and the legacy default `Generate` overload temporarily so older service tests compile until Task 4 updates `TryOnService`.
 
 - [ ] **Step 4: Update mock provider**
 
