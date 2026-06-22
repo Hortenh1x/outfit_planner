@@ -30,6 +30,7 @@ appsettings.*.json
 !.env.example
 !.env.*.example
 .superpowers/
+design_references/
 
 secrets.json
 *.secrets.json
