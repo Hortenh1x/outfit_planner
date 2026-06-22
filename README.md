@@ -266,7 +266,7 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `ObjectStorage__S3__AccessKey` / `Minio__AccessKey` | empty | S3-compatible access key. |
 | `ObjectStorage__S3__SecretKey` / `Minio__SecretKey` | empty | S3-compatible secret key. |
 | `ObjectStorage__S3__Bucket` / `Minio__Bucket` | `outfit-planner-private` | Private bucket for uploaded image variants. |
-| `TryOn__Provider` | `Mock` | Use `Mock`, `Fashn`, `LocalVton`, `LocalCatVton`, `Replicate`, or `Fal`. Unknown values use the mock provider. |
+| `TryOn__Provider` | `Mock` | Use `Mock`, `Fashn`, `CompositeFashn`, `LocalVton`, `LocalCatVton`, `SelfHostedCatVton`, `GeneralImageEdit`, `Replicate`, or `Fal`. Unknown values use the mock provider. |
 | `Fashn__ApiKey` | empty | Required before the FASHN provider makes network calls. |
 | `Fashn__BaseUrl` | `https://api.fashn.ai/v1/` | FASHN API base URL. |
 | `Fashn__ModelName` | `tryon-v1.6` | FASHN model name. |
@@ -274,10 +274,13 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `Fashn__MaxPollingAttempts` | `30` | Status polling limit. |
 | `Fashn__PollIntervalSeconds` | `2` | Delay between status polls. |
 | `Fashn__TimeoutSeconds` | `180` | HTTP client timeout. |
+| `TryOn__CompositeFashn__ApiKey` | empty | Required when `TryOn__Provider=CompositeFashn`. |
 | `TryOn__LocalVton__BaseUrl` | `http://localhost:7860/` | Local/dev VTON endpoint base URL. |
 | `TryOn__LocalVton__Endpoint` | `/try-on` | Local/dev VTON generation endpoint. |
 | `TryOn__LocalCatVton__BaseUrl` | `http://localhost:7861/` | Local/dev CatVTON endpoint base URL. |
 | `TryOn__LocalCatVton__Endpoint` | `/try-on` | Local/dev CatVTON generation endpoint. |
+| `TryOn__SelfHostedCatVton__BaseUrl` | `http://localhost:7861/` | Self-hosted CatVTON endpoint base URL. |
+| `TryOn__GeneralImageEdit__ApiKey` | empty | Required when `TryOn__Provider=GeneralImageEdit`. |
 | `TryOn__Replicate__ApiKey` | empty | Required when `TryOn__Provider=Replicate`. |
 | `TryOn__Replicate__BaseUrl` | `https://api.replicate.com/v1/` | Replicate adapter base URL. |
 | `TryOn__Replicate__Endpoint` | `/predictions` | Replicate adapter endpoint. |
@@ -302,7 +305,7 @@ Frontend configuration:
 
 ## Optional Try-On Providers
 
-The backend uses the mock try-on provider by default. The mock returns deterministic demo output and does not spend credits. All non-mock providers run from the hosted background worker after `POST /api/outfits/{outfitId}/try-on` has already returned a queued job.
+The backend uses the mock try-on provider by default. The mock returns deterministic demo output and does not spend real provider credits. Paid, uncached provider work runs from the hosted background worker after `POST /api/outfits/{outfitId}/try-on` has returned an accepted job resource.
 
 Enable the FASHN scaffold:
 
@@ -312,7 +315,16 @@ $env:Fashn__ApiKey = "YOUR_FASHN_API_KEY"
 dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
 ```
 
-The FASHN provider submits to `/run` and polls `/status/{id}`. A single-garment outfit maps directly to one provider run. Multi-garment outfits require the Builder page's `Sequential flow` toggle; the provider then applies garments one after another, using the previous output image as the next model image. This can consume one provider run per garment.
+The Builder asks the API for a try-on cost estimate before generation. The API classifies `Top`, `Bottom`, `Dress`, and `Outerwear` as body try-on items; `Shoes`, `Bag`, `Accessory`, and `Hat` are visual-only and are excluded from normal AI modes.
+
+Try-on modes:
+
+- `ClothesOnlyPreview`: free, no AI provider call.
+- `SingleGarmentTryOn`: FASHN `tryon-v1.6`, 1 credit, exactly one body try-on item.
+- `SequentialOutfitTryOn`: FASHN `tryon-v1.6` once per body try-on item, one credit per run.
+- `ExperimentalCompositeTryOn`: one composed garment reference image, 1 credit, explicitly premium and allowed to include visual-only items.
+
+Generation requests must echo the server-estimated mode, credits, and cache key. The backend recomputes the estimate and rejects stale or mismatched confirmations. Successful generated jobs are cached by body reference, included garment IDs, provider, mode, and provider settings, so repeat requests can reuse existing outputs without calling AI.
 
 Local/dev provider adapters can target a local HTTP service:
 
@@ -322,7 +334,7 @@ $env:TryOn__LocalVton__BaseUrl = "http://localhost:7860/"
 $env:TryOn__LocalVton__Endpoint = "/try-on"
 ```
 
-`LocalCatVton`, `Replicate`, and `Fal` use the same JSON adapter shape. `Replicate` and `Fal` require `TryOn__Replicate__ApiKey` or `TryOn__Fal__ApiKey` respectively.
+`LocalCatVton`, `SelfHostedCatVton`, `CompositeFashn`, `GeneralImageEdit`, `Replicate`, and `Fal` use the same JSON adapter shape. API-key-backed adapters require their matching `TryOn__...__ApiKey` setting.
 
 ## API Overview
 
@@ -365,7 +377,8 @@ Private routes require the `outfit_session` cookie. Mutating private routes also
 | `POST` | `/outfits` | Create an outfit. |
 | `PATCH` | `/outfits/{outfitId}` | Edit outfit name, garments, tags, occasion, favorite, and archive state. |
 | `DELETE` | `/outfits/{outfitId}` | Delete an outfit. |
-| `POST` | `/outfits/{outfitId}/try-on` | Queue try-on generation and return `202 Accepted`. Accepts optional `bodyReferencePhotoId` for audit linkage. |
+| `POST` | `/outfits/{outfitId}/try-on/estimate` | Estimate mode availability, credits, included/excluded garments, cache key, and cache-hit status before generation. |
+| `POST` | `/outfits/{outfitId}/try-on` | Confirm the server estimate and return `202 Accepted` with a try-on job. Free and cached jobs can already be `Succeeded`; paid uncached jobs are queued. |
 | `GET` | `/try-on-jobs/{jobId}` | Read try-on job status/result. |
 | `DELETE` | `/try-on-jobs/{jobId}/output` | Mark one try-on output deleted and remove the stored output URL from the job. |
 | `POST` | `/privacy/purge-ai-outputs` | Mark all current-user AI outputs deleted and remove stored output URLs from jobs. |
@@ -424,7 +437,7 @@ curl.exe -k https://localhost:5001/api/health
 - Uploaded files default to local object storage; S3-compatible MinIO can be enabled with object storage configuration.
 - PostgreSQL schema changes are applied through DbUp migrations at startup.
 - Garment categories are Top, Bottom, Dress, Outerwear, Shoes, Bag, Accessory, and Hat.
-- The mock try-on provider is the default. FASHN, Replicate, Fal, and local VTON providers require explicit environment configuration.
+- The mock try-on provider is the default. FASHN, composite FASHN, GeneralImageEdit, Replicate, Fal, and local VTON/CatVTON providers require explicit environment configuration.
 
 ## Troubleshooting
 
@@ -432,4 +445,4 @@ curl.exe -k https://localhost:5001/api/health
 - If running frontend dev against a non-default API port, set `VITE_DEV_API_TARGET`.
 - If PostgreSQL connection fails from local Windows development, confirm the compose database is reachable on host port `5433`, not `5432`.
 - If photo upload fails through Docker production frontend, check nginx `client_max_body_size` and the API upload diagnostics in logs.
-- If FASHN returns no result for multi-garment outfits, enable `Sequential flow` in the Builder UI or test with a single garment.
+- If FASHN returns no result for multi-garment outfits, use `SingleGarmentTryOn` to isolate one garment or `SequentialOutfitTryOn` for one provider run per body try-on item.
