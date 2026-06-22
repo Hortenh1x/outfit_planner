@@ -1,8 +1,6 @@
-import type { CSSProperties, ChangeEvent } from 'react';
+import type { ChangeEvent } from 'react';
 import { GarmentCategoryIcon } from '../../shared/ui/GarmentCategoryControl';
 import type { GarmentCategory, GarmentItem } from '../../types';
-
-const headingStyle: CSSProperties = { fontFamily: 'Nunito, sans-serif' };
 
 export function SlotPicker({
   title,
@@ -25,7 +23,7 @@ export function SlotPicker({
 
   return (
     <div className="slot-picker">
-      <h3 style={headingStyle}>{title}</h3>
+      <h3>{title}</h3>
       {garments.map((garment) => (
         <button
           type="button"

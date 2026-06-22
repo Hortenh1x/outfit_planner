@@ -1,9 +1,6 @@
-import type { CSSProperties } from 'react';
 import { Trash2 } from 'lucide-react';
 import { EmptyState } from '../../shared/ui/EmptyState';
 import type { GarmentItem } from '../../types';
-
-const headingStyle: CSSProperties = { fontFamily: 'Nunito, sans-serif' };
 
 export function GarmentColumn({
   title,
@@ -18,7 +15,7 @@ export function GarmentColumn({
 }) {
   return (
     <section className="garment-column">
-      <h2 style={headingStyle}>{title}</h2>
+      <h2>{title}</h2>
       <div className="garment-grid">
         {items.map((item) => (
           <article className="garment-card" key={item.id}>
@@ -35,7 +32,7 @@ export function GarmentColumn({
               </button>
             </div>
             <div>
-              <h3 style={headingStyle}>{item.name}</h3>
+              <h3>{item.name}</h3>
               <p>{item.bodyZone}</p>
             </div>
           </article>

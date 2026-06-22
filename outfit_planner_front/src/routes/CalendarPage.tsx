@@ -1,14 +1,12 @@
-import { type CSSProperties, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addMonths, format, isToday, subMonths } from 'date-fns';
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
 import { listOutfits, listSchedule, scheduleOutfit } from '../api/client';
 import { buildMonthCalendar, weekDayLabels } from '../features/calendar/calendarUtils';
 import { OutfitChoiceList } from '../features/calendar/OutfitChoiceList';
-import { ClayDatePicker } from '../shared/ui/ClayDatePicker';
+import { EditorialDatePicker } from '../shared/ui/EditorialDatePicker';
 import { PanelTitle } from '../shared/ui/PanelTitle';
-
-const headingStyle: CSSProperties = { fontFamily: 'Nunito, sans-serif' };
 
 export function CalendarPage() {
   const queryClient = useQueryClient();
@@ -27,13 +25,16 @@ export function CalendarPage() {
   const outfits = outfitsQuery.data ?? [];
 
   return (
-    <section className="page-grid calendar-view">
-      <div className="workspace">
-        <header className="page-header calendar-header">
+    <section className="calendar-editorial-page">
+      <div className="calendar-workspace">
+        <header className="calendar-hero">
           <div>
             <p>Calendar</p>
-            <h1 style={headingStyle}>{format(visibleMonth, 'MMMM yyyy')}</h1>
+            <h1>Plan your looks, <em>every day.</em></h1>
           </div>
+        </header>
+        <div className="calendar-toolbar">
+          <span>{format(visibleMonth, 'MMMM yyyy')}</span>
           <div className="calendar-nav">
             <button type="button" aria-label="Previous month" onClick={() => setVisibleMonth((month) => subMonths(month, 1))}>
               <ChevronLeft size={17} />
@@ -42,10 +43,10 @@ export function CalendarPage() {
               <ChevronRight size={17} />
             </button>
           </div>
-        </header>
+        </div>
         <div className="month-calendar" aria-label="Monthly outfit calendar">
           {weekDayLabels.map((dayLabel) => (
-            <div className="weekday-cell" key={dayLabel} style={headingStyle}>
+            <div className="weekday-cell" key={dayLabel}>
               {dayLabel}
             </div>
           ))}
@@ -64,14 +65,14 @@ export function CalendarPage() {
                 key={day.isoDate}
                 onClick={() => setDate(day.isoDate)}
               >
-                <span style={headingStyle}>{day.dayNumber}</span>
-                {outfit ? <strong style={headingStyle}>{outfit.name}</strong> : <p>No outfit</p>}
+                <span>{day.dayNumber}</span>
+                {outfit ? <strong>{outfit.name}</strong> : <p>No outfit</p>}
               </button>
             );
           })}
         </div>
       </div>
-      <aside className="tool-panel">
+      <aside className="calendar-plan-rail">
         <PanelTitle icon={<CalendarDays size={19} />} title="Plan day" />
         <form
           className="stack"
@@ -82,13 +83,13 @@ export function CalendarPage() {
         >
           <label>
             <span>Date</span>
-            <ClayDatePicker value={date} onChange={setDate} />
+            <EditorialDatePicker value={date} onChange={setDate} />
           </label>
           <div className="field-block">
             <span className="field-label">Outfit</span>
             <OutfitChoiceList outfits={outfits} selectedId={outfitId} onSelect={setOutfitId} />
           </div>
-          <button type="submit" className="clay-button primary-action" disabled={!outfitId || mutation.isPending}>
+          <button type="submit" className="primary-action" disabled={!outfitId || mutation.isPending}>
             <CalendarDays size={16} />
             {mutation.isPending ? 'Planning' : 'Plan day'}
           </button>

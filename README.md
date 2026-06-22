@@ -108,10 +108,12 @@ Authentication is cookie-backed:
 - Google and Apple sign-in start from backend challenge endpoints and complete through backend callbacks. If the external account is new, the API creates it automatically. If the provider returns a verified email that already exists, the external login is linked to that user.
 - All private `/api` routes require a valid session. `/api/health`, `/api/system/status`, `/api/auth/*`, `/api/storage/signed/*`, and `/api/share/{token}` remain public; signed storage access is protected by URL signature and expiry.
 
-The frontend has legacy claymorphism surfaces plus newer editorial fashion slices:
+The frontend uses an editorial fashion/product visual system across authenticated surfaces:
 
-- Legacy global tokens live in `outfit_planner_front/src/styles.css` for older surfaces.
-- The authenticated shell and Wardrobe slice use scoped editorial CSS with warm paper and dark ink themes, serif display headings, crimson emphasis, hairline borders, flat panels, restrained shadows, and tactile crimson primary buttons.
+- Shared editorial component styles live in `outfit_planner_front/src/styles.css` for Auth, Builder, Calendar, Share, and reusable UI helpers.
+- The authenticated shell and Wardrobe slice use scoped editorial CSS with warm paper and dark ink themes, serif display headings, crimson emphasis, hairline borders, flat panels, restrained shadows, compact controls, and tactile crimson primary buttons.
+- The canonical light palette and typography come from `design_references/light_theme` Crimson Plinth tokens; `design_references/dark_theme` is the dark orientation, with the same pink primary actions preserved in dark mode.
+- Do not extend the removed claymorphism system; lavender canvases, animated blobs, oversized rounded panels, recessed controls, convex purple gradients, and multi-layer neumorphic shadows are no longer part of the active frontend language.
 - Frontend composition is split across `outfit_planner_front/src/app`, route pages under `src/routes`, feature components under `src/features`, and reusable UI under `src/shared/ui`. `src/App.tsx` remains a compatibility export.
 - Frontend API response types are generated from the backend OpenAPI document into ignored local artifacts and re-exported through committed aliases.
 

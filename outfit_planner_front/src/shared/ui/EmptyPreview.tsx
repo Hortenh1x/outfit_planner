@@ -1,7 +1,4 @@
-import type { CSSProperties } from 'react';
 import { Shirt } from 'lucide-react';
-
-const headingStyle: CSSProperties = { fontFamily: 'Nunito, sans-serif' };
 
 export function EmptyPreview() {
   return (
@@ -9,8 +6,8 @@ export function EmptyPreview() {
       <span className="empty-preview-orb">
         <Shirt size={42} />
       </span>
-      <strong style={headingStyle}>Select garments</strong>
-      <span>Preview the outfit as soft digital clay.</span>
+      <strong>Select garments</strong>
+      <span>Preview the pieces together before saving the outfit.</span>
     </div>
   );
 }
