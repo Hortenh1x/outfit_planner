@@ -61,12 +61,12 @@ public sealed record UpdateOutfitRequest(
 public sealed record ScheduleOutfitRequest(DateOnly Date, Guid OutfitId);
 
 public sealed record EstimateTryOnRequest(
-    string BodyReferencePhotoUrl,
+    string? BodyReferencePhotoUrl,
     TryOnMode TryOnMode,
     Guid? BodyReferencePhotoId = null);
 
 public sealed record StartTryOnRequest(
-    string BodyReferencePhotoUrl,
+    string? BodyReferencePhotoUrl,
     bool ConsentAccepted,
     TryOnMode TryOnMode,
     int ConfirmedCredits,

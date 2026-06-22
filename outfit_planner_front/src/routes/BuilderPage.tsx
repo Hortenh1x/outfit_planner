@@ -109,6 +109,10 @@ export function BuilderPage() {
   const previewUrl = latestTryOnJob?.outputImageUrl ?? activeOutfit?.personPreviewUrl;
   const bodyPhotos = bodyPhotosQuery.data ?? [];
   const selectedBodyPhoto = bodyPhotos.find((photo) => photo.id === selectedBodyPhotoId) ?? bodyPhotos[0];
+  const selectedBodyReferenceInput = selectedBodyPhoto?.imageUrl
+    ? { bodyReferencePhotoUrl: selectedBodyPhoto.imageUrl, bodyReferencePhotoId: selectedBodyPhoto.id }
+    : {};
+  const requiresBodyReference = tryOnMode !== 'ClothesOnlyPreview';
 
   useEffect(() => {
     if (!selectedBodyPhotoId && bodyPhotos.length > 0) {
@@ -276,13 +280,12 @@ export function BuilderPage() {
           <button
             type="button"
             className="clay-button primary-action generate-action"
-            disabled={selectedIds.length === 0 || !selectedBodyPhoto?.imageUrl || estimateMutation.isPending}
+            disabled={selectedIds.length === 0 || (requiresBodyReference && !selectedBodyPhoto?.imageUrl) || estimateMutation.isPending}
             onClick={async () => {
               const outfit = await ensureOutfit();
               const estimate = await estimateMutation.mutateAsync({
                 outfitId: outfit.id,
-                bodyReferencePhotoUrl: selectedBodyPhoto.imageUrl,
-                bodyReferencePhotoId: selectedBodyPhoto.id,
+                ...selectedBodyReferenceInput,
                 tryOnMode
               });
               setPendingEstimate(estimate);
@@ -311,13 +314,12 @@ export function BuilderPage() {
               <button
                 type="button"
                 className="clay-button primary-action"
-                disabled={!pendingEstimate.isAvailable || tryOnMutation.isPending}
+                disabled={!pendingEstimate.isAvailable || (pendingEstimate.requiresAi && !selectedBodyPhoto?.imageUrl) || tryOnMutation.isPending}
                 onClick={async () => {
                   const outfit = await ensureOutfit();
                   await tryOnMutation.mutateAsync({
                     outfitId: outfit.id,
-                    bodyReferencePhotoUrl: selectedBodyPhoto.imageUrl,
-                    bodyReferencePhotoId: selectedBodyPhoto.id,
+                    ...selectedBodyReferenceInput,
                     consentAccepted: pendingEstimate.requiresAi,
                     tryOnMode: pendingEstimate.mode,
                     confirmedCredits: pendingEstimate.estimatedCredits,

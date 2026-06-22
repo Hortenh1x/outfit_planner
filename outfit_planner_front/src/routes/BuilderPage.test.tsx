@@ -230,6 +230,112 @@ describe('BuilderPage', () => {
     });
   });
 
+  it('allows clothes-only preview without a body reference photo', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            userId: 'user-a',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: '/top.png',
+            thumbnailUrl: '/top.png',
+            tags: [],
+            secondaryColors: [],
+            season: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            laundryStatus: 'clean',
+            createdAt: '2026-06-21T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.endsWith('/body-reference-photos')) {
+        return jsonResponse([]);
+      }
+
+      if (url.endsWith('/outfits') && init?.method === 'POST') {
+        return jsonResponse({
+          id: 'outfit-1',
+          name: 'Today',
+          items: [
+            { garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: '/top.png' }
+          ],
+          tags: [],
+          occasion: [],
+          isFavorite: false,
+          isArchived: false,
+          createdAt: '2026-06-21T12:00:00Z'
+        }, 201);
+      }
+
+      if (url.endsWith('/outfits/outfit-1/try-on/estimate') && init?.method === 'POST') {
+        return jsonResponse({
+          mode: 'ClothesOnlyPreview',
+          provider: 'MockTryOnProvider',
+          bodyTryOnItems: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: '/top.png' }],
+          visualOnlyItems: [],
+          includedGarmentIds: [],
+          excludedGarmentIds: ['top-1'],
+          estimatedCredits: 0,
+          isAvailable: true,
+          requiresAi: false,
+          requiresPremiumConfirmation: false,
+          cacheKey: 'cache-key-free',
+          hasCachedResult: false,
+          summary: 'Clothes-only preview is free.',
+          warnings: []
+        });
+      }
+
+      if (url.endsWith('/outfits/outfit-1/try-on') && init?.method === 'POST') {
+        return jsonResponse({ id: 'job-free', status: 'Succeeded' }, 202);
+      }
+
+      if (url.endsWith('/try-on-jobs/job-free')) {
+        return jsonResponse({ id: 'job-free', status: 'Succeeded' });
+      }
+
+      return jsonResponse([]);
+    });
+
+    const builder = renderBuilder();
+
+    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    const tryOnModeSelector = builder.container.querySelector('.tryon-mode-selector');
+    expect(tryOnModeSelector).not.toBeNull();
+    await userEvent.click(within(tryOnModeSelector as HTMLElement).getByRole('button', { name: /clothes only/i }));
+
+    const generateButton = screen.getByRole('button', { name: /generate preview/i });
+    expect(generateButton).toBeEnabled();
+    await userEvent.click(generateButton);
+
+    expect(await screen.findByText((_, element) => element?.textContent === 'Free')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /confirm generation/i }));
+
+    const estimateCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/outfits/outfit-1/try-on/estimate') && init?.method === 'POST');
+    expect(JSON.parse(estimateCall?.[1]?.body as string)).toMatchObject({
+      tryOnMode: 'ClothesOnlyPreview'
+    });
+    expect(JSON.parse(estimateCall?.[1]?.body as string)).not.toHaveProperty('bodyReferencePhotoUrl');
+
+    const startCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/outfits/outfit-1/try-on') && init?.method === 'POST');
+    expect(startCall).toBeDefined();
+    expect(JSON.parse(startCall?.[1]?.body as string)).toMatchObject({
+      consentAccepted: false,
+      tryOnMode: 'ClothesOnlyPreview',
+      confirmedCredits: 0,
+      confirmedCacheKey: 'cache-key-free'
+    });
+    expect(JSON.parse(startCall?.[1]?.body as string)).not.toHaveProperty('bodyReferencePhotoUrl');
+  });
+
   it('clears the active saved outfit when the draft selection changes', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
