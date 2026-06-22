@@ -7,7 +7,9 @@ import type {
   ScheduledOutfit,
   ShareLinkResponse,
   SharedOutfit,
-  TryOnJob
+  TryOnCostEstimate,
+  TryOnJob,
+  TryOnMode
 } from '../types';
 
 const apiBaseUrl = import.meta.env.VITE_API_URL ?? '/api';
@@ -405,12 +407,30 @@ export function deleteOutfit(outfitId: string): Promise<void> {
   });
 }
 
+export function estimateTryOn(input: {
+  outfitId: string;
+  bodyReferencePhotoUrl: string;
+  bodyReferencePhotoId?: string;
+  tryOnMode: TryOnMode;
+}): Promise<TryOnCostEstimate> {
+  return request<TryOnCostEstimate>(`/outfits/${input.outfitId}/try-on/estimate`, {
+    method: 'POST',
+    body: JSON.stringify({
+      bodyReferencePhotoUrl: input.bodyReferencePhotoUrl,
+      bodyReferencePhotoId: input.bodyReferencePhotoId,
+      tryOnMode: input.tryOnMode
+    })
+  });
+}
+
 export function startTryOn(input: {
   outfitId: string;
   bodyReferencePhotoUrl: string;
   bodyReferencePhotoId?: string;
   consentAccepted: boolean;
-  sequentialFlowEnabled: boolean;
+  tryOnMode: TryOnMode;
+  confirmedCredits: number;
+  confirmedCacheKey: string;
 }): Promise<TryOnJob> {
   return request<TryOnJob>(`/outfits/${input.outfitId}/try-on`, {
     method: 'POST',
@@ -418,7 +438,9 @@ export function startTryOn(input: {
       bodyReferencePhotoUrl: input.bodyReferencePhotoUrl,
       bodyReferencePhotoId: input.bodyReferencePhotoId,
       consentAccepted: input.consentAccepted,
-      sequentialFlowEnabled: input.sequentialFlowEnabled
+      tryOnMode: input.tryOnMode,
+      confirmedCredits: input.confirmedCredits,
+      confirmedCacheKey: input.confirmedCacheKey
     })
   });
 }
