@@ -490,6 +490,7 @@ static void TestApiExposesEditDeleteFilterAndRevokeEndpoints()
     AssertTrue(program.Contains("MapGet(\"/outfits/{outfitId:guid}\"", StringComparison.Ordinal), "api should expose outfit detail reads.");
     AssertTrue(program.Contains("MapPatch(\"/outfits/{outfitId:guid}\"", StringComparison.Ordinal), "api should expose outfit edits.");
     AssertTrue(program.Contains("MapDelete(\"/outfits/{outfitId:guid}\"", StringComparison.Ordinal), "api should expose outfit deletion.");
+    AssertTrue(program.Contains("MapPost(\"/outfits/{outfitId:guid}/try-on/estimate\"", StringComparison.Ordinal), "api should expose try-on estimate endpoint.");
     AssertTrue(program.Contains("MapDelete(\"/schedule/{date}\"", StringComparison.Ordinal), "api should expose unscheduling by date.");
     AssertTrue(program.Contains("MapDelete(\"/share/{token}\"", StringComparison.Ordinal), "api should expose share revocation.");
     AssertTrue(program.Contains("GarmentQuery", StringComparison.Ordinal), "garment list route should bind filter and pagination criteria.");
@@ -531,6 +532,7 @@ static void TestApiDocumentsFrontendResponseBodies()
         ".Produces<IReadOnlyList<Outfit>>(StatusCodes.Status200OK)",
         ".Produces<Outfit>(StatusCodes.Status200OK)",
         ".Produces<Outfit>(StatusCodes.Status201Created)",
+        ".Produces<TryOnEstimateResponse>(StatusCodes.Status200OK)",
         ".Produces<TryOnJob>(StatusCodes.Status202Accepted)",
         ".Produces<IReadOnlyList<ScheduledOutfit>>(StatusCodes.Status200OK)",
         ".Produces<ScheduledOutfit>(StatusCodes.Status200OK)",
@@ -543,6 +545,12 @@ static void TestApiDocumentsFrontendResponseBodies()
 
     AssertTrue(program.Contains(".Produces(StatusCodes.Status404NotFound)", StringComparison.Ordinal), "detail routes should document 404 responses.");
     AssertTrue(contracts.Contains("public sealed record SharedOutfitResponse", StringComparison.Ordinal), "shared outfit response should be a named API contract.");
+    AssertTrue(contracts.Contains("public sealed record EstimateTryOnRequest", StringComparison.Ordinal), "estimate try-on request should be a named API contract.");
+    AssertTrue(contracts.Contains("public sealed record TryOnEstimateResponse", StringComparison.Ordinal), "try-on estimate response should be a named API contract.");
+    AssertTrue(contracts.Contains("public sealed record TryOnEstimateItemResponse", StringComparison.Ordinal), "try-on estimate items should be named API contracts.");
+    AssertTrue(contracts.Contains("TryOnMode TryOnMode", StringComparison.Ordinal), "start request should include try-on mode.");
+    AssertTrue(contracts.Contains("int ConfirmedCredits", StringComparison.Ordinal), "start request should include confirmed credits.");
+    AssertTrue(contracts.Contains("string ConfirmedCacheKey", StringComparison.Ordinal), "start request should include confirmed cache key.");
 }
 
 static void TestWardrobeServiceUpdatesStructuredMetadata()

@@ -60,7 +60,41 @@ public sealed record UpdateOutfitRequest(
 
 public sealed record ScheduleOutfitRequest(DateOnly Date, Guid OutfitId);
 
-public sealed record StartTryOnRequest(string BodyReferencePhotoUrl, bool ConsentAccepted, bool SequentialFlowEnabled, Guid? BodyReferencePhotoId = null);
+public sealed record EstimateTryOnRequest(
+    string BodyReferencePhotoUrl,
+    TryOnMode TryOnMode,
+    Guid? BodyReferencePhotoId = null);
+
+public sealed record StartTryOnRequest(
+    string BodyReferencePhotoUrl,
+    bool ConsentAccepted,
+    TryOnMode TryOnMode,
+    int ConfirmedCredits,
+    string ConfirmedCacheKey,
+    Guid? BodyReferencePhotoId = null);
+
+public sealed record TryOnEstimateItemResponse(
+    Guid GarmentId,
+    string Name,
+    GarmentCategory Category,
+    BodyZone BodyZone,
+    string ThumbnailUrl);
+
+public sealed record TryOnEstimateResponse(
+    TryOnMode Mode,
+    string Provider,
+    IReadOnlyList<TryOnEstimateItemResponse> BodyTryOnItems,
+    IReadOnlyList<TryOnEstimateItemResponse> VisualOnlyItems,
+    IReadOnlyList<Guid> IncludedGarmentIds,
+    IReadOnlyList<Guid> ExcludedGarmentIds,
+    int EstimatedCredits,
+    bool IsAvailable,
+    bool RequiresAi,
+    bool RequiresPremiumConfirmation,
+    string CacheKey,
+    bool HasCachedResult,
+    string Summary,
+    IReadOnlyList<string> Warnings);
 
 public sealed record ShareLinkResponse(string Token, string Url);
 

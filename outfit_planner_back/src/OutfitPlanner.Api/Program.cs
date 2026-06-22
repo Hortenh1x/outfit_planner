@@ -808,6 +808,29 @@ api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest req
 api.MapDelete("/outfits/{outfitId:guid}", (Guid outfitId, OutfitService outfits, HttpContext context) =>
     outfits.DeleteOutfit(CurrentUser(context), outfitId) ? Results.NoContent() : Results.NotFound());
 
+api.MapPost("/outfits/{outfitId:guid}/try-on/estimate", (
+    Guid outfitId,
+    EstimateTryOnRequest request,
+    TryOnService tryOn,
+    HttpContext context) =>
+{
+    try
+    {
+        var estimate = tryOn.Estimate(
+            CurrentUser(context),
+            outfitId,
+            request.TryOnMode,
+            request.BodyReferencePhotoUrl,
+            request.BodyReferencePhotoId);
+        return Results.Ok(ToTryOnEstimateResponse(estimate));
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+})
+    .Produces<TryOnEstimateResponse>(StatusCodes.Status200OK);
+
 api.MapPost("/outfits/{outfitId:guid}/try-on", async (
     Guid outfitId,
     StartTryOnRequest request,
@@ -822,7 +845,9 @@ api.MapPost("/outfits/{outfitId:guid}/try-on", async (
             outfitId,
             request.BodyReferencePhotoUrl,
             request.ConsentAccepted,
-            request.SequentialFlowEnabled,
+            request.TryOnMode,
+            request.ConfirmedCredits,
+            request.ConfirmedCacheKey,
             request.BodyReferencePhotoId,
             cancellationToken);
         return Results.Accepted($"/api/try-on-jobs/{job.Id}", job);
@@ -1099,6 +1124,35 @@ static string CurrentUser(HttpContext context)
     return context.Items.TryGetValue(CurrentUserItemKey, out var userId) && userId is string value
         ? value
         : throw new InvalidOperationException("Authenticated user was not resolved for this request.");
+}
+
+static TryOnEstimateResponse ToTryOnEstimateResponse(TryOnCostEstimate estimate)
+{
+    return new TryOnEstimateResponse(
+        estimate.Mode,
+        estimate.ProviderName,
+        estimate.BodyTryOnItems.Select(ToEstimateItem).ToArray(),
+        estimate.VisualOnlyItems.Select(ToEstimateItem).ToArray(),
+        estimate.IncludedGarmentIds,
+        estimate.ExcludedGarmentIds,
+        estimate.EstimatedCredits,
+        estimate.IsAvailable,
+        estimate.RequiresAi,
+        estimate.RequiresPremiumConfirmation,
+        estimate.CacheKey,
+        estimate.HasCachedResult,
+        estimate.Summary,
+        estimate.Warnings);
+}
+
+static TryOnEstimateItemResponse ToEstimateItem(OutfitItem item)
+{
+    return new TryOnEstimateItemResponse(
+        item.GarmentId,
+        item.Name,
+        item.Category,
+        item.BodyZone,
+        item.ThumbnailUrl);
 }
 
 static bool IsOpenApiDocumentGeneration()

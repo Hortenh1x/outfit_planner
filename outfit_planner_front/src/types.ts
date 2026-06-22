@@ -13,7 +13,9 @@ export type {
   ShareLinkResponse,
   SharedOutfit,
   StartedTryOnJob,
+  TryOnCostEstimate,
   TryOnJob,
+  TryOnMode,
   TryOnStatus
 } from './api/generated/responseTypes';
 
