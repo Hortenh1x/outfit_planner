@@ -44,6 +44,8 @@ describe('generated API workflow', () => {
     expect(schema).toContain('"application/json": components["schemas"]["ScheduledOutfit"];');
     expect(schema).toContain('"application/json": components["schemas"]["ShareLinkResponse"];');
     expect(schema).toContain('"application/json": components["schemas"]["SharedOutfitResponse"];');
+    expect(schema).toContain('"application/json": components["schemas"]["TryOnEstimateResponse"];');
+    expect(schema).toContain('TryOnMode: "ClothesOnlyPreview" | "SingleGarmentTryOn" | "SequentialOutfitTryOn" | "ExperimentalCompositeTryOn";');
 
     expect(responseSection(schema, '/api/garments', 'get', 200)).not.toContain('content?: never;');
     expect(responseSection(schema, '/api/outfits', 'get', 200)).not.toContain('content?: never;');

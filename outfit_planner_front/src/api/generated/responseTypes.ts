@@ -20,6 +20,7 @@ export type SharedOutfit = JsonResponse<paths['/api/share/{token}']['get'], 200>
 export type CreatedGarment = JsonResponse<paths['/api/garments']['post'], 201>;
 export type CreatedBodyReferencePhoto = JsonResponse<paths['/api/body-reference-photos']['post'], 201>;
 export type CreatedOutfit = JsonResponse<paths['/api/outfits']['post'], 201>;
+export type TryOnCostEstimate = JsonResponse<paths['/api/outfits/{outfitId}/try-on/estimate']['post'], 200>;
 export type StartedTryOnJob = JsonResponse<paths['/api/outfits/{outfitId}/try-on']['post'], 202>;
 export type ShareLinkResponse = JsonResponse<paths['/api/outfits/{outfitId}/share']['post'], 200>;
 
@@ -27,4 +28,5 @@ export type GarmentCategory = GarmentItem['category'];
 export type BodyZone = GarmentItem['bodyZone'];
 export type LaundryStatus = GarmentItem['laundryStatus'];
 export type TryOnStatus = TryOnJob['status'];
+export type TryOnMode = TryOnCostEstimate['mode'];
 export type OutfitItem = ArrayItem<Outfit['items']>;
