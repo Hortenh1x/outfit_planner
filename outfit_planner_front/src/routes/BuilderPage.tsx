@@ -1,4 +1,4 @@
-import { type ChangeEvent, type CSSProperties, useEffect, useState } from 'react';
+import { type ChangeEvent, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { GitBranch, Layers3, Link2, Plus, ScanFace, Sparkles, Wand2 } from 'lucide-react';
@@ -15,8 +15,6 @@ import { EmptyPreview } from '../shared/ui/EmptyPreview';
 import { PanelTitle } from '../shared/ui/PanelTitle';
 import { PanelSkeleton } from '../shared/ui/Skeletons';
 import type { GarmentCategory, Outfit, OutfitSelection, PreviewMode, TryOnCostEstimate, TryOnMode } from '../types';
-
-const headingStyle: CSSProperties = { fontFamily: 'Nunito, sans-serif' };
 
 export function BuilderPage() {
   const queryClient = useQueryClient();
@@ -171,9 +169,9 @@ export function BuilderPage() {
   }
 
   return (
-    <section className="builder-layout">
-      <aside className="inventory-panel">
-        <PanelTitle icon={<Layers3 size={19} />} title="Wardrobe clay" />
+    <section className="builder-editorial-page">
+      <aside className="builder-wardrobe-rail">
+        <PanelTitle icon={<Layers3 size={19} />} title="Wardrobe pieces" />
         {garmentsQuery.isLoading ? (
           <PanelSkeleton />
         ) : (
@@ -198,20 +196,16 @@ export function BuilderPage() {
       </aside>
 
       <div className="preview-stage">
-        <header className="builder-header">
+        <header className="builder-hero">
           <div>
             <p>Builder</p>
-            <h1 style={headingStyle}>{selectionLabel(selection, garments)}</h1>
+            <h1>Build looks with <em>intention.</em></h1>
           </div>
+          <span>{selectionLabel(selection, garments)}</span>
           <ModeToggle mode={mode} onChange={setMode} />
         </header>
 
-        <div className="preview-canvas">
-          <div className="preview-topography" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
+        <div className="preview-canvas builder-preview">
           {mode === 'clothes' ? (
             <div className="clothes-stack">
               {selectedGarments.length === 0 ? <EmptyPreview /> : null}
@@ -232,7 +226,7 @@ export function BuilderPage() {
         </div>
       </div>
 
-      <aside className="tool-panel builder-controls">
+      <aside className="builder-details-rail builder-controls">
         <PanelTitle icon={<Wand2 size={19} />} title="Outfit controls" />
         <div className="stack">
           <label>
@@ -241,7 +235,7 @@ export function BuilderPage() {
           </label>
           <button
             type="button"
-            className="clay-button primary-action"
+            className="primary-action"
             disabled={selectedIds.length === 0 || saveMutation.isPending}
             onClick={() => saveMutation.mutate({ name: outfitName, garmentIds: selectedIds })}
           >
@@ -279,7 +273,7 @@ export function BuilderPage() {
           </div>
           <button
             type="button"
-            className="clay-button primary-action generate-action"
+            className="primary-action generate-action"
             disabled={selectedIds.length === 0 || (requiresBodyReference && !selectedBodyPhoto?.imageUrl) || estimateMutation.isPending}
             onClick={async () => {
               const outfit = await ensureOutfit();
@@ -297,8 +291,8 @@ export function BuilderPage() {
           {pendingEstimate ? (
             <div className="tryon-confirmation">
               <div>
-                <small style={headingStyle}>{modeLabel(pendingEstimate.mode)}</small>
-                <strong style={headingStyle}>{creditsLabel(pendingEstimate.estimatedCredits)}</strong>
+                <small>{modeLabel(pendingEstimate.mode)}</small>
+                <strong>{creditsLabel(pendingEstimate.estimatedCredits)}</strong>
                 <p>{pendingEstimate.summary}</p>
               </div>
               {pendingEstimate.hasCachedResult ? <p>Cached result available</p> : null}
@@ -313,7 +307,7 @@ export function BuilderPage() {
               ))}
               <button
                 type="button"
-                className="clay-button primary-action"
+                className="primary-action"
                 disabled={!pendingEstimate.isAvailable || (pendingEstimate.requiresAi && !selectedBodyPhoto?.imageUrl) || tryOnMutation.isPending}
                 onClick={async () => {
                   const outfit = await ensureOutfit();
@@ -338,14 +332,14 @@ export function BuilderPage() {
             <div className="tryon-status">
               <ScanFace size={17} />
               <div>
-                <small style={headingStyle}>Try-on job</small>
-                <strong style={headingStyle}>{latestTryOnJob.status}</strong>
+                <small>Try-on job</small>
+                <strong>{latestTryOnJob.status}</strong>
               </div>
             </div>
           ) : null}
           <button
             type="button"
-            className="clay-button secondary-action"
+            className="secondary-action"
             disabled={!activeOutfit || shareMutation.isPending}
             onClick={() => activeOutfit && shareMutation.mutate(activeOutfit.id)}
           >

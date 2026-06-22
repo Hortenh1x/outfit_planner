@@ -93,7 +93,7 @@ export function AuthPageContent({
               />
             </label>
           ) : null}
-          <button type="submit" className="clay-button primary-action" disabled={authMutation.isPending}>
+          <button type="submit" className="primary-action" disabled={authMutation.isPending}>
             {mode === 'register' ? <UserPlus size={16} /> : <LogIn size={16} />}
             {authMutation.isPending ? 'Working' : title}
           </button>

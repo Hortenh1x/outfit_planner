@@ -2,8 +2,6 @@ import { LogIn, LogOut, ShieldCheck, UserPlus } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import type { AuthUser } from '../../api/client';
 
-const headingStyle = { fontFamily: 'Nunito, sans-serif' };
-
 export function AuthActions({
   user,
   isSigningOut,
@@ -21,8 +19,8 @@ export function AuthActions({
             <ShieldCheck size={17} />
           </span>
           <div>
-            <small style={headingStyle}>Signed in</small>
-            <strong style={headingStyle}>{user.email ?? user.displayName}</strong>
+            <small>Signed in</small>
+            <strong>{user.email ?? user.displayName}</strong>
           </div>
         </div>
         <button type="button" className="auth-nav-action" disabled={isSigningOut} onClick={onLogout}>

@@ -22,7 +22,7 @@ describe('CalendarPage', () => {
     vi.restoreAllMocks();
   });
 
-  it('uses a custom clay date picker instead of the native date input', async () => {
+  it('uses an editorial date picker instead of the native date input', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
 
@@ -30,7 +30,7 @@ describe('CalendarPage', () => {
         return jsonResponse([
           {
             id: 'outfit-1',
-            name: 'Weekend clay',
+            name: 'Weekend look',
             items: [],
             createdAt: '2026-06-07T12:00:00Z'
           }
@@ -48,6 +48,16 @@ describe('CalendarPage', () => {
 
     expect(await screen.findByRole('button', { name: /choose date/i })).toBeInTheDocument();
     expect(container.querySelector('input[type="date"]')).not.toBeInTheDocument();
+  });
+
+  it('uses the editorial calendar surface without legacy clay classes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse([]));
+
+    const { container } = renderCalendar();
+
+    expect(await screen.findByRole('heading', { name: /plan your looks, every day/i })).toBeInTheDocument();
+    expect(container.querySelector('.calendar-editorial-page')).toBeInTheDocument();
+    expect(container.querySelector('.clay-button, .tool-panel, .page-grid, .clay-date-picker')).not.toBeInTheDocument();
   });
 });
 

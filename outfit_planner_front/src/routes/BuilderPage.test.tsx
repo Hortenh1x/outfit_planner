@@ -116,6 +116,16 @@ describe('BuilderPage', () => {
     expect(builder.container.querySelector('.mode-toggle .toggle-motion-indicator')).toBeInTheDocument();
   });
 
+  it('uses the editorial builder surface without legacy clay classes', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse([]));
+
+    const builder = renderBuilder();
+
+    expect(await screen.findByRole('heading', { name: /build looks with intention/i })).toBeInTheDocument();
+    expect(builder.container.querySelector('.builder-editorial-page')).toBeInTheDocument();
+    expect(builder.container.querySelector('.clay-button, .inventory-panel, .tool-panel, .builder-layout')).not.toBeInTheDocument();
+  });
+
   it('shows server-estimated cost and confirms before starting generation', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);

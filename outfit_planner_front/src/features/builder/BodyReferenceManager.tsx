@@ -1,8 +1,6 @@
-import type { CSSProperties, ChangeEvent } from 'react';
+import type { ChangeEvent } from 'react';
 import { Camera, Trash2 } from 'lucide-react';
 import type { BodyReferencePhoto } from '../../types';
-
-const headingStyle: CSSProperties = { fontFamily: 'Nunito, sans-serif' };
 
 export function BodyReferenceManager({
   photos,
@@ -24,7 +22,7 @@ export function BodyReferenceManager({
   return (
     <section className="body-reference-manager" aria-label="Body references">
       <div className="body-reference-header">
-        <h3 style={headingStyle}>Body references</h3>
+        <h3>Body references</h3>
       </div>
       {isLoading ? (
         <div className="body-reference-skeleton" aria-label="Loading body references" />
