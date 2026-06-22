@@ -257,6 +257,7 @@ builder.Services.AddSingleton<WardrobeService>();
 builder.Services.AddSingleton<PhotoUploadService>();
 builder.Services.AddSingleton<OutfitService>();
 builder.Services.AddSingleton<ScheduleService>();
+builder.Services.AddSingleton<TryOnCostEstimator>();
 builder.Services.AddSingleton<TryOnService>();
 builder.Services.AddSingleton<ShareService>();
 builder.Services.AddSingleton<AuthService>();

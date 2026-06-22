@@ -47,6 +47,10 @@ var tests = new List<(string Name, Action Test)>
     ("try-on estimator classifies outfit items and prices modes", TestTryOnCostEstimatorClassifiesAndPricesModes),
     ("try-on estimator marks unavailable modes", TestTryOnCostEstimatorMarksUnavailableModes),
     ("try-on service requires explicit AI consent before provider call", TestTryOnConsentRequired),
+    ("try-on service estimates cost before generation", TestTryOnServiceEstimatesCost),
+    ("try-on service enforces confirmed credits and cache key", TestTryOnServiceEnforcesConfirmedCost),
+    ("try-on service returns cache hits without queueing provider work", TestTryOnServiceReturnsCacheHitsWithoutQueueing),
+    ("try-on service completes clothes-only preview without ai", TestTryOnServiceCompletesClothesOnlyWithoutAi),
     ("try-on service queues jobs without calling provider inline", TestTryOnServiceQueuesJobsWithoutInlineProviderCall),
     ("try-on processor completes queued jobs through provider", TestTryOnProcessorCompletesQueuedJobs),
     ("try-on service forwards sequential flow option to provider", TestTryOnServiceForwardsSequentialFlowOption),
@@ -842,14 +846,109 @@ static void TestTryOnConsentRequired()
     var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
     var bottom = store.CreateGarment(CreateGarment(userId, "jeans", GarmentCategory.Bottom));
     var outfit = new OutfitService(store, store, new SystemClock())
-        .CreateOutfit(userId, "casual", new[] { top.Id, bottom.Id });
+        .CreateOutfit(userId, "casual", new[] { top.Id });
     var provider = new CountingTryOnProvider();
-    var service = new TryOnService(store, store, new RecordingTryOnJobQueue(), provider, new SystemClock());
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), new SystemClock());
 
     AssertThrows<InvalidOperationException>(
         () => service.Start(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: false),
         "try-on should require consent");
     AssertEqual(0, provider.Calls, "provider must not receive photos without consent");
+}
+
+static void TestTryOnServiceEstimatesCost()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var bottom = store.CreateGarment(CreateGarment(userId, "jeans", GarmentCategory.Bottom));
+    var bag = store.CreateGarment(CreateGarment(userId, "bag", GarmentCategory.Bag));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id, bottom.Id, bag.Id });
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), new CountingTryOnProvider(), new TryOnCostEstimator(), new SystemClock());
+
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SequentialOutfitTryOn, "https://example.com/person.jpg", null);
+
+    AssertEqual(2, estimate.EstimatedCredits, "estimate should cost one credit per body garment.");
+    AssertEqual(2, estimate.BodyTryOnItems.Count, "estimate should classify body try-on items.");
+    AssertEqual(1, estimate.VisualOnlyItems.Count, "estimate should classify visual-only items.");
+    AssertTrue(estimate.Warnings.Any(warning => warning.Contains("visual-only", StringComparison.OrdinalIgnoreCase)), "estimate should warn about excluded visual-only items.");
+}
+
+static void TestTryOnServiceEnforcesConfirmedCost()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var bottom = store.CreateGarment(CreateGarment(userId, "jeans", GarmentCategory.Bottom));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id, bottom.Id });
+    var provider = new CountingTryOnProvider();
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), new SystemClock());
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SequentialOutfitTryOn, "https://example.com/person.jpg", null);
+
+    AssertThrows<InvalidOperationException>(
+        () => service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SequentialOutfitTryOn, confirmedCredits: 1, confirmedCacheKey: estimate.CacheKey).GetAwaiter().GetResult(),
+        "confirmed credits must match server estimate");
+    AssertThrows<InvalidOperationException>(
+        () => service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SequentialOutfitTryOn, confirmedCredits: estimate.EstimatedCredits, confirmedCacheKey: "stale-cache-key").GetAwaiter().GetResult(),
+        "confirmed cache key must match server estimate");
+    AssertEqual(0, provider.Calls, "confirmation mismatch must stop before provider work.");
+}
+
+static void TestTryOnServiceReturnsCacheHitsWithoutQueueing()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id });
+    var provider = new CountingTryOnProvider();
+    var queue = new RecordingTryOnJobQueue();
+    var service = new TryOnService(store, store, store, queue, provider, new TryOnCostEstimator(), new SystemClock());
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/person.jpg", null);
+    var cached = new TryOnJob(Guid.NewGuid(), userId, outfit.Id, "https://example.com/person.jpg", false, TryOnStatus.Succeeded, "cached-provider-job", "https://example.com/cached.jpg", null, DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddMinutes(-5))
+    {
+        ProviderName = provider.Name,
+        TryOnMode = TryOnMode.SingleGarmentTryOn,
+        ConfirmedCredits = estimate.EstimatedCredits,
+        CacheKey = estimate.CacheKey,
+        ProviderSettingsHash = provider.Capabilities.SettingsHash
+    };
+    store.AddTryOnJob(cached);
+
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, estimate.EstimatedCredits, estimate.CacheKey)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(TryOnStatus.Succeeded, job.Status, "cache hit should return a succeeded job.");
+    AssertTrue(job.ServedFromCache, "cache hit job should record cache provenance.");
+    AssertEqual(cached.Id, job.SourceCachedJobId, "cache hit should link to source job.");
+    AssertEqual("https://example.com/cached.jpg", job.OutputImageUrl, "cache hit should reuse output.");
+    AssertEqual(0, queue.Enqueued.Count, "cache hit should not enqueue work.");
+    AssertEqual(0, provider.Calls, "cache hit should not call provider.");
+}
+
+static void TestTryOnServiceCompletesClothesOnlyWithoutAi()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id });
+    var provider = new CountingTryOnProvider();
+    var queue = new RecordingTryOnJobQueue();
+    var service = new TryOnService(store, store, store, queue, provider, new TryOnCostEstimator(), new SystemClock());
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.ClothesOnlyPreview, "https://example.com/person.jpg", null);
+
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: false, TryOnMode.ClothesOnlyPreview, estimate.EstimatedCredits, estimate.CacheKey)
+        .GetAwaiter()
+        .GetResult();
+
+    AssertEqual(TryOnStatus.Succeeded, job.Status, "clothes-only preview should complete synchronously.");
+    AssertEqual(0, job.ConfirmedCredits, "clothes-only preview should be free.");
+    AssertEqual(0, queue.Enqueued.Count, "clothes-only preview should not enqueue provider work.");
+    AssertEqual(0, provider.Calls, "clothes-only preview should not call provider.");
 }
 
 static void TestTryOnServiceQueuesJobsWithoutInlineProviderCall()
@@ -861,7 +960,7 @@ static void TestTryOnServiceQueuesJobsWithoutInlineProviderCall()
         .CreateOutfit(userId, "casual", new[] { top.Id });
     var provider = new CountingTryOnProvider();
     var queue = new RecordingTryOnJobQueue();
-    var service = new TryOnService(store, store, queue, provider, new SystemClock());
+    var service = new TryOnService(store, store, store, queue, provider, new TryOnCostEstimator(), new SystemClock());
 
     var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true)
         .GetAwaiter()
@@ -886,7 +985,7 @@ static void TestTryOnProcessorCompletesQueuedJobs()
         .CreateOutfit(userId, "casual", new[] { top.Id });
     var provider = new CountingTryOnProvider();
     var queue = new RecordingTryOnJobQueue();
-    var service = new TryOnService(store, store, queue, provider, new SystemClock());
+    var service = new TryOnService(store, store, store, queue, provider, new TryOnCostEstimator(), new SystemClock());
     var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, sequentialFlowEnabled: true)
         .GetAwaiter()
         .GetResult();
@@ -896,7 +995,7 @@ static void TestTryOnProcessorCompletesQueuedJobs()
     var updatedOutfit = new OutfitService(store, store, new SystemClock()).GetOutfit(userId, outfit.Id);
 
     AssertEqual(1, provider.Calls, "worker processing should call provider once.");
-    AssertTrue(provider.LastOptions?.SequentialFlowEnabled == true, "worker should preserve sequential flow option from the queued job.");
+    AssertTrue(provider.LastRequest?.Mode == TryOnMode.SequentialOutfitTryOn, "worker should preserve sequential flow option from the queued job.");
     AssertEqual(TryOnStatus.Succeeded, completed?.Status, "processed job should succeed.");
     AssertEqual("https://example.com/output.jpg", completed?.OutputImageUrl, "processed job should store provider output.");
     AssertEqual("https://example.com/output.jpg", updatedOutfit?.PersonPreviewUrl, "processed job should update outfit preview.");
@@ -910,7 +1009,7 @@ static void TestTryOnServiceForwardsSequentialFlowOption()
     var outfit = new OutfitService(store, store, new SystemClock())
         .CreateOutfit(userId, "casual", new[] { top.Id });
     var provider = new CountingTryOnProvider();
-    var service = new TryOnService(store, store, new RecordingTryOnJobQueue(), provider, new SystemClock());
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), new SystemClock());
 
     var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, sequentialFlowEnabled: true)
         .GetAwaiter()
@@ -918,7 +1017,7 @@ static void TestTryOnServiceForwardsSequentialFlowOption()
     service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
 
     AssertEqual(1, provider.Calls, "provider should receive the try-on request");
-    AssertTrue(provider.LastOptions?.SequentialFlowEnabled == true, "provider should receive sequential flow option");
+    AssertTrue(provider.LastRequest?.Mode == TryOnMode.SequentialOutfitTryOn, "provider should receive sequential flow option");
 }
 
 static void TestApiRegistersRedisQueueAndProviderChoices()
@@ -1731,19 +1830,25 @@ sealed record RecordedHttpProviderRequest(HttpMethod Method, string Path, Authen
 sealed class CountingTryOnProvider : ITryOnProvider
 {
     public int Calls { get; private set; }
-    public TryOnOptions? LastOptions { get; private set; }
+    public TryOnProviderRequest? LastRequest { get; private set; }
     public string Name => "test";
 
-    public TryOnGeneration Generate(string userId, Outfit outfit, string bodyReferencePhotoUrl, TryOnOptions options)
-    {
-        Calls++;
-        LastOptions = options;
-        return new TryOnGeneration("test-provider-job", "https://example.com/output.jpg");
-    }
+    public TryOnProviderCapabilities Capabilities => new(
+        Name,
+        "test-model",
+        "test-mode",
+        "test-model:test-mode",
+        new HashSet<TryOnMode>
+        {
+            TryOnMode.SingleGarmentTryOn,
+            TryOnMode.SequentialOutfitTryOn,
+            TryOnMode.ExperimentalCompositeTryOn
+        });
 
     public TryOnGeneration Generate(TryOnProviderRequest request)
     {
         Calls++;
+        LastRequest = request;
         return new TryOnGeneration("test-provider-job", "https://example.com/output.jpg");
     }
 }
