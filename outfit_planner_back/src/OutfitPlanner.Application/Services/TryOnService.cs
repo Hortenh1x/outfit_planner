@@ -6,28 +6,57 @@ namespace OutfitPlanner.Application.Services;
 
 public sealed class TryOnService
 {
+    private readonly IBodyReferencePhotoRepository _bodyPhotos;
     private readonly IOutfitRepository _outfits;
     private readonly ITryOnJobRepository _jobs;
     private readonly ITryOnJobQueue _queue;
     private readonly ITryOnProvider _provider;
+    private readonly TryOnCostEstimator _estimator;
     private readonly IClock _clock;
     private readonly TimeSpan _outputRetention = TimeSpan.FromDays(30);
 
     public TryOnService(
+        IBodyReferencePhotoRepository bodyPhotos,
         IOutfitRepository outfits,
         ITryOnJobRepository jobs,
         ITryOnJobQueue queue,
         ITryOnProvider provider,
+        TryOnCostEstimator estimator,
         IClock clock)
     {
+        _bodyPhotos = bodyPhotos;
         _outfits = outfits;
         _jobs = jobs;
         _queue = queue;
         _provider = provider;
+        _estimator = estimator;
         _clock = clock;
     }
 
-    public async Task<TryOnJob> StartAsync(
+    public TryOnCostEstimate Estimate(string userId, Guid outfitId, TryOnMode mode, string bodyReferencePhotoUrl, Guid? sourceBodyPhotoId)
+    {
+        var normalizedUserId = InputGuard.NormalizeUserId(userId);
+        var normalizedBodyPhotoUrl = InputGuard.RequireText(bodyReferencePhotoUrl, "Body reference photo URL");
+        var outfit = _outfits.GetOutfitByUser(normalizedUserId, outfitId)
+            ?? throw new InvalidOperationException("Outfit was not found.");
+        var bodyIdentity = BodyReferenceIdentity(normalizedUserId, sourceBodyPhotoId, normalizedBodyPhotoUrl);
+        var cacheProbe = _estimator.Estimate(outfit, new TryOnEstimateInput(
+            mode,
+            _provider.Name,
+            bodyIdentity,
+            _provider.Capabilities.SettingsHash,
+            hasCachedResult: false));
+        var cached = _jobs.FindSucceededTryOnJobByCacheKey(normalizedUserId, cacheProbe.CacheKey);
+
+        return _estimator.Estimate(outfit, new TryOnEstimateInput(
+            mode,
+            _provider.Name,
+            bodyIdentity,
+            _provider.Capabilities.SettingsHash,
+            cached is not null));
+    }
+
+    public Task<TryOnJob> StartAsync(
         string userId,
         Guid outfitId,
         string bodyReferencePhotoUrl,
@@ -36,15 +65,49 @@ public sealed class TryOnService
         Guid? sourceBodyPhotoId = null,
         CancellationToken cancellationToken = default)
     {
-        if (!consentAccepted)
+        var mode = sequentialFlowEnabled ? TryOnMode.SequentialOutfitTryOn : TryOnMode.SingleGarmentTryOn;
+        var estimate = Estimate(userId, outfitId, mode, bodyReferencePhotoUrl, sourceBodyPhotoId);
+        return StartAsync(userId, outfitId, bodyReferencePhotoUrl, consentAccepted, mode, estimate.EstimatedCredits, estimate.CacheKey, sourceBodyPhotoId, cancellationToken);
+    }
+
+    public async Task<TryOnJob> StartAsync(
+        string userId,
+        Guid outfitId,
+        string bodyReferencePhotoUrl,
+        bool consentAccepted,
+        TryOnMode tryOnMode,
+        int confirmedCredits,
+        string confirmedCacheKey,
+        Guid? sourceBodyPhotoId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var normalizedUserId = InputGuard.NormalizeUserId(userId);
+        var normalizedBodyPhotoUrl = InputGuard.RequireText(bodyReferencePhotoUrl, "Body reference photo URL");
+        var estimate = Estimate(normalizedUserId, outfitId, tryOnMode, normalizedBodyPhotoUrl, sourceBodyPhotoId);
+        if (!estimate.IsAvailable)
+        {
+            throw new InvalidOperationException(estimate.Summary);
+        }
+
+        if (confirmedCredits != estimate.EstimatedCredits)
+        {
+            throw new InvalidOperationException("Confirmed credits do not match the current try-on estimate. Refresh the estimate before generating.");
+        }
+
+        if (!string.Equals(confirmedCacheKey, estimate.CacheKey, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Confirmed estimate is stale. Refresh the estimate before generating.");
+        }
+
+        if (estimate.RequiresAi && !consentAccepted)
         {
             throw new InvalidOperationException("Explicit consent is required before sending photos to an AI provider.");
         }
 
-        var normalizedUserId = InputGuard.NormalizeUserId(userId);
-        var normalizedBodyPhotoUrl = InputGuard.RequireText(bodyReferencePhotoUrl, "Body reference photo URL");
-        var outfit = _outfits.GetOutfitByUser(normalizedUserId, outfitId)
-            ?? throw new InvalidOperationException("Outfit was not found.");
+        if (!_provider.Capabilities.SupportedModes.Contains(tryOnMode) && estimate.RequiresAi)
+        {
+            throw new InvalidOperationException($"{_provider.Name} does not support {tryOnMode}.");
+        }
 
         var now = _clock.UtcNow;
         var started = new TryOnJob(
@@ -52,7 +115,7 @@ public sealed class TryOnService
             normalizedUserId,
             outfitId,
             normalizedBodyPhotoUrl,
-            sequentialFlowEnabled,
+            tryOnMode == TryOnMode.SequentialOutfitTryOn,
             TryOnStatus.Queued,
             null,
             null,
@@ -60,12 +123,44 @@ public sealed class TryOnService
             now,
             now)
         {
-            ConsentAcceptedAt = now,
+            ConsentAcceptedAt = estimate.RequiresAi ? now : null,
             ProviderName = _provider.Name,
             SourceBodyPhotoId = sourceBodyPhotoId,
             RetentionUntil = now.Add(_outputRetention),
-            IsDeleted = false
+            IsDeleted = false,
+            TryOnMode = tryOnMode,
+            ConfirmedCredits = estimate.EstimatedCredits,
+            CacheKey = estimate.CacheKey,
+            ProviderSettingsHash = _provider.Capabilities.SettingsHash
         };
+
+        if (!estimate.RequiresAi)
+        {
+            var completed = started with
+            {
+                Status = TryOnStatus.Succeeded,
+                UpdatedAt = now
+            };
+            _jobs.AddTryOnJob(completed);
+            return completed;
+        }
+
+        var cached = _jobs.FindSucceededTryOnJobByCacheKey(normalizedUserId, estimate.CacheKey);
+        if (cached is not null)
+        {
+            var cacheHit = started with
+            {
+                Status = TryOnStatus.Succeeded,
+                ProviderJobId = cached.ProviderJobId,
+                ProviderRequestId = cached.ProviderRequestId,
+                OutputImageUrl = cached.OutputImageUrl,
+                ServedFromCache = true,
+                SourceCachedJobId = cached.Id,
+                UpdatedAt = now
+            };
+            _jobs.AddTryOnJob(cacheHit);
+            return cacheHit;
+        }
 
         _jobs.AddTryOnJob(started);
         await _queue.EnqueueAsync(started.Id, cancellationToken);
@@ -74,7 +169,9 @@ public sealed class TryOnService
 
     public TryOnJob Start(string userId, Guid outfitId, string bodyReferencePhotoUrl, bool consentAccepted, bool sequentialFlowEnabled = false)
     {
-        return StartAsync(userId, outfitId, bodyReferencePhotoUrl, consentAccepted, sequentialFlowEnabled)
+        var mode = sequentialFlowEnabled ? TryOnMode.SequentialOutfitTryOn : TryOnMode.SingleGarmentTryOn;
+        var estimate = Estimate(userId, outfitId, mode, bodyReferencePhotoUrl, null);
+        return StartAsync(userId, outfitId, bodyReferencePhotoUrl, consentAccepted, mode, estimate.EstimatedCredits, estimate.CacheKey)
             .GetAwaiter()
             .GetResult();
     }
@@ -109,7 +206,23 @@ public sealed class TryOnService
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var generation = _provider.Generate(queued.UserId, outfit, queued.BodyReferencePhotoUrl, new TryOnOptions(queued.SequentialFlowEnabled));
+            var estimate = _estimator.Estimate(outfit, new TryOnEstimateInput(
+                queued.TryOnMode,
+                queued.ProviderName ?? _provider.Name,
+                BodyReferenceIdentity(queued.UserId, queued.SourceBodyPhotoId, queued.BodyReferencePhotoUrl),
+                queued.ProviderSettingsHash ?? _provider.Capabilities.SettingsHash,
+                hasCachedResult: false));
+            var generation = _provider.Generate(new TryOnProviderRequest(
+                queued.UserId,
+                outfit.Id,
+                queued.TryOnMode,
+                queued.BodyReferencePhotoUrl,
+                estimate.BodyTryOnItems,
+                estimate.VisualOnlyItems,
+                new TryOnGenerationSettings(
+                    _provider.Capabilities.ModelName,
+                    _provider.Capabilities.ProviderMode,
+                    _provider.Capabilities.SettingsHash)));
             var completed = processing with
             {
                 Status = TryOnStatus.Succeeded,
@@ -139,6 +252,18 @@ public sealed class TryOnService
         }
 
         return Task.CompletedTask;
+    }
+
+    private string BodyReferenceIdentity(string userId, Guid? sourceBodyPhotoId, string bodyReferencePhotoUrl)
+    {
+        if (sourceBodyPhotoId is { } photoId)
+        {
+            var photo = _bodyPhotos.GetBodyReferencePhotoByUser(userId, photoId)
+                ?? throw new InvalidOperationException("Body reference photo was not found.");
+            return $"body:{photo.Id:N}";
+        }
+
+        return $"url:{bodyReferencePhotoUrl.Trim()}";
     }
 
     public TryOnJob? GetJob(string userId, Guid jobId)
