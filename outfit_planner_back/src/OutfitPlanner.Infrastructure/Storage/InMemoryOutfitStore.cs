@@ -310,6 +310,21 @@ public sealed class InMemoryOutfitStore :
         }
     }
 
+    public TryOnJob? FindSucceededTryOnJobByCacheKey(string userId, string cacheKey)
+    {
+        lock (_lock)
+        {
+            return _tryOnJobs.Values
+                .Where(job => job.UserId == userId)
+                .Where(job => job.CacheKey == cacheKey)
+                .Where(job => job.Status == TryOnStatus.Succeeded)
+                .Where(job => !job.IsDeleted)
+                .Where(job => !string.IsNullOrWhiteSpace(job.OutputImageUrl))
+                .OrderByDescending(job => job.CreatedAt)
+                .FirstOrDefault();
+        }
+    }
+
     public IReadOnlyList<TryOnJob> ListTryOnJobsByUser(string userId)
     {
         lock (_lock)

@@ -425,11 +425,13 @@ public sealed class PostgresOutfitStore :
             insert into try_on_jobs (
                 id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status,
                 provider_job_id, output_image_url, error, created_at, updated_at,
-                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted)
+                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted,
+                try_on_mode, confirmed_credits, cache_key, served_from_cache, source_cached_job_id, provider_settings_hash)
             values (
                 @id, @user_id, @outfit_id, @body_reference_photo_url, @sequential_flow_enabled, @status,
                 @provider_job_id, @output_image_url, @error, @created_at, @updated_at,
-                @consent_accepted_at, @provider_name, @provider_request_id, @source_body_photo_id, @retention_until, @is_deleted)
+                @consent_accepted_at, @provider_name, @provider_request_id, @source_body_photo_id, @retention_until, @is_deleted,
+                @try_on_mode, @confirmed_credits, @cache_key, @served_from_cache, @source_cached_job_id, @provider_settings_hash)
             """, connection, transaction);
         AddTryOnJobParameters(command, job);
         command.ExecuteNonQuery();
@@ -441,7 +443,8 @@ public sealed class PostgresOutfitStore :
         using var command = _dataSource.CreateCommand("""
             select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status,
                 provider_job_id, output_image_url, error, created_at, updated_at,
-                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted
+                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted,
+                try_on_mode, confirmed_credits, cache_key, served_from_cache, source_cached_job_id, provider_settings_hash
             from try_on_jobs
             where user_id = @user_id and id = @id
             """);
@@ -457,11 +460,35 @@ public sealed class PostgresOutfitStore :
         using var command = _dataSource.CreateCommand("""
             select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status,
                 provider_job_id, output_image_url, error, created_at, updated_at,
-                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted
+                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted,
+                try_on_mode, confirmed_credits, cache_key, served_from_cache, source_cached_job_id, provider_settings_hash
             from try_on_jobs
             where id = @id
             """);
         command.Parameters.AddWithValue("id", jobId);
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadTryOnJob(reader) : null;
+    }
+
+    public TryOnJob? FindSucceededTryOnJobByCacheKey(string userId, string cacheKey)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status,
+                provider_job_id, output_image_url, error, created_at, updated_at,
+                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted,
+                try_on_mode, confirmed_credits, cache_key, served_from_cache, source_cached_job_id, provider_settings_hash
+            from try_on_jobs
+            where user_id = @user_id
+                and cache_key = @cache_key
+                and status = 'Succeeded'
+                and output_image_url is not null
+                and is_deleted = false
+            order by created_at desc
+            limit 1
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("cache_key", cacheKey);
 
         using var reader = command.ExecuteReader();
         return reader.Read() ? ReadTryOnJob(reader) : null;
@@ -472,7 +499,8 @@ public sealed class PostgresOutfitStore :
         using var command = _dataSource.CreateCommand("""
             select id, user_id, outfit_id, body_reference_photo_url, sequential_flow_enabled, status,
                 provider_job_id, output_image_url, error, created_at, updated_at,
-                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted
+                consent_accepted_at, provider_name, provider_request_id, source_body_photo_id, retention_until, is_deleted,
+                try_on_mode, confirmed_credits, cache_key, served_from_cache, source_cached_job_id, provider_settings_hash
             from try_on_jobs
             where user_id = @user_id
             order by created_at desc
@@ -500,6 +528,12 @@ public sealed class PostgresOutfitStore :
                 error = @error,
                 retention_until = @retention_until,
                 is_deleted = @is_deleted,
+                try_on_mode = @try_on_mode,
+                confirmed_credits = @confirmed_credits,
+                cache_key = @cache_key,
+                served_from_cache = @served_from_cache,
+                source_cached_job_id = @source_cached_job_id,
+                provider_settings_hash = @provider_settings_hash,
                 updated_at = @updated_at
             where id = @id and user_id = @user_id
             """);
@@ -512,6 +546,12 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("error", DbValue(job.Error));
         command.Parameters.AddWithValue("retention_until", DbValue(job.RetentionUntil));
         command.Parameters.AddWithValue("is_deleted", job.IsDeleted);
+        command.Parameters.AddWithValue("try_on_mode", job.TryOnMode.ToString());
+        command.Parameters.AddWithValue("confirmed_credits", job.ConfirmedCredits);
+        command.Parameters.AddWithValue("cache_key", DbValue(job.CacheKey));
+        command.Parameters.AddWithValue("served_from_cache", job.ServedFromCache);
+        command.Parameters.AddWithValue("source_cached_job_id", DbValue(job.SourceCachedJobId));
+        command.Parameters.AddWithValue("provider_settings_hash", DbValue(job.ProviderSettingsHash));
         command.Parameters.AddWithValue("updated_at", job.UpdatedAt);
         command.ExecuteNonQuery();
     }
@@ -1187,6 +1227,12 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("source_body_photo_id", DbValue(job.SourceBodyPhotoId));
         command.Parameters.AddWithValue("retention_until", DbValue(job.RetentionUntil));
         command.Parameters.AddWithValue("is_deleted", job.IsDeleted);
+        command.Parameters.AddWithValue("try_on_mode", job.TryOnMode.ToString());
+        command.Parameters.AddWithValue("confirmed_credits", job.ConfirmedCredits);
+        command.Parameters.AddWithValue("cache_key", DbValue(job.CacheKey));
+        command.Parameters.AddWithValue("served_from_cache", job.ServedFromCache);
+        command.Parameters.AddWithValue("source_cached_job_id", DbValue(job.SourceCachedJobId));
+        command.Parameters.AddWithValue("provider_settings_hash", DbValue(job.ProviderSettingsHash));
     }
 
     private static GarmentItem ReadGarment(NpgsqlDataReader reader)
@@ -1255,7 +1301,13 @@ public sealed class PostgresOutfitStore :
             ProviderRequestId = reader.IsDBNull(13) ? null : reader.GetString(13),
             SourceBodyPhotoId = reader.IsDBNull(14) ? null : reader.GetGuid(14),
             RetentionUntil = reader.IsDBNull(15) ? null : reader.GetFieldValue<DateTimeOffset>(15),
-            IsDeleted = reader.GetBoolean(16)
+            IsDeleted = reader.GetBoolean(16),
+            TryOnMode = reader.IsDBNull(17) ? TryOnMode.SequentialOutfitTryOn : Enum.Parse<TryOnMode>(reader.GetString(17)),
+            ConfirmedCredits = reader.IsDBNull(18) ? 0 : reader.GetInt32(18),
+            CacheKey = reader.IsDBNull(19) ? null : reader.GetString(19),
+            ServedFromCache = !reader.IsDBNull(20) && reader.GetBoolean(20),
+            SourceCachedJobId = reader.IsDBNull(21) ? null : reader.GetGuid(21),
+            ProviderSettingsHash = reader.IsDBNull(22) ? null : reader.GetString(22)
         };
     }
 
