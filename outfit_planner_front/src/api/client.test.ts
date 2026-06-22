@@ -5,6 +5,7 @@ import {
   deleteBodyReferencePhoto,
   deleteGarment,
   deleteOutfit,
+  estimateTryOn,
   getGarment,
   getCurrentSession,
   getAuthProviders,
@@ -30,7 +31,47 @@ describe('api client', () => {
     vi.restoreAllMocks();
   });
 
-  it('sends the sequential flow option when starting try-on generation', async () => {
+  it('requests try-on estimates before confirmed generation', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        mode: 'SequentialOutfitTryOn',
+        provider: 'FashnTryOnProvider',
+        bodyTryOnItems: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: '/top.png' }],
+        visualOnlyItems: [{ garmentId: 'bag-1', name: 'bag', category: 'Bag', bodyZone: 'Accessory', thumbnailUrl: '/bag.png' }],
+        includedGarmentIds: ['top-1'],
+        excludedGarmentIds: ['bag-1'],
+        estimatedCredits: 1,
+        isAvailable: true,
+        requiresAi: true,
+        requiresPremiumConfirmation: false,
+        cacheKey: 'cache-key-a',
+        hasCachedResult: false,
+        summary: 'Sequential outfit try-on will use 1 body garment run(s).',
+        warnings: ['Bags are visual-only.']
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    );
+
+    await estimateTryOn({
+      outfitId: 'outfit-1',
+      bodyReferencePhotoUrl: 'https://example.com/body.jpg',
+      bodyReferencePhotoId: 'body-1',
+      tryOnMode: 'SequentialOutfitTryOn'
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/outfits/outfit-1/try-on/estimate');
+    expect(init).toMatchObject({ method: 'POST', credentials: 'include' });
+    expect(JSON.parse(init?.body as string)).toMatchObject({
+      bodyReferencePhotoUrl: 'https://example.com/body.jpg',
+      bodyReferencePhotoId: 'body-1',
+      tryOnMode: 'SequentialOutfitTryOn'
+    });
+  });
+
+  it('sends confirmed cost metadata when starting try-on generation', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ id: 'job-1', outputImageUrl: 'https://example.com/out.png' }), {
         status: 202,
@@ -43,7 +84,9 @@ describe('api client', () => {
       bodyReferencePhotoUrl: 'https://example.com/body.jpg',
       bodyReferencePhotoId: 'body-1',
       consentAccepted: true,
-      sequentialFlowEnabled: true
+      tryOnMode: 'SequentialOutfitTryOn',
+      confirmedCredits: 2,
+      confirmedCacheKey: 'cache-key-a'
     });
 
     const [url, init] = fetchMock.mock.calls[0];
@@ -53,7 +96,9 @@ describe('api client', () => {
       bodyReferencePhotoUrl: 'https://example.com/body.jpg',
       bodyReferencePhotoId: 'body-1',
       consentAccepted: true,
-      sequentialFlowEnabled: true
+      tryOnMode: 'SequentialOutfitTryOn',
+      confirmedCredits: 2,
+      confirmedCacheKey: 'cache-key-a'
     });
   });
 
