@@ -109,9 +109,125 @@ describe('BuilderPage', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse([]));
 
     const builder = renderBuilder();
+    const modeToggle = builder.container.querySelector('.mode-toggle');
 
-    expect(await within(builder.container).findByRole('button', { name: /clothes only/i })).toBeInTheDocument();
+    expect(modeToggle).not.toBeNull();
+    expect(await within(modeToggle as HTMLElement).findByRole('button', { name: /clothes only/i })).toBeInTheDocument();
     expect(builder.container.querySelector('.mode-toggle .toggle-motion-indicator')).toBeInTheDocument();
+  });
+
+  it('shows server-estimated cost and confirms before starting generation', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            userId: 'user-a',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: '/top.png',
+            thumbnailUrl: '/top.png',
+            tags: [],
+            secondaryColors: [],
+            season: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            laundryStatus: 'clean',
+            createdAt: '2026-06-21T12:00:00Z'
+          },
+          {
+            id: 'bag-1',
+            userId: 'user-a',
+            name: 'leather bag',
+            category: 'Bag',
+            bodyZone: 'Accessory',
+            imageUrl: '/bag.png',
+            thumbnailUrl: '/bag.png',
+            tags: [],
+            secondaryColors: [],
+            season: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            laundryStatus: 'clean',
+            createdAt: '2026-06-21T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.endsWith('/body-reference-photos')) {
+        return jsonResponse([{ id: 'body-1', imageUrl: 'https://example.com/body.jpg', createdAt: '2026-06-21T12:00:00Z' }]);
+      }
+
+      if (url.endsWith('/outfits') && init?.method === 'POST') {
+        return jsonResponse({
+          id: 'outfit-1',
+          name: 'Today',
+          items: [
+            { garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: '/top.png' },
+            { garmentId: 'bag-1', name: 'leather bag', category: 'Bag', bodyZone: 'Accessory', thumbnailUrl: '/bag.png' }
+          ],
+          tags: [],
+          occasion: [],
+          isFavorite: false,
+          isArchived: false,
+          createdAt: '2026-06-21T12:00:00Z'
+        }, 201);
+      }
+
+      if (url.endsWith('/outfits/outfit-1/try-on/estimate') && init?.method === 'POST') {
+        return jsonResponse({
+          mode: 'SequentialOutfitTryOn',
+          provider: 'FashnTryOnProvider',
+          bodyTryOnItems: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: '/top.png' }],
+          visualOnlyItems: [{ garmentId: 'bag-1', name: 'leather bag', category: 'Bag', bodyZone: 'Accessory', thumbnailUrl: '/bag.png' }],
+          includedGarmentIds: ['top-1'],
+          excludedGarmentIds: ['bag-1'],
+          estimatedCredits: 1,
+          isAvailable: true,
+          requiresAi: true,
+          requiresPremiumConfirmation: false,
+          cacheKey: 'cache-key-a',
+          hasCachedResult: false,
+          summary: 'Sequential outfit try-on will use 1 body garment run(s).',
+          warnings: ['Shoes, bags, accessories, and hats are visual-only and will not be sent to AI in this mode.']
+        });
+      }
+
+      if (url.endsWith('/outfits/outfit-1/try-on') && init?.method === 'POST') {
+        return jsonResponse({ id: 'job-1', status: 'Queued' }, 202);
+      }
+
+      if (url.endsWith('/try-on-jobs/job-1')) {
+        return jsonResponse({ id: 'job-1', status: 'Queued' });
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderBuilder();
+
+    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /leather bag/i }));
+    await userEvent.click(screen.getByRole('button', { name: /generate preview/i }));
+
+    expect(await screen.findByText(/1 credit/i)).toBeInTheDocument();
+    expect(screen.getByText((_, element) => element?.textContent === 'Visual-only: leather bag')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringMatching(/\/try-on$/), expect.anything());
+
+    await userEvent.click(screen.getByRole('button', { name: /confirm generation/i }));
+
+    const startCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/outfits/outfit-1/try-on') && init?.method === 'POST');
+    expect(startCall).toBeDefined();
+    expect(JSON.parse(startCall?.[1]?.body as string)).toMatchObject({
+      tryOnMode: 'SequentialOutfitTryOn',
+      confirmedCredits: 1,
+      confirmedCacheKey: 'cache-key-a'
+    });
   });
 
   it('clears the active saved outfit when the draft selection changes', async () => {

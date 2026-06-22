@@ -2,18 +2,19 @@ import { type ChangeEvent, type CSSProperties, useEffect, useState } from 'react
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { GitBranch, Layers3, Link2, Plus, ScanFace, Sparkles, Wand2 } from 'lucide-react';
-import { createBodyReferencePhoto, createGarment, createOutfit, deleteBodyReferencePhoto, getTryOnJob, listBodyReferencePhotos, listGarments, listOutfits, shareOutfit, startTryOn, uploadBodyReferencePhoto, uploadGarmentPhoto } from '../api/client';
+import { createBodyReferencePhoto, createGarment, createOutfit, deleteBodyReferencePhoto, estimateTryOn, getTryOnJob, listBodyReferencePhotos, listGarments, listOutfits, shareOutfit, startTryOn, uploadBodyReferencePhoto, uploadGarmentPhoto } from '../api/client';
 import { ModeToggle } from '../components/ModeToggle';
 import { BodyReferenceManager } from '../features/builder/BodyReferenceManager';
 import { garmentNameFromFile } from '../features/builder/garmentName';
 import { OutfitList } from '../features/builder/OutfitList';
 import { SlotPicker } from '../features/builder/SlotPicker';
 import { CATEGORY_SELECTION_KEYS, GARMENT_CATEGORIES, groupGarmentsByCategory, selectedGarmentIds, selectionLabel } from '../features/outfits/outfitUtils';
+import { creditsLabel, modeLabel } from '../features/tryon/tryOnText';
 import { validateUploadImageFile } from '../features/uploads/imageFile';
 import { EmptyPreview } from '../shared/ui/EmptyPreview';
 import { PanelTitle } from '../shared/ui/PanelTitle';
 import { PanelSkeleton } from '../shared/ui/Skeletons';
-import type { GarmentCategory, Outfit, OutfitSelection, PreviewMode } from '../types';
+import type { GarmentCategory, Outfit, OutfitSelection, PreviewMode, TryOnCostEstimate, TryOnMode } from '../types';
 
 const headingStyle: CSSProperties = { fontFamily: 'Nunito, sans-serif' };
 
@@ -30,7 +31,8 @@ export function BuilderPage() {
   const [selectedBodyPhotoId, setSelectedBodyPhotoId] = useState('');
   const [bodyPhotoUploadError, setBodyPhotoUploadError] = useState<string | null>(null);
   const [quickAddGarmentError, setQuickAddGarmentError] = useState<string | null>(null);
-  const [sequentialFlowEnabled, setSequentialFlowEnabled] = useState(false);
+  const [tryOnMode, setTryOnMode] = useState<TryOnMode>('SequentialOutfitTryOn');
+  const [pendingEstimate, setPendingEstimate] = useState<TryOnCostEstimate | null>(null);
   const [activeOutfit, setActiveOutfit] = useState<Outfit | null>(null);
 
   const saveMutation = useMutation({
@@ -46,6 +48,7 @@ export function BuilderPage() {
       void queryClient.invalidateQueries({ queryKey: ['outfits'] });
     }
   });
+  const estimateMutation = useMutation({ mutationFn: estimateTryOn });
   const tryOnJobQuery = useQuery({
     queryKey: ['try-on-job', tryOnMutation.data?.id],
     queryFn: () => getTryOnJob(tryOnMutation.data?.id ?? ''),
@@ -120,6 +123,7 @@ export function BuilderPage() {
 
     if (selectedBodyPhotoId && bodyPhotos.length === 0) {
       setSelectedBodyPhotoId('');
+      setPendingEstimate(null);
     }
   }, [bodyPhotos, selectedBodyPhotoId]);
 
@@ -158,6 +162,7 @@ export function BuilderPage() {
 
     if (selection[selectionKey] !== id) {
       setActiveOutfit(null);
+      setPendingEstimate(null);
     }
   }
 
@@ -244,39 +249,89 @@ export function BuilderPage() {
             selectedPhoto={selectedBodyPhoto}
             isLoading={bodyPhotosQuery.isLoading}
             deletingId={deleteBodyPhotoMutation.isPending ? deleteBodyPhotoMutation.variables : undefined}
-            onSelect={setSelectedBodyPhotoId}
+            onSelect={(id) => {
+              setSelectedBodyPhotoId(id);
+              setPendingEstimate(null);
+            }}
             onDelete={(id) => deleteBodyPhotoMutation.mutate(id)}
             onUpload={handleBodyPhotoFileChange}
           />
-          <button
-            type="button"
-            className={sequentialFlowEnabled ? 'flow-toggle active' : 'flow-toggle'}
-            aria-pressed={sequentialFlowEnabled}
-            onClick={() => setSequentialFlowEnabled((enabled) => !enabled)}
-          >
-            <GitBranch size={16} />
-            <span>Sequential flow</span>
-            <strong style={headingStyle}>{sequentialFlowEnabled ? 'On' : 'Off'}</strong>
-          </button>
+          <div className="tryon-mode-selector" role="group" aria-label="Try-on mode">
+            {(['ClothesOnlyPreview', 'SingleGarmentTryOn', 'SequentialOutfitTryOn', 'ExperimentalCompositeTryOn'] as TryOnMode[]).map((option) => (
+              <button
+                key={option}
+                type="button"
+                className={tryOnMode === option ? 'flow-toggle active' : 'flow-toggle'}
+                aria-pressed={tryOnMode === option}
+                onClick={() => {
+                  setTryOnMode(option);
+                  setPendingEstimate(null);
+                }}
+              >
+                <GitBranch size={16} />
+                <span>{modeLabel(option)}</span>
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             className="clay-button primary-action generate-action"
-            disabled={selectedIds.length === 0 || !selectedBodyPhoto?.imageUrl || tryOnMutation.isPending}
+            disabled={selectedIds.length === 0 || !selectedBodyPhoto?.imageUrl || estimateMutation.isPending}
             onClick={async () => {
               const outfit = await ensureOutfit();
-              await tryOnMutation.mutateAsync({
+              const estimate = await estimateMutation.mutateAsync({
                 outfitId: outfit.id,
                 bodyReferencePhotoUrl: selectedBodyPhoto.imageUrl,
                 bodyReferencePhotoId: selectedBodyPhoto.id,
-                consentAccepted: true,
-                sequentialFlowEnabled
+                tryOnMode
               });
-              setMode('person');
+              setPendingEstimate(estimate);
             }}
           >
             <Sparkles size={16} />
-            {tryOnMutation.isPending ? 'Generating' : 'Generate preview'}
+            {estimateMutation.isPending ? 'Estimating' : 'Generate preview'}
           </button>
+          {pendingEstimate ? (
+            <div className="tryon-confirmation">
+              <div>
+                <small style={headingStyle}>{modeLabel(pendingEstimate.mode)}</small>
+                <strong style={headingStyle}>{creditsLabel(pendingEstimate.estimatedCredits)}</strong>
+                <p>{pendingEstimate.summary}</p>
+              </div>
+              {pendingEstimate.hasCachedResult ? <p>Cached result available</p> : null}
+              {pendingEstimate.bodyTryOnItems.length > 0 ? (
+                <p>Included: {pendingEstimate.bodyTryOnItems.map((item) => item.name).join(', ')}</p>
+              ) : null}
+              {pendingEstimate.visualOnlyItems.length > 0 ? (
+                <p>Visual-only: {pendingEstimate.visualOnlyItems.map((item) => item.name).join(', ')}</p>
+              ) : null}
+              {pendingEstimate.warnings.map((warning) => (
+                <p className="error" key={warning}>{warning}</p>
+              ))}
+              <button
+                type="button"
+                className="clay-button primary-action"
+                disabled={!pendingEstimate.isAvailable || tryOnMutation.isPending}
+                onClick={async () => {
+                  const outfit = await ensureOutfit();
+                  await tryOnMutation.mutateAsync({
+                    outfitId: outfit.id,
+                    bodyReferencePhotoUrl: selectedBodyPhoto.imageUrl,
+                    bodyReferencePhotoId: selectedBodyPhoto.id,
+                    consentAccepted: pendingEstimate.requiresAi,
+                    tryOnMode: pendingEstimate.mode,
+                    confirmedCredits: pendingEstimate.estimatedCredits,
+                    confirmedCacheKey: pendingEstimate.cacheKey
+                  });
+                  setPendingEstimate(null);
+                  setMode('person');
+                }}
+              >
+                <Sparkles size={16} />
+                {tryOnMutation.isPending ? 'Generating' : 'Confirm generation'}
+              </button>
+            </div>
+          ) : null}
           {latestTryOnJob ? (
             <div className="tryon-status">
               <ScanFace size={17} />
@@ -300,7 +355,7 @@ export function BuilderPage() {
               {shareMutation.data.url}
             </Link>
           ) : null}
-          {[quickAddGarmentError ? new Error(quickAddGarmentError) : null, bodyPhotoUploadError ? new Error(bodyPhotoUploadError) : null, saveMutation.error, tryOnMutation.error, shareMutation.error, deleteBodyPhotoMutation.error, tryOnJobQuery.error].filter(Boolean).map((error) => (
+          {[quickAddGarmentError ? new Error(quickAddGarmentError) : null, bodyPhotoUploadError ? new Error(bodyPhotoUploadError) : null, saveMutation.error, estimateMutation.error, tryOnMutation.error, shareMutation.error, deleteBodyPhotoMutation.error, tryOnJobQuery.error].filter(Boolean).map((error) => (
             <p className="error" key={(error as Error).message}>
               {(error as Error).message}
             </p>

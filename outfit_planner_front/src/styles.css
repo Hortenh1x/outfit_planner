@@ -1504,6 +1504,43 @@ select:focus {
   color: var(--accent);
 }
 
+.tryon-mode-selector,
+.tryon-confirmation {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.tryon-mode-selector .flow-toggle {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.tryon-confirmation {
+  background: color-mix(in srgb, var(--surface) 92%, var(--surface-strong));
+  border: 1px solid color-mix(in srgb, var(--foreground) 16%, transparent);
+  border-radius: 20px;
+  box-shadow: var(--shadow-card);
+  padding: 0.85rem;
+}
+
+.tryon-confirmation small {
+  color: var(--muted);
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tryon-confirmation strong {
+  display: block;
+  font-size: 1.15rem;
+  font-weight: 900;
+}
+
+.tryon-confirmation p {
+  margin: 0;
+}
+
 .body-reference-manager {
   border-top: 1px solid var(--border);
   display: grid;
