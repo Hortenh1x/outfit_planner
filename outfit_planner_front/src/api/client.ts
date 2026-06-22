@@ -409,7 +409,7 @@ export function deleteOutfit(outfitId: string): Promise<void> {
 
 export function estimateTryOn(input: {
   outfitId: string;
-  bodyReferencePhotoUrl: string;
+  bodyReferencePhotoUrl?: string;
   bodyReferencePhotoId?: string;
   tryOnMode: TryOnMode;
 }): Promise<TryOnCostEstimate> {
@@ -425,7 +425,7 @@ export function estimateTryOn(input: {
 
 export function startTryOn(input: {
   outfitId: string;
-  bodyReferencePhotoUrl: string;
+  bodyReferencePhotoUrl?: string;
   bodyReferencePhotoId?: string;
   consentAccepted: boolean;
   tryOnMode: TryOnMode;

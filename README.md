@@ -319,7 +319,7 @@ The Builder asks the API for a try-on cost estimate before generation. The API c
 
 Try-on modes:
 
-- `ClothesOnlyPreview`: free, no AI provider call.
+- `ClothesOnlyPreview`: free, no body reference required, no AI provider call.
 - `SingleGarmentTryOn`: FASHN `tryon-v1.6`, 1 credit, exactly one body try-on item.
 - `SequentialOutfitTryOn`: FASHN `tryon-v1.6` once per body try-on item, one credit per run.
 - `ExperimentalCompositeTryOn`: one composed garment reference image, 1 credit, explicitly premium and allowed to include visual-only items.
