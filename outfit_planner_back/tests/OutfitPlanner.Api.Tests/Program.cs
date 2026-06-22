@@ -66,6 +66,7 @@ var tests = new List<(string Name, Action Test)>
     ("wardrobe service deletes body reference records and stored photos", TestWardrobeServiceDeletesBodyReferenceAndStoredPhoto),
     ("postgres schema contains structured garment metadata and query indexes", TestPostgresSchemaContainsStructuredMetadataAndIndexes),
     ("postgres schema contains privacy storage auth hardening and try-on retention fields", TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields),
+    ("try-on storage persists mode cost and cache metadata", TestTryOnStoragePersistsModeCostAndCacheMetadata),
     ("api uses DbUp migrations instead of startup schema initializer", TestApiUsesDbUpMigrations),
     ("new try-on provider adapters implement provider port", TestProviderAdaptersImplementPort),
     ("json try-on provider posts mode-aware payloads without dropping base path", TestJsonProviderPayloadAndEndpointPath),
@@ -1232,11 +1233,62 @@ static void TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields()
         "provider_request_id",
         "source_body_photo_id",
         "retention_until",
-        "is_deleted"
+        "is_deleted",
+        "try_on_mode",
+        "confirmed_credits",
+        "cache_key",
+        "served_from_cache",
+        "source_cached_job_id",
+        "provider_settings_hash"
     })
     {
         AssertTrue(schema.Contains(column, StringComparison.OrdinalIgnoreCase), $"schema should include privacy/storage/auth field {column}.");
     }
+}
+
+static void TestTryOnStoragePersistsModeCostAndCacheMetadata()
+{
+    var store = new InMemoryOutfitStore();
+    var now = DateTimeOffset.UtcNow;
+    var cached = new TryOnJob(
+        Guid.NewGuid(),
+        "user-a",
+        Guid.NewGuid(),
+        "https://example.com/person.jpg",
+        SequentialFlowEnabled: false,
+        TryOnStatus.Succeeded,
+        "provider-job",
+        "https://example.com/output.jpg",
+        null,
+        now,
+        now)
+    {
+        ProviderName = "FashnTryOnProvider",
+        TryOnMode = TryOnMode.SequentialOutfitTryOn,
+        ConfirmedCredits = 2,
+        CacheKey = "cache-key-a",
+        ProviderSettingsHash = "settings-a",
+        ServedFromCache = false,
+        IsDeleted = false
+    };
+    var deleted = cached with
+    {
+        Id = Guid.NewGuid(),
+        CacheKey = "cache-key-deleted",
+        IsDeleted = true
+    };
+
+    store.AddTryOnJob(cached);
+    store.AddTryOnJob(deleted);
+
+    var hit = store.FindSucceededTryOnJobByCacheKey("user-a", "cache-key-a");
+    var deletedHit = store.FindSucceededTryOnJobByCacheKey("user-a", "cache-key-deleted");
+
+    AssertEqual(cached.Id, hit?.Id, "cache lookup should return the matching succeeded job.");
+    AssertEqual(TryOnMode.SequentialOutfitTryOn, hit!.TryOnMode, "job should persist try-on mode.");
+    AssertEqual(2, hit.ConfirmedCredits, "job should persist confirmed credits.");
+    AssertEqual("settings-a", hit.ProviderSettingsHash, "job should persist provider settings hash.");
+    AssertTrue(deletedHit is null, "deleted outputs must not be cache hits.");
 }
 
 static void TestApiUsesDbUpMigrations()

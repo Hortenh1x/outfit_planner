@@ -79,6 +79,12 @@ public sealed record TryOnJob(
     public Guid? SourceBodyPhotoId { get; init; }
     public DateTimeOffset? RetentionUntil { get; init; }
     public bool IsDeleted { get; init; }
+    public TryOnMode TryOnMode { get; init; } = TryOnMode.SequentialOutfitTryOn;
+    public int ConfirmedCredits { get; init; }
+    public string? CacheKey { get; init; }
+    public bool ServedFromCache { get; init; }
+    public Guid? SourceCachedJobId { get; init; }
+    public string? ProviderSettingsHash { get; init; }
 }
 
 public sealed record ShareLink(

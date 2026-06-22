@@ -43,6 +43,7 @@ public interface ITryOnJobRepository
     void AddTryOnJob(TryOnJob job);
     TryOnJob? GetTryOnJobByUser(string userId, Guid jobId);
     TryOnJob? GetTryOnJobById(Guid jobId);
+    TryOnJob? FindSucceededTryOnJobByCacheKey(string userId, string cacheKey);
     IReadOnlyList<TryOnJob> ListTryOnJobsByUser(string userId);
     void UpdateTryOnJob(TryOnJob job);
 }
