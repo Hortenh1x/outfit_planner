@@ -18,6 +18,7 @@ The app is intentionally small, but it has a real backend/frontend split, signed
 - Google OAuth and Apple OIDC sign-in when provider credentials are configured.
 - Revocable server-side sessions with HttpOnly cookies, CSRF protection, rate-limited auth endpoints, email verification/password reset token storage, and session revoke-all support.
 - Privacy endpoints for account export/delete, body photo deletion, and AI output purging.
+- Configurable garment background removal for uploaded item cutouts, with simple local fallback, `rembg`, and HTTP/API provider adapters.
 - Background AI try-on jobs with a Redis-backed queue in Docker and an in-memory queue fallback for local development.
 - Mock AI try-on by default, optional FASHN `tryon-v1.6`, local VTON/CatVTON, Replicate, and Fal provider adapters.
 - Installable PWA shell with manifest metadata, static shell caching, offline fallback, and responsive mobile bottom navigation.
@@ -85,7 +86,8 @@ The API chooses storage at startup:
 Photo uploads are private by default:
 
 - Uploads are validated server-side by image magic bytes, then decoded, auto-oriented, stripped of metadata, resized/compressed, and stored as object variants.
-- Garment uploads store original, thumbnail, processed cutout, optional segmentation mask, and perceptual hash.
+- Garment uploads store original, thumbnail, processed cutout, optional segmentation mask, and perceptual hash. The upload response exposes variant URLs, and new wardrobe items use the processed cutout as their primary image.
+- Garment cutouts use `BackgroundRemoval__Provider`; the default `Simple` provider keeps local development dependency-free, `Rembg` runs a local model executable, and `Http`/provider aliases call an API that returns a transparent image. Garment extraction currently assumes one clothing item per upload through a single-item provider boundary; multi-item detection/separation is intentionally not active yet.
 - Body reference uploads store original, thumbnail, blurred private preview, and perceptual hash. Public `/uploads/body-reference-photos/{fileName}` access is disabled; clients receive signed object URLs.
 
 Try-on jobs are queued at request time:
@@ -113,6 +115,8 @@ The frontend uses an editorial fashion/product visual system across authenticate
 - Shared editorial component styles live in `outfit_planner_front/src/styles.css` for Auth, Builder, Calendar, Share, and reusable UI helpers.
 - The authenticated shell and Wardrobe slice use scoped editorial CSS with warm paper and dark ink themes, serif display headings, crimson emphasis, hairline borders, flat panels, restrained shadows, compact controls, and tactile crimson primary buttons.
 - The canonical light palette and typography come from `design_references/light_theme` Crimson Plinth tokens; `design_references/dark_theme` is the dark orientation, with the same pink primary actions preserved in dark mode.
+- Wardrobe filtering should use category tabs as the single category control, keep search in the compact top control row, and expose existing tags through a writable tag combobox. On mobile, creation/planning rails come before browsing content, while the authenticated account shell sits below page content.
+- Builder controls prioritize body references and try-on generation before the save-outfit block. Calendar mobile layout puts Plan day before the calendar grid, and selected current-day numbers must stay high-contrast.
 - Do not extend the removed claymorphism system; lavender canvases, animated blobs, oversized rounded panels, recessed controls, convex purple gradients, and multi-layer neumorphic shadows are no longer part of the active frontend language.
 - Frontend composition is split across `outfit_planner_front/src/app`, route pages under `src/routes`, feature components under `src/features`, and reusable UI under `src/shared/ui`. `src/App.tsx` remains a compatibility export.
 - Frontend API response types are generated from the backend OpenAPI document into ignored local artifacts and re-exported through committed aliases.
@@ -268,6 +272,17 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `ObjectStorage__S3__AccessKey` / `Minio__AccessKey` | empty | S3-compatible access key. |
 | `ObjectStorage__S3__SecretKey` / `Minio__SecretKey` | empty | S3-compatible secret key. |
 | `ObjectStorage__S3__Bucket` / `Minio__Bucket` | `outfit-planner-private` | Private bucket for uploaded image variants. |
+| `BackgroundRemoval__Provider` | `Simple` | Use `Simple`, `Rembg`, `Http`, `CloudflareImages`, `PhotoRoom`, `RemoveBg`, or `Clipdrop` for garment cutout generation. Unknown values use `Simple`. |
+| `BackgroundRemoval__Rembg__ExecutablePath` | `rembg` | Local executable used when `BackgroundRemoval__Provider=Rembg`. |
+| `BackgroundRemoval__Rembg__ModelName` | `birefnet-general` | Local `rembg` model. Use `birefnet-general-lite` if CPU runtime is too slow. |
+| `BackgroundRemoval__Rembg__ModelHome` | empty | Optional model cache directory passed as `U2NET_HOME` for `rembg`. |
+| `BackgroundRemoval__Rembg__TimeoutSeconds` | `180` | Local `rembg` process timeout. |
+| `BackgroundRemoval__Http__Endpoint` | empty | Multipart background-removal endpoint used by `Http` and as a fallback for HTTP provider aliases. Must return image bytes, preferably transparent PNG. |
+| `BackgroundRemoval__Http__ApiKey` | empty | API key for the HTTP background-removal endpoint. |
+| `BackgroundRemoval__Http__ApiKeyHeader` | `X-Api-Key` | Header name for the HTTP API key. `CloudflareImages` defaults to `Authorization`. |
+| `BackgroundRemoval__Http__ApiKeyPrefix` | empty | Prefix prepended to the API key header value. `CloudflareImages` defaults to `Bearer `. |
+| `BackgroundRemoval__Http__ImageFieldName` | `image_file` | Multipart field name for the uploaded image. |
+| `BackgroundRemoval__Http__TimeoutSeconds` | `120` | HTTP background-removal timeout. |
 | `TryOn__Provider` | `Mock` | Use `Mock`, `Fashn`, `CompositeFashn`, `LocalVton`, `LocalCatVton`, `SelfHostedCatVton`, `GeneralImageEdit`, `Replicate`, or `Fal`. Unknown values use the mock provider. |
 | `Fashn__ApiKey` | empty | Required before the FASHN provider makes network calls. |
 | `Fashn__BaseUrl` | `https://api.fashn.ai/v1/` | FASHN API base URL. |
@@ -304,6 +319,38 @@ Frontend configuration:
 | `VITE_DEV_API_TARGET` | `https://localhost:5001` | Vite dev proxy target for `/api` and `/uploads`. |
 | `VITE_DEV_HTTPS_PFX` | empty | Optional PFX certificate path for Dockerized HTTPS Vite dev server. |
 | `VITE_DEV_HTTPS_PFX_PASSPHRASE` | empty | Passphrase for `VITE_DEV_HTTPS_PFX`. |
+
+## Garment Background Removal
+
+Garment photo uploads always create original, thumbnail, processed cutout, and segmentation mask variants. The upload response includes `originalUrl`, `thumbnailUrl`, `cutoutUrl`, and `maskUrl`; the frontend stores `cutoutUrl` as the garment image and `thumbnailUrl` as the card thumbnail. By default, the backend uses the dependency-free `Simple` cutout provider. It is useful for local development, but production-quality item cutouts should use `Rembg` locally or an HTTP provider in production.
+
+The extraction layer currently assumes exactly one garment per upload. `SingleGarmentExtractionProvider` is a placeholder boundary around background removal so a future detector can return multiple candidates without changing the lower-level image variant pipeline.
+
+Local `rembg` with the recommended model:
+
+```powershell
+$env:BackgroundRemoval__Provider = "Rembg"
+$env:BackgroundRemoval__Rembg__ExecutablePath = "rembg"
+$env:BackgroundRemoval__Rembg__ModelName = "birefnet-general"
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
+```
+
+If the full model is too slow on CPU, use:
+
+```powershell
+$env:BackgroundRemoval__Rembg__ModelName = "birefnet-general-lite"
+```
+
+Production HTTP provider:
+
+```powershell
+$env:BackgroundRemoval__Provider = "Http"
+$env:BackgroundRemoval__Http__Endpoint = "https://background-removal.example.com/remove"
+$env:BackgroundRemoval__Http__ApiKey = "YOUR_API_KEY"
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
+```
+
+`CloudflareImages`, `PhotoRoom`, `RemoveBg`, and `Clipdrop` are HTTP aliases with provider-specific config sections such as `BackgroundRemoval__CloudflareImages__Endpoint`. For the cheapest Cloudflare path, point `CloudflareImages` at a small Worker/API endpoint that accepts multipart field `image_file`, uses Cloudflare image foreground segmentation, and returns transparent image bytes.
 
 ## Optional Try-On Providers
 

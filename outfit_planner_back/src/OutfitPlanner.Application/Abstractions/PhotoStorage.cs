@@ -4,6 +4,10 @@ public sealed record IncomingPhoto(string FileName, string ContentType, long Len
 
 public sealed record StoredPhoto(string FileName, string ContentType, long Length, string Url)
 {
+    public string? OriginalUrl { get; init; }
+    public string? ThumbnailUrl { get; init; }
+    public string? ProcessedCutoutUrl { get; init; }
+    public string? SegmentationMaskUrl { get; init; }
     public string? ObjectKey { get; init; }
     public string? ThumbnailObjectKey { get; init; }
     public string? ProcessedCutoutObjectKey { get; init; }

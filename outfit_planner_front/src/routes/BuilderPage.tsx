@@ -229,19 +229,6 @@ export function BuilderPage() {
       <aside className="builder-details-rail builder-controls">
         <PanelTitle icon={<Wand2 size={19} />} title="Outfit controls" />
         <div className="stack">
-          <label>
-            <span>Outfit name</span>
-            <input value={outfitName} onChange={(event) => setOutfitName(event.target.value)} />
-          </label>
-          <button
-            type="button"
-            className="primary-action"
-            disabled={selectedIds.length === 0 || saveMutation.isPending}
-            onClick={() => saveMutation.mutate({ name: outfitName, garmentIds: selectedIds })}
-          >
-            <Plus size={16} />
-            {saveMutation.isPending ? 'Saving' : 'Save outfit'}
-          </button>
           <BodyReferenceManager
             photos={bodyPhotos}
             selectedPhoto={selectedBodyPhoto}
@@ -351,6 +338,21 @@ export function BuilderPage() {
               {shareMutation.data.url}
             </Link>
           ) : null}
+          <div className="builder-save-block">
+            <label>
+              <span>Outfit name</span>
+              <input value={outfitName} onChange={(event) => setOutfitName(event.target.value)} />
+            </label>
+            <button
+              type="button"
+              className="primary-action"
+              disabled={selectedIds.length === 0 || saveMutation.isPending}
+              onClick={() => saveMutation.mutate({ name: outfitName, garmentIds: selectedIds })}
+            >
+              <Plus size={16} />
+              {saveMutation.isPending ? 'Saving' : 'Save outfit'}
+            </button>
+          </div>
           {[quickAddGarmentError ? new Error(quickAddGarmentError) : null, bodyPhotoUploadError ? new Error(bodyPhotoUploadError) : null, saveMutation.error, estimateMutation.error, tryOnMutation.error, shareMutation.error, deleteBodyPhotoMutation.error, tryOnJobQuery.error].filter(Boolean).map((error) => (
             <p className="error" key={(error as Error).message}>
               {(error as Error).message}

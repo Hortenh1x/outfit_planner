@@ -126,6 +126,17 @@ describe('BuilderPage', () => {
     expect(builder.container.querySelector('.clay-button, .inventory-panel, .tool-panel, .builder-layout')).not.toBeInTheDocument();
   });
 
+  it('places try-on generation controls before outfit save controls', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => jsonResponse([]));
+
+    renderBuilder();
+
+    const bodyReferences = await screen.findByText(/body references/i);
+    const outfitName = screen.getByText(/outfit name/i);
+
+    expect(bodyReferences.compareDocumentPosition(outfitName) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+  });
+
   it('shows server-estimated cost and confirms before starting generation', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);

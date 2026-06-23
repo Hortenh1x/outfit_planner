@@ -93,7 +93,8 @@ describe('WardrobePage', () => {
 
     expect(await screen.findByRole('heading', { name: /every piece has/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/search wardrobe/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/category filter/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/category filter/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /^tags$/i })).toBeInTheDocument();
     expect(within(screen.getByLabelText(/garment categories/i)).getByRole('button', { name: /outerwear/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/clean photo checklist/i)).toHaveTextContent(/front view/i);
     expect(await screen.findByText(/black silk cami/i)).toBeInTheDocument();
@@ -108,7 +109,7 @@ describe('WardrobePage', () => {
     const filters = await screen.findByLabelText(/wardrobe filters/i);
     await screen.findByText(/black silk cami/i);
     await userEvent.type(within(filters).getByLabelText(/search wardrobe/i), 'silk');
-    await userEvent.selectOptions(within(filters).getByLabelText(/category filter/i), 'Top');
+    await userEvent.click(within(screen.getByLabelText(/garment categories/i)).getByRole('button', { name: /^top$/i }));
     await userEvent.selectOptions(within(filters).getByLabelText(/^color$/i), 'black');
     await userEvent.selectOptions(within(filters).getByLabelText(/^season$/i), 'summer');
     await userEvent.click(within(filters).getByLabelText(/favorites/i));
@@ -128,7 +129,17 @@ describe('WardrobePage', () => {
 
     const filters = await screen.findByLabelText(/wardrobe filters/i);
     await screen.findByText(/black silk cami/i);
-    await userEvent.type(within(filters).getByLabelText(/^tags$/i), 'work');
+    const tagsCombobox = within(filters).getByRole('combobox', { name: /^tags$/i });
+    await userEvent.click(tagsCombobox);
+
+    const suggestions = await screen.findByRole('listbox', { name: /tag suggestions/i });
+    expect(within(suggestions).getByRole('option', { name: 'silk' })).toBeInTheDocument();
+    expect(within(suggestions).getByRole('option', { name: 'evening' })).toBeInTheDocument();
+    expect(within(suggestions).getByRole('option', { name: 'work' })).toBeInTheDocument();
+
+    await userEvent.type(tagsCombobox, 'wor');
+    expect(within(suggestions).queryByRole('option', { name: 'silk' })).not.toBeInTheDocument();
+    await userEvent.click(within(suggestions).getByRole('option', { name: 'work' }));
 
     expect(screen.queryByText(/black silk cami/i)).not.toBeInTheDocument();
     expect(screen.getByText(/wool blazer/i)).toBeInTheDocument();

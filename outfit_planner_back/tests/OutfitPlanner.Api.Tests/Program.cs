@@ -68,6 +68,10 @@ var tests = new List<(string Name, Action Test)>
     ("api exposes test diagnostics and trace ids", TestApiExposesTestDiagnosticsAndTraceIds),
     ("object storage ports and local/minio adapters exist", TestObjectStoragePortsAndAdapters),
     ("image processing pipeline exposes privacy preserving variants", TestImageProcessingPipelineContracts),
+    ("background removal provider contracts exist", TestBackgroundRemovalProviderContracts),
+    ("image processor delegates garment cutouts to background removal provider", TestImageProcessorDelegatesGarmentCutout),
+    ("http background removal provider posts multipart image with api key", TestHttpBackgroundRemovalProviderPostsMultipartImageWithApiKey),
+    ("single garment extraction scaffold returns one cutout", TestSingleGarmentExtractionScaffoldReturnsOneCutout),
     ("photo upload service stores garment photo variants behind signed url", TestPhotoUploadStoresGarmentPhoto),
     ("photo upload service stores body reference photo privately", TestPhotoUploadStoresBodyReferencePhoto),
     ("wardrobe service deletes garment records and stored photos", TestWardrobeServiceDeletesGarmentAndStoredPhoto),
@@ -555,6 +559,9 @@ static void TestApiDocumentsFrontendResponseBodies()
     AssertTrue(contracts.Contains("TryOnMode TryOnMode", StringComparison.Ordinal), "start request should include try-on mode.");
     AssertTrue(contracts.Contains("int ConfirmedCredits", StringComparison.Ordinal), "start request should include confirmed credits.");
     AssertTrue(contracts.Contains("string ConfirmedCacheKey", StringComparison.Ordinal), "start request should include confirmed cache key.");
+    AssertTrue(contracts.Contains("string? OriginalUrl", StringComparison.Ordinal), "uploaded photo response should expose original URL.");
+    AssertTrue(contracts.Contains("string? ThumbnailUrl", StringComparison.Ordinal), "uploaded photo response should expose thumbnail URL.");
+    AssertTrue(contracts.Contains("string? CutoutUrl", StringComparison.Ordinal), "uploaded photo response should expose garment cutout URL.");
 }
 
 static void TestWardrobeServiceUpdatesStructuredMetadata()
@@ -1225,6 +1232,74 @@ static void TestImageProcessingPipelineContracts()
     }
 }
 
+static void TestBackgroundRemovalProviderContracts()
+{
+    AssertTrue(typeof(IBackgroundRemovalProvider).IsInterface, "infrastructure should expose a background removal provider port.");
+    AssertTrue(typeof(IGarmentExtractionProvider).IsInterface, "infrastructure should expose a garment extraction provider port.");
+    AssertTrue(typeof(SimpleBackgroundRemovalProvider).GetInterfaces().Contains(typeof(IBackgroundRemovalProvider)), "simple cutout adapter should implement background removal.");
+    AssertTrue(typeof(RembgBackgroundRemovalProvider).GetInterfaces().Contains(typeof(IBackgroundRemovalProvider)), "rembg adapter should implement background removal.");
+    AssertTrue(typeof(HttpBackgroundRemovalProvider).GetInterfaces().Contains(typeof(IBackgroundRemovalProvider)), "http adapter should implement background removal.");
+    AssertTrue(typeof(SingleGarmentExtractionProvider).GetInterfaces().Contains(typeof(IGarmentExtractionProvider)), "single item extraction adapter should implement garment extraction.");
+    AssertTrue(
+        typeof(ImageProcessor).GetConstructors().Any(constructor => constructor.GetParameters().Any(parameter => parameter.ParameterType == typeof(IGarmentExtractionProvider))),
+        "image processor should accept a configured garment extraction provider.");
+}
+
+static void TestImageProcessorDelegatesGarmentCutout()
+{
+    var provider = new RecordingBackgroundRemovalProvider(MinimalPngBytes());
+    var processor = new ImageProcessor(provider);
+    var bytes = MinimalPngBytes();
+
+    var processed = processor.ProcessGarmentPhoto(new IncomingPhoto("shirt.png", "image/png", bytes.Length, new MemoryStream(bytes)));
+
+    AssertEqual(1, provider.Calls, "garment processing should call the configured background remover once");
+    AssertEqual("shirt.png", provider.LastRequest?.FileName, "background remover should receive the upload file name");
+    AssertEqual("image/png", provider.LastRequest?.ContentType, "background remover should receive the normalized image content type");
+    AssertTrue(provider.LastRequest?.ImageBytes.Length > 0, "background remover should receive image bytes");
+    AssertTrue(processed.Images.Any(image => image.Variant == StoredImageVariant.ProcessedCutout && image.ContentType == "image/png"), "garment processing should store a png cutout variant");
+    AssertTrue(processed.Images.Any(image => image.Variant == StoredImageVariant.SegmentationMask && image.ContentType == "image/png"), "garment processing should store a png segmentation mask");
+}
+
+static void TestHttpBackgroundRemovalProviderPostsMultipartImageWithApiKey()
+{
+    var handler = new RecordingBackgroundRemovalHandler(MinimalPngBytes());
+    var provider = new HttpBackgroundRemovalProvider(
+        new HttpClient(handler),
+        new HttpBackgroundRemovalSettings(
+            "https://api.test/remove-background",
+            "secret-key",
+            "X-Api-Key",
+            "",
+            "image_file",
+            TimeSpan.FromSeconds(10)));
+
+    var result = provider.RemoveBackground(new BackgroundRemovalRequest("shirt.png", "image/png", MinimalPngBytes()));
+
+    AssertEqual("image/png", result.ContentType, "http background remover should return image content");
+    AssertTrue(result.ImageBytes.Length > 0, "http background remover should return image bytes");
+    AssertEqual(HttpMethod.Post, handler.Request?.Method, "http background remover should post to provider endpoint");
+    AssertEqual("/remove-background", handler.Request?.RequestUri?.AbsolutePath, "http background remover should call configured endpoint path");
+    AssertTrue(handler.Request?.Headers.TryGetValues("X-Api-Key", out var values) == true && values.Contains("secret-key"), "http background remover should send configured api key header");
+    AssertTrue(handler.Body.Contains("image_file", StringComparison.Ordinal), "multipart body should use configured image field name");
+    AssertTrue(handler.Body.Contains("shirt.png", StringComparison.Ordinal), "multipart body should preserve upload file name");
+}
+
+static void TestSingleGarmentExtractionScaffoldReturnsOneCutout()
+{
+    var remover = new RecordingBackgroundRemovalProvider(MinimalPngBytes());
+    var extractor = new SingleGarmentExtractionProvider(remover);
+
+    var result = extractor.ExtractGarments(new GarmentExtractionRequest("shirt.png", "image/png", MinimalPngBytes()));
+
+    AssertEqual("single-garment", result.ProviderName, "single garment scaffold should expose its provider name");
+    AssertEqual(1, result.Items.Count, "single garment scaffold should always return one candidate");
+    AssertEqual(1, remover.Calls, "single garment scaffold should delegate cutout creation to the background remover");
+    AssertEqual("image/png", result.Items[0].ContentType, "single garment scaffold should return transparent image bytes");
+    AssertEqual("Top", result.Items[0].SuggestedCategory, "single garment scaffold should use a neutral category placeholder for future review");
+    AssertEqual(1m, result.Items[0].Confidence, "single garment scaffold should mark its assumed one-item result as high confidence");
+}
+
 static void TestPhotoUploadStoresGarmentPhoto()
 {
     var tempPath = Path.Combine(Path.GetTempPath(), "outfit-planner-photo-tests", Guid.NewGuid().ToString("N"));
@@ -1238,6 +1313,11 @@ static void TestPhotoUploadStoresGarmentPhoto()
         var stored = service.UploadGarmentPhoto(new IncomingPhoto("shirt.png", "image/png", bytes.Length, new MemoryStream(bytes)));
 
         AssertTrue(stored.Url.StartsWith("/api/storage/signed/", StringComparison.Ordinal), "stored garment photos should be served through signed object URLs");
+        AssertTrue(stored.Url.Contains("/processed-cutout/", StringComparison.Ordinal), "primary garment upload URL should point at the processed cutout");
+        AssertTrue(stored.OriginalUrl?.Contains("/original/", StringComparison.Ordinal) == true, "garment upload should expose the original variant URL");
+        AssertTrue(stored.ThumbnailUrl?.Contains("/thumbnail/", StringComparison.Ordinal) == true, "garment upload should expose the thumbnail variant URL");
+        AssertTrue(stored.ProcessedCutoutUrl?.Contains("/processed-cutout/", StringComparison.Ordinal) == true, "garment upload should expose the cutout variant URL");
+        AssertTrue(stored.SegmentationMaskUrl?.Contains("/segmentation-mask/", StringComparison.Ordinal) == true, "garment upload should expose the segmentation mask variant URL");
         AssertEqual("image/png", stored.ContentType, "stored content type should be preserved");
         AssertTrue(stored.Length > 0, "stored length should reflect processed object bytes");
         AssertTrue(File.Exists(Path.Combine(tempPath, "garments", "original", stored.FileName)), "original garment object should exist on disk");
@@ -1970,6 +2050,71 @@ sealed class RecordingTryOnJobQueue : ITryOnJobQueue
         var jobId = Enqueued[0];
         Enqueued.RemoveAt(0);
         return Task.FromResult(jobId);
+    }
+}
+
+sealed class RecordingBackgroundRemovalProvider : IBackgroundRemovalProvider
+{
+    private readonly byte[] _resultBytes;
+
+    public RecordingBackgroundRemovalProvider(byte[] resultBytes)
+    {
+        _resultBytes = resultBytes;
+    }
+
+    public int Calls { get; private set; }
+
+    public BackgroundRemovalRequest? LastRequest { get; private set; }
+
+    public string Name => "recording";
+
+    public BackgroundRemovalResult RemoveBackground(BackgroundRemovalRequest request)
+    {
+        Calls++;
+        LastRequest = request;
+        return new BackgroundRemovalResult(_resultBytes, "image/png", Name);
+    }
+}
+
+sealed class RecordingBackgroundRemovalHandler : HttpMessageHandler
+{
+    private readonly byte[] _responseBytes;
+
+    public RecordingBackgroundRemovalHandler(byte[] responseBytes)
+    {
+        _responseBytes = responseBytes;
+    }
+
+    public HttpRequestMessage? Request { get; private set; }
+
+    public string Body { get; private set; } = "";
+
+    protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Request = request;
+        Body = request.Content is null ? "" : request.Content.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult();
+        return ImageResponse();
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Request = request;
+        Body = request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken);
+        return ImageResponse();
+    }
+
+    private HttpResponseMessage ImageResponse()
+    {
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(_responseBytes)
+            {
+                Headers =
+                {
+                    ContentType = new MediaTypeHeaderValue("image/png")
+                }
+            }
+        };
     }
 }
 

@@ -42,10 +42,10 @@ export function WardrobePage() {
   const mutations = useWardrobeMutations();
   const allGarments = garmentsQuery.data ?? [];
   const garments = filterGarmentsByLocalTags(allGarments, filters.tag);
-  const existingTags = useMemo(
-    () => Array.from(new Set([...uploadDefaults.tags, ...allGarments.flatMap((garment) => garment.tags)])).slice(0, 8),
-    [allGarments, uploadDefaults.tags]
-  );
+  const existingTags = useMemo(() => {
+    const tags = [...uploadDefaults.tags, ...allGarments.flatMap((garment) => garment.tags ?? [])];
+    return Array.from(new Set(tags)).sort((left, right) => left.localeCompare(right));
+  }, [allGarments, uploadDefaults.tags]);
 
   function addFiles(files: File[]) {
     if (files.length === 0) {
@@ -101,6 +101,7 @@ export function WardrobePage() {
         </header>
         <WardrobeFilters
           filters={filters}
+          existingTags={existingTags}
           itemCount={garments.length}
           viewMode={viewMode}
           onChange={setFilters}

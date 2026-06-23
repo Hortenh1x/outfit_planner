@@ -4,6 +4,7 @@ import {
   deleteGarment,
   updateGarment,
   uploadGarmentPhoto,
+  type UploadedPhotoResponse,
   type UpdateGarmentInput
 } from '../../api/client';
 import type { GarmentItem } from '../../types';
@@ -50,11 +51,12 @@ export function useWardrobeMutations() {
 
       for (const item of validItems) {
         const uploadedPhoto = await uploadGarmentPhoto(item.file);
+        const photoUrls = garmentPhotoUrlsFromUpload(uploadedPhoto);
         created.push(await createGarment({
           name: item.name,
           category: item.category,
-          imageUrl: uploadedPhoto.url,
-          thumbnailUrl: uploadedPhoto.url,
+          imageUrl: photoUrls.imageUrl,
+          thumbnailUrl: photoUrls.thumbnailUrl,
           tags: item.tags,
           primaryColor: item.primaryColor.trim() || null,
           season: item.season
@@ -73,5 +75,13 @@ export function useWardrobeMutations() {
     duplicateMutation,
     deleteMutation,
     uploadQueueMutation
+  };
+}
+
+export function garmentPhotoUrlsFromUpload(uploadedPhoto: UploadedPhotoResponse) {
+  const imageUrl = uploadedPhoto.cutoutUrl || uploadedPhoto.url;
+  return {
+    imageUrl,
+    thumbnailUrl: uploadedPhoto.thumbnailUrl || imageUrl
   };
 }

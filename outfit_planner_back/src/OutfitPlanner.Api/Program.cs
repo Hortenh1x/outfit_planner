@@ -203,6 +203,7 @@ builder.Services.AddHttpClient("fal");
 builder.Services.AddHttpClient("composite-fashn");
 builder.Services.AddHttpClient("self-hosted-catvton");
 builder.Services.AddHttpClient("general-image-edit");
+builder.Services.AddHttpClient("background-removal");
 builder.Services.AddSingleton<ITryOnProvider>(provider => CreateTryOnProvider(provider, builder.Configuration));
 var redisConnectionString = builder.Configuration["ConnectionStrings:Redis"] ?? builder.Configuration.GetConnectionString("Redis");
 if (string.IsNullOrWhiteSpace(redisConnectionString))
@@ -215,7 +216,9 @@ else
     builder.Services.AddSingleton<ITryOnJobQueue>(provider => new RedisTryOnJobQueue(provider.GetRequiredService<IConnectionMultiplexer>()));
 }
 builder.Services.AddSingleton<IObjectStorage>(provider => CreateObjectStorage(builder.Configuration, builder.Environment));
-builder.Services.AddSingleton<IImageProcessor, ImageProcessor>();
+builder.Services.AddSingleton<IBackgroundRemovalProvider>(provider => CreateBackgroundRemovalProvider(provider, builder.Configuration));
+builder.Services.AddSingleton<IGarmentExtractionProvider>(provider => new SingleGarmentExtractionProvider(provider.GetRequiredService<IBackgroundRemovalProvider>()));
+builder.Services.AddSingleton<IImageProcessor>(provider => new ImageProcessor(provider.GetRequiredService<IGarmentExtractionProvider>()));
 builder.Services.AddSingleton<LocalPhotoStorage>();
 builder.Services.AddSingleton<IPhotoStorage>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IStoredPhotoReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
@@ -1015,14 +1018,23 @@ static async Task<IResult> UploadPhoto(HttpRequest request, ILogger logger, stri
 
         await using var stream = file.OpenReadStream();
         var stored = store(new IncomingPhoto(file.FileName, file.ContentType, file.Length, stream));
-        var publicUrl = $"{request.Scheme}://{request.Host}{stored.Url}";
+        var publicUrl = PublicUploadUrl(request, stored.Url)
+            ?? throw new InvalidOperationException("Stored upload URL is required.");
         logger.LogInformation(
             "Upload diagnostics: stored {Kind} upload trace {TraceId}; storedFileName={StoredFileName}; publicUrl={PublicUrl}",
             uploadKind,
             request.HttpContext.TraceIdentifier,
             stored.FileName,
             publicUrl);
-        return Results.Created(publicUrl, new UploadedPhotoResponse(stored.FileName, stored.ContentType, stored.Length, publicUrl));
+        return Results.Created(publicUrl, new UploadedPhotoResponse(
+            stored.FileName,
+            stored.ContentType,
+            stored.Length,
+            publicUrl,
+            PublicUploadUrl(request, stored.OriginalUrl),
+            PublicUploadUrl(request, stored.ThumbnailUrl),
+            PublicUploadUrl(request, stored.ProcessedCutoutUrl),
+            PublicUploadUrl(request, stored.SegmentationMaskUrl)));
     }
     catch (InvalidOperationException ex)
     {
@@ -1036,6 +1048,18 @@ static async Task<IResult> UploadPhoto(HttpRequest request, ILogger logger, stri
             file.Length);
         return Results.BadRequest(new { error = ex.Message });
     }
+}
+
+static string? PublicUploadUrl(HttpRequest request, string? storedUrl)
+{
+    if (string.IsNullOrWhiteSpace(storedUrl))
+    {
+        return null;
+    }
+
+    return Uri.TryCreate(storedUrl, UriKind.Absolute, out _)
+        ? storedUrl
+        : $"{request.Scheme}://{request.Host}{storedUrl}";
 }
 
 static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfiguration configuration)
@@ -1095,6 +1119,77 @@ static IObjectStorage CreateObjectStorage(IConfiguration configuration, IWebHost
     var root = configuration["ObjectStorage:Local:Root"]
         ?? Path.Combine(environment.ContentRootPath, "storage", "objects");
     return new LocalObjectStorage(root, configuration["ObjectStorage:Local:SigningSecret"]);
+}
+
+static IBackgroundRemovalProvider CreateBackgroundRemovalProvider(IServiceProvider provider, IConfiguration configuration)
+{
+    var configuredProvider = (configuration["BackgroundRemoval:Provider"] ?? "Simple").Trim().ToLowerInvariant();
+    var httpSection = BackgroundRemovalHttpSection(configuredProvider);
+    return configuredProvider switch
+    {
+        "rembg" or "rembgcommand" or "rembg-command" or "rembgexecutable" or "rembg-executable" => new RembgBackgroundRemovalProvider(
+            new RembgBackgroundRemovalSettings(
+                BackgroundRemovalSetting(configuration, "Rembg", "ExecutablePath", "rembg"),
+                BackgroundRemovalSetting(configuration, "Rembg", "ModelName", "birefnet-general"),
+                TimeSpan.FromSeconds(BackgroundRemovalIntSetting(configuration, "Rembg", "TimeoutSeconds", 180)),
+                BackgroundRemovalOptionalSetting(configuration, "Rembg", "ModelHome"))),
+        "http" or "api" or "cloudflare" or "cloudflareimages" or "cloudflare-images" or "photoroom" or "removebg" or "remove-bg" or "clipdrop" => new HttpBackgroundRemovalProvider(
+            provider.GetRequiredService<IHttpClientFactory>().CreateClient("background-removal"),
+            new HttpBackgroundRemovalSettings(
+                BackgroundRemovalSetting(configuration, httpSection, "Endpoint", ""),
+                BackgroundRemovalSetting(configuration, httpSection, "ApiKey", ""),
+                BackgroundRemovalSetting(configuration, httpSection, "ApiKeyHeader", DefaultBackgroundRemovalApiKeyHeader(configuredProvider)),
+                BackgroundRemovalSetting(configuration, httpSection, "ApiKeyPrefix", DefaultBackgroundRemovalApiKeyPrefix(configuredProvider)),
+                BackgroundRemovalSetting(configuration, httpSection, "ImageFieldName", "image_file"),
+                TimeSpan.FromSeconds(BackgroundRemovalIntSetting(configuration, httpSection, "TimeoutSeconds", 120)))),
+        _ => new SimpleBackgroundRemovalProvider()
+    };
+}
+
+static string BackgroundRemovalHttpSection(string provider)
+{
+    return provider switch
+    {
+        "cloudflare" or "cloudflareimages" or "cloudflare-images" => "CloudflareImages",
+        "photoroom" => "PhotoRoom",
+        "removebg" or "remove-bg" => "RemoveBg",
+        "clipdrop" => "Clipdrop",
+        _ => "Http"
+    };
+}
+
+static string DefaultBackgroundRemovalApiKeyHeader(string provider)
+{
+    return provider is "cloudflare" or "cloudflareimages" or "cloudflare-images"
+        ? "Authorization"
+        : "X-Api-Key";
+}
+
+static string DefaultBackgroundRemovalApiKeyPrefix(string provider)
+{
+    return provider is "cloudflare" or "cloudflareimages" or "cloudflare-images"
+        ? "Bearer "
+        : "";
+}
+
+static string BackgroundRemovalSetting(IConfiguration configuration, string sectionName, string key, string fallback)
+{
+    return configuration[$"BackgroundRemoval:{sectionName}:{key}"]
+        ?? configuration[$"BackgroundRemoval:Http:{key}"]
+        ?? configuration[$"BackgroundRemoval:{key}"]
+        ?? fallback;
+}
+
+static string? BackgroundRemovalOptionalSetting(IConfiguration configuration, string sectionName, string key)
+{
+    return configuration[$"BackgroundRemoval:{sectionName}:{key}"]
+        ?? configuration[$"BackgroundRemoval:{key}"];
+}
+
+static int BackgroundRemovalIntSetting(IConfiguration configuration, string sectionName, string key, int fallback)
+{
+    var value = BackgroundRemovalSetting(configuration, sectionName, key, "");
+    return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;
 }
 
 static HttpTryOnProviderSettings HttpProviderSettings(

@@ -14,6 +14,23 @@ public sealed class ImageProcessor : IImageProcessor
     private const int ThumbnailSide = 512;
     private const int PrivatePreviewSide = 96;
 
+    private readonly IGarmentExtractionProvider _garmentExtraction;
+
+    public ImageProcessor()
+        : this(new SimpleBackgroundRemovalProvider())
+    {
+    }
+
+    public ImageProcessor(IBackgroundRemovalProvider backgroundRemoval)
+        : this(new SingleGarmentExtractionProvider(backgroundRemoval))
+    {
+    }
+
+    public ImageProcessor(IGarmentExtractionProvider garmentExtraction)
+    {
+        _garmentExtraction = garmentExtraction;
+    }
+
     public ProcessedPhotoSet ProcessGarmentPhoto(IncomingPhoto photo)
     {
         var bytes = ReadAllBytes(photo.Content);
@@ -24,8 +41,7 @@ public sealed class ImageProcessor : IImageProcessor
         var fileName = $"{Guid.NewGuid():N}{extension}";
         var original = Encode(image, photo.ContentType);
         var thumbnail = Encode(ResizeClone(image, ThumbnailSide), photo.ContentType);
-        using var cutoutImage = image.Clone();
-        ApplySimpleBackgroundCutout(cutoutImage);
+        using var cutoutImage = CreateGarmentCutout(photo.FileName, photo.ContentType, original);
         var cutout = EncodePng(cutoutImage);
         var mask = CreateSegmentationMask(cutoutImage);
 
@@ -91,24 +107,13 @@ public sealed class ImageProcessor : IImageProcessor
         }));
     }
 
-    private static void ApplySimpleBackgroundCutout(Image<Rgba32> image)
+    private Image<Rgba32> CreateGarmentCutout(string fileName, string contentType, byte[] imageBytes)
     {
-        var background = EstimateBackground(image);
-        image.ProcessPixelRows(accessor =>
-        {
-            for (var y = 0; y < accessor.Height; y++)
-            {
-                var row = accessor.GetRowSpan(y);
-                for (var x = 0; x < row.Length; x++)
-                {
-                    var pixel = row[x];
-                    if (ColorDistance(pixel, background) < 44)
-                    {
-                        row[x] = new Rgba32(pixel.R, pixel.G, pixel.B, 0);
-                    }
-                }
-            }
-        });
+        var result = _garmentExtraction.ExtractGarments(new GarmentExtractionRequest(fileName, contentType, imageBytes));
+        var item = result.Items.Count > 0
+            ? result.Items[0]
+            : throw new InvalidOperationException("Garment extraction did not return an item.");
+        return Image.Load<Rgba32>(item.ImageBytes);
     }
 
     private static byte[] CreateSegmentationMask(Image<Rgba32> cutout)
@@ -130,32 +135,6 @@ public sealed class ImageProcessor : IImageProcessor
         });
 
         return EncodePng(mask);
-    }
-
-    private static Rgba32 EstimateBackground(Image<Rgba32> image)
-    {
-        var samples = new List<Rgba32>();
-        image.ProcessPixelRows(accessor =>
-        {
-            samples.Add(accessor.GetRowSpan(0)[0]);
-            samples.Add(accessor.GetRowSpan(0)[accessor.Width - 1]);
-            samples.Add(accessor.GetRowSpan(accessor.Height - 1)[0]);
-            samples.Add(accessor.GetRowSpan(accessor.Height - 1)[accessor.Width - 1]);
-        });
-
-        return new Rgba32(
-            (byte)samples.Average(pixel => pixel.R),
-            (byte)samples.Average(pixel => pixel.G),
-            (byte)samples.Average(pixel => pixel.B),
-            255);
-    }
-
-    private static double ColorDistance(Rgba32 left, Rgba32 right)
-    {
-        var r = left.R - right.R;
-        var g = left.G - right.G;
-        var b = left.B - right.B;
-        return Math.Sqrt((r * r) + (g * g) + (b * b));
     }
 
     private static string AverageHash(Image<Rgba32> image)

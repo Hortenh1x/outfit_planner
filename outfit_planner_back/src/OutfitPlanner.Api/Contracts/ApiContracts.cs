@@ -110,7 +110,15 @@ public sealed record SharedOutfitResponse(
     string? PersonPreviewUrl,
     DateTimeOffset CreatedAt);
 
-public sealed record UploadedPhotoResponse(string FileName, string ContentType, long Length, string Url);
+public sealed record UploadedPhotoResponse(
+    string FileName,
+    string ContentType,
+    long Length,
+    string Url,
+    string? OriginalUrl,
+    string? ThumbnailUrl,
+    string? CutoutUrl,
+    string? MaskUrl);
 
 public sealed record RegisterRequest(string Email, string Password, string RepeatPassword);
 
