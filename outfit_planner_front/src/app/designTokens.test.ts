@@ -44,3 +44,19 @@ describe('Crimson Plinth design tokens', () => {
     expect(wardrobeCss).toContain('border-radius: var(--radius-button)');
   });
 });
+
+describe('Editorial responsive layout rules', () => {
+  it('moves the account shell below page content on mobile', () => {
+    expect(shellCss).toMatch(/@media \(max-width: 920px\)[\s\S]*\.editorial-main-panel\s*\{[\s\S]*order: 1/);
+    expect(shellCss).toMatch(/@media \(max-width: 920px\)[\s\S]*\.editorial-sidebar\s*\{[\s\S]*order: 2/);
+  });
+
+  it('keeps creation and planning controls first on mobile', () => {
+    expect(wardrobeCss).toMatch(/@media \(max-width: 760px\)[\s\S]*\.wardrobe-rail,\s*\.wardrobe-rail-form\s*\{[\s\S]*order: -1/);
+    expect(stylesCss).toMatch(/@media \(max-width: 760px\)[\s\S]*\.calendar-plan-rail\s*\{[\s\S]*order: -1/);
+  });
+
+  it('keeps the selected current calendar day legible', () => {
+    expect(stylesCss).toMatch(/\.calendar-day\.today\.selected-day span\s*\{[\s\S]*color: var\(--ink-inverse\)/);
+  });
+});

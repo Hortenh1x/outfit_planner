@@ -23,13 +23,13 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
     public StoredPhoto SaveGarmentPhoto(IncomingPhoto photo)
     {
         var processed = _images.ProcessGarmentPhoto(photo);
-        return SaveProcessedPhoto("garments", processed);
+        return SaveProcessedPhoto("garments", processed, StoredImageVariant.ProcessedCutout);
     }
 
     public StoredPhoto SaveBodyReferencePhoto(IncomingPhoto photo)
     {
         var processed = _images.ProcessBodyReferencePhoto(photo);
-        return SaveProcessedPhoto("body-reference-photos", processed);
+        return SaveProcessedPhoto("body-reference-photos", processed, StoredImageVariant.Original);
     }
 
     public StoredPhotoFile? GetGarmentPhoto(string fileName)
@@ -52,7 +52,7 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
         return DeletePhoto("body-reference-photos", photoUrl);
     }
 
-    private StoredPhoto SaveProcessedPhoto(string collection, ProcessedPhotoSet processed)
+    private StoredPhoto SaveProcessedPhoto(string collection, ProcessedPhotoSet processed, StoredImageVariant primaryVariant)
     {
         var storedByVariant = new Dictionary<StoredImageVariant, StoredObject>();
         foreach (var image in processed.Images)
@@ -67,18 +67,33 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
         }
 
         var original = storedByVariant[StoredImageVariant.Original];
+        var primary = storedByVariant.GetValueOrDefault(primaryVariant) ?? original;
         return new StoredPhoto(
             processed.FileName,
             processed.ContentType,
             processed.Length,
-            _objects.CreateSignedReadUrl(original.ObjectKey, DefaultSignedUrlLifetime))
+            SignedUrl(primary))
         {
+            OriginalUrl = SignedUrl(original),
+            ThumbnailUrl = OptionalSignedUrl(storedByVariant.GetValueOrDefault(StoredImageVariant.Thumbnail)),
+            ProcessedCutoutUrl = OptionalSignedUrl(storedByVariant.GetValueOrDefault(StoredImageVariant.ProcessedCutout)),
+            SegmentationMaskUrl = OptionalSignedUrl(storedByVariant.GetValueOrDefault(StoredImageVariant.SegmentationMask)),
             ObjectKey = original.ObjectKey,
             ThumbnailObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.Thumbnail)?.ObjectKey,
             ProcessedCutoutObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.ProcessedCutout)?.ObjectKey,
             PrivatePreviewObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.PrivatePreview)?.ObjectKey,
             PerceptualHash = processed.PerceptualHash
         };
+    }
+
+    private string SignedUrl(StoredObject stored)
+    {
+        return _objects.CreateSignedReadUrl(stored.ObjectKey, DefaultSignedUrlLifetime);
+    }
+
+    private string? OptionalSignedUrl(StoredObject? stored)
+    {
+        return stored is null ? null : _objects.CreateSignedReadUrl(stored.ObjectKey, DefaultSignedUrlLifetime);
     }
 
     private StoredPhotoFile? GetPhoto(string collection, StoredImageVariant variant, string fileName)

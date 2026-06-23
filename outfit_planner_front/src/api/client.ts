@@ -244,6 +244,10 @@ export interface UploadedPhotoResponse {
   contentType: string;
   length: number;
   url: string;
+  originalUrl?: string | null;
+  thumbnailUrl?: string | null;
+  cutoutUrl?: string | null;
+  maskUrl?: string | null;
 }
 
 export async function uploadGarmentPhoto(file: File): Promise<UploadedPhotoResponse> {

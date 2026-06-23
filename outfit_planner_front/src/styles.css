@@ -1051,7 +1051,8 @@ input[type="file"] {
 }
 
 .tryon-mode-selector,
-.tryon-confirmation {
+.tryon-confirmation,
+.builder-save-block {
   display: grid;
   gap: 0.55rem;
 }
@@ -1139,6 +1140,16 @@ input[type="file"] {
   border-top: 1px solid var(--hairline);
   display: grid;
   gap: 0.75rem;
+  padding-top: 0.95rem;
+}
+
+.builder-controls .stack > .body-reference-manager:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.builder-save-block {
+  border-top: 1px solid var(--hairline);
   padding-top: 0.95rem;
 }
 
@@ -1570,6 +1581,10 @@ input[type="file"] {
   color: var(--accent-strong);
 }
 
+.calendar-day.today.selected-day span {
+  color: var(--ink-inverse);
+}
+
 .skeleton-grid {
   display: grid;
   gap: 0.75rem;
@@ -1695,6 +1710,16 @@ input[type="file"] {
   .preview-stage,
   .calendar-workspace {
     padding: 14px;
+  }
+
+  .calendar-plan-rail {
+    border-bottom: 1px solid var(--hairline);
+    order: -1;
+  }
+
+  .calendar-workspace {
+    border-bottom: 0;
+    order: 0;
   }
 
   .builder-hero,

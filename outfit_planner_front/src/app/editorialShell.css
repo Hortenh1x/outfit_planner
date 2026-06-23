@@ -311,6 +311,7 @@ button.editorial-nav-button:active,
     gap: 12px;
     grid-template-columns: minmax(0, 1fr) auto;
     min-height: 0;
+    order: 2;
     padding: 12px;
     position: static;
   }
@@ -341,6 +342,7 @@ button.editorial-nav-button:active,
     gap: 6px;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     left: 12px;
+    order: 3;
     padding: 8px;
     position: fixed;
     right: 12px;
@@ -354,6 +356,7 @@ button.editorial-nav-button:active,
   }
 
   .editorial-main-panel {
+    order: 1;
     padding: 12px;
   }
 }

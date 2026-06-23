@@ -23,6 +23,7 @@ import {
   unscheduleOutfit,
   updateGarment,
   updateOutfit,
+  uploadGarmentPhoto,
   uploadBodyReferencePhoto
 } from './client';
 
@@ -127,6 +128,32 @@ describe('api client', () => {
     expect(JSON.parse(fetchMock.mock.calls[1][1]?.body as string)).toMatchObject({
       imageUrl: 'http://localhost:5000/api/storage/signed/body-reference-photos/original/body.png?expires=1&signature=sig'
     });
+  });
+
+  it('parses garment upload variant URLs', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        fileName: 'shirt.png',
+        contentType: 'image/png',
+        length: 123,
+        url: 'http://localhost:5000/api/storage/signed/garments/processed-cutout/shirt.png?expires=1&signature=sig',
+        originalUrl: 'http://localhost:5000/api/storage/signed/garments/original/shirt.png?expires=1&signature=sig',
+        thumbnailUrl: 'http://localhost:5000/api/storage/signed/garments/thumbnail/shirt.png?expires=1&signature=sig',
+        cutoutUrl: 'http://localhost:5000/api/storage/signed/garments/processed-cutout/shirt.png?expires=1&signature=sig',
+        maskUrl: 'http://localhost:5000/api/storage/signed/garments/segmentation-mask/shirt.png?expires=1&signature=sig'
+      }), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    );
+
+    const uploaded = await uploadGarmentPhoto(new File(['shirt'], 'shirt.png', { type: 'image/png' }));
+
+    expect(uploaded.url).toContain('/processed-cutout/');
+    expect(uploaded.cutoutUrl).toContain('/processed-cutout/');
+    expect(uploaded.thumbnailUrl).toContain('/thumbnail/');
+    expect(uploaded.originalUrl).toContain('/original/');
+    expect(uploaded.maskUrl).toContain('/segmentation-mask/');
   });
 
   it('explains browser-level fetch failures with request context', async () => {
