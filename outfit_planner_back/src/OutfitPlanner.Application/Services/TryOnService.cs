@@ -13,6 +13,8 @@ public sealed class TryOnService
     private readonly ITryOnProvider _provider;
     private readonly TryOnCostEstimator _estimator;
     private readonly IClock _clock;
+    private readonly IStoredPhotoUrlRefresher? _photoUrls;
+    private readonly ITryOnOutputStorage? _tryOnOutputStorage;
     private readonly TimeSpan _outputRetention = TimeSpan.FromDays(30);
     private const string NoBodyReferenceIdentity = "body:none";
 
@@ -23,7 +25,9 @@ public sealed class TryOnService
         ITryOnJobQueue queue,
         ITryOnProvider provider,
         TryOnCostEstimator estimator,
-        IClock clock)
+        IClock clock,
+        IStoredPhotoUrlRefresher? photoUrls = null,
+        ITryOnOutputStorage? tryOnOutputStorage = null)
     {
         _bodyPhotos = bodyPhotos;
         _outfits = outfits;
@@ -32,14 +36,16 @@ public sealed class TryOnService
         _provider = provider;
         _estimator = estimator;
         _clock = clock;
+        _photoUrls = photoUrls;
+        _tryOnOutputStorage = tryOnOutputStorage;
     }
 
     public TryOnCostEstimate Estimate(string userId, Guid outfitId, TryOnMode mode, string? bodyReferencePhotoUrl, Guid? sourceBodyPhotoId)
     {
         var normalizedUserId = InputGuard.NormalizeUserId(userId);
-        var normalizedBodyPhotoUrl = NormalizeBodyReferencePhotoUrl(mode, bodyReferencePhotoUrl);
-        var outfit = _outfits.GetOutfitByUser(normalizedUserId, outfitId)
-            ?? throw new InvalidOperationException("Outfit was not found.");
+        var normalizedBodyPhotoUrl = ResolveBodyReferencePhotoUrl(normalizedUserId, mode, bodyReferencePhotoUrl, sourceBodyPhotoId);
+        var outfit = RefreshOutfitPhotoUrls(_outfits.GetOutfitByUser(normalizedUserId, outfitId)
+            ?? throw new InvalidOperationException("Outfit was not found."));
         var bodyIdentity = BodyReferenceIdentity(normalizedUserId, sourceBodyPhotoId, normalizedBodyPhotoUrl);
         var cacheProbe = _estimator.Estimate(outfit, new TryOnEstimateInput(
             mode,
@@ -70,7 +76,7 @@ public sealed class TryOnService
         CancellationToken cancellationToken = default)
     {
         var normalizedUserId = InputGuard.NormalizeUserId(userId);
-        var normalizedBodyPhotoUrl = NormalizeBodyReferencePhotoUrl(tryOnMode, bodyReferencePhotoUrl);
+        var normalizedBodyPhotoUrl = ResolveBodyReferencePhotoUrl(normalizedUserId, tryOnMode, bodyReferencePhotoUrl, sourceBodyPhotoId);
         var estimate = Estimate(normalizedUserId, outfitId, tryOnMode, normalizedBodyPhotoUrl, sourceBodyPhotoId);
         if (!estimate.IsAvailable)
         {
@@ -136,12 +142,15 @@ public sealed class TryOnService
         var cached = _jobs.FindSucceededTryOnJobByCacheKey(normalizedUserId, estimate.CacheKey);
         if (cached is not null)
         {
+            var cachedOutputImageUrl = !string.IsNullOrWhiteSpace(cached.OutputImageUrl)
+                ? await StoreTryOnOutputAsync(started, cached.OutputImageUrl, cancellationToken)
+                : cached.OutputImageUrl;
             var cacheHit = started with
             {
                 Status = TryOnStatus.Succeeded,
                 ProviderJobId = cached.ProviderJobId,
                 ProviderRequestId = cached.ProviderRequestId,
-                OutputImageUrl = cached.OutputImageUrl,
+                OutputImageUrl = cachedOutputImageUrl,
                 ServedFromCache = true,
                 SourceCachedJobId = cached.Id,
                 UpdatedAt = now
@@ -164,12 +173,12 @@ public sealed class TryOnService
         return started;
     }
 
-    public Task ProcessQueuedJobAsync(Guid jobId, CancellationToken cancellationToken = default)
+    public async Task ProcessQueuedJobAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
         var queued = _jobs.GetTryOnJobById(jobId);
         if (queued is null || queued.Status != TryOnStatus.Queued)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         var outfit = _outfits.GetOutfitByUser(queued.UserId, queued.OutfitId);
@@ -181,9 +190,12 @@ public sealed class TryOnService
                 Error = "Outfit was not found.",
                 UpdatedAt = _clock.UtcNow
             });
-            return Task.CompletedTask;
+            return;
         }
 
+        outfit = RefreshOutfitPhotoUrls(outfit);
+        var bodyReferencePhotoUrl = _photoUrls?.RefreshBodyReferencePhotoUrl(queued.BodyReferencePhotoUrl)
+            ?? queued.BodyReferencePhotoUrl;
         var processing = queued with
         {
             Status = TryOnStatus.Processing,
@@ -197,7 +209,7 @@ public sealed class TryOnService
             var estimate = _estimator.Estimate(outfit, new TryOnEstimateInput(
                 queued.TryOnMode,
                 queued.ProviderName ?? _provider.Name,
-                BodyReferenceIdentity(queued.UserId, queued.SourceBodyPhotoId, queued.BodyReferencePhotoUrl),
+                BodyReferenceIdentity(queued.UserId, queued.SourceBodyPhotoId, bodyReferencePhotoUrl),
                 queued.ProviderSettingsHash ?? _provider.Capabilities.SettingsHash,
                 hasCachedResult: false));
             var visualOnlyItems = queued.TryOnMode == TryOnMode.ExperimentalCompositeTryOn
@@ -207,24 +219,25 @@ public sealed class TryOnService
                 queued.UserId,
                 outfit.Id,
                 queued.TryOnMode,
-                queued.BodyReferencePhotoUrl,
+                bodyReferencePhotoUrl,
                 estimate.BodyTryOnItems,
                 visualOnlyItems,
                 new TryOnGenerationSettings(
                     _provider.Capabilities.ModelName,
                     _provider.Capabilities.ProviderMode,
                     _provider.Capabilities.SettingsHash)));
+            var outputImageUrl = await StoreTryOnOutputAsync(processing, generation.OutputImageUrl, cancellationToken);
             var completed = processing with
             {
                 Status = TryOnStatus.Succeeded,
                 ProviderJobId = generation.ProviderJobId,
                 ProviderRequestId = generation.ProviderJobId,
-                OutputImageUrl = generation.OutputImageUrl,
+                OutputImageUrl = outputImageUrl,
                 UpdatedAt = _clock.UtcNow
             };
 
             _jobs.UpdateTryOnJob(completed);
-            _outfits.UpdateOutfit(outfit with { PersonPreviewUrl = generation.OutputImageUrl });
+            _outfits.UpdateOutfit(outfit with { PersonPreviewUrl = outputImageUrl });
         }
         catch (Exception ex)
         {
@@ -242,7 +255,21 @@ public sealed class TryOnService
             _jobs.UpdateTryOnJob(failed);
         }
 
-        return Task.CompletedTask;
+        return;
+    }
+
+    private Task<string> StoreTryOnOutputAsync(TryOnJob job, string outputImageUrl, CancellationToken cancellationToken)
+    {
+        if (_tryOnOutputStorage is null)
+        {
+            return Task.FromResult(outputImageUrl);
+        }
+
+        return _tryOnOutputStorage.StoreAsync(
+            job.Id,
+            outputImageUrl,
+            job.RetentionUntil ?? _clock.UtcNow.Add(_outputRetention),
+            cancellationToken);
     }
 
     private string BodyReferenceIdentity(string userId, Guid? sourceBodyPhotoId, string bodyReferencePhotoUrl)
@@ -260,6 +287,36 @@ public sealed class TryOnService
         }
 
         return $"url:{bodyReferencePhotoUrl.Trim()}";
+    }
+
+    private string ResolveBodyReferencePhotoUrl(string userId, TryOnMode mode, string? bodyReferencePhotoUrl, Guid? sourceBodyPhotoId)
+    {
+        if (sourceBodyPhotoId is { } photoId)
+        {
+            var photo = _bodyPhotos.GetBodyReferencePhotoByUser(userId, photoId)
+                ?? throw new InvalidOperationException("Body reference photo was not found.");
+            return _photoUrls?.RefreshBodyReferencePhotoUrl(photo.ImageUrl) ?? photo.ImageUrl;
+        }
+
+        var normalized = NormalizeBodyReferencePhotoUrl(mode, bodyReferencePhotoUrl);
+        return string.IsNullOrWhiteSpace(normalized)
+            ? normalized
+            : _photoUrls?.RefreshBodyReferencePhotoUrl(normalized) ?? normalized;
+    }
+
+    private Outfit RefreshOutfitPhotoUrls(Outfit outfit)
+    {
+        if (_photoUrls is null)
+        {
+            return outfit;
+        }
+
+        return outfit with
+        {
+            Items = outfit.Items
+                .Select(item => item with { ThumbnailUrl = _photoUrls.RefreshGarmentThumbnailUrl(item.ThumbnailUrl) })
+                .ToArray()
+        };
     }
 
     private static string NormalizeBodyReferencePhotoUrl(TryOnMode mode, string? bodyReferencePhotoUrl)
@@ -302,6 +359,11 @@ public sealed class TryOnService
             return false;
         }
 
+        if (!string.IsNullOrWhiteSpace(job.OutputImageUrl))
+        {
+            _tryOnOutputStorage?.DeleteOutput(job.OutputImageUrl);
+        }
+
         _jobs.UpdateTryOnJob(job with
         {
             OutputImageUrl = null,
@@ -318,6 +380,11 @@ public sealed class TryOnService
         var purged = 0;
         foreach (var job in jobs.Where(job => !job.IsDeleted || job.OutputImageUrl is not null))
         {
+            if (!string.IsNullOrWhiteSpace(job.OutputImageUrl))
+            {
+                _tryOnOutputStorage?.DeleteOutput(job.OutputImageUrl);
+            }
+
             _jobs.UpdateTryOnJob(job with
             {
                 OutputImageUrl = null,

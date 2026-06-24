@@ -44,7 +44,6 @@ describe('wardrobeFilters', () => {
       season: '',
       tag: '',
       favorite: false,
-      archived: false,
       sort: 'recent'
     });
     expect(toGarmentFilters(defaultWardrobeFilters)).toEqual({ archived: false, sort: 'recent' });
@@ -58,7 +57,6 @@ describe('wardrobeFilters', () => {
       season: 'summer',
       tag: 'evening',
       favorite: true,
-      archived: true,
       sort: 'name'
     })).toEqual({
       q: 'silk',
@@ -66,7 +64,7 @@ describe('wardrobeFilters', () => {
       color: 'black',
       season: 'summer',
       favorite: true,
-      archived: true,
+      archived: false,
       sort: 'name'
     });
   });

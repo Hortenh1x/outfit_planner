@@ -5,6 +5,33 @@ using OutfitPlanner.Domain;
 
 namespace OutfitPlanner.Infrastructure.Storage;
 
+public sealed record InMemoryOutfitStoreSnapshot(
+    UserAccount[] Users,
+    ExternalAuthLogin[] ExternalLogins,
+    AuthSession[] AuthSessions,
+    AuthEmailVerificationToken[] EmailVerificationTokens,
+    AuthPasswordResetToken[] PasswordResetTokens,
+    BodyReferencePhoto[] BodyPhotos,
+    GarmentItem[] Garments,
+    Outfit[] Outfits,
+    ScheduledOutfit[] ScheduledOutfits,
+    TryOnJob[] TryOnJobs,
+    ShareLink[] ShareLinks)
+{
+    public static InMemoryOutfitStoreSnapshot Empty { get; } = new(
+        Array.Empty<UserAccount>(),
+        Array.Empty<ExternalAuthLogin>(),
+        Array.Empty<AuthSession>(),
+        Array.Empty<AuthEmailVerificationToken>(),
+        Array.Empty<AuthPasswordResetToken>(),
+        Array.Empty<BodyReferencePhoto>(),
+        Array.Empty<GarmentItem>(),
+        Array.Empty<Outfit>(),
+        Array.Empty<ScheduledOutfit>(),
+        Array.Empty<TryOnJob>(),
+        Array.Empty<ShareLink>());
+}
+
 public sealed class InMemoryOutfitStore :
     IBodyReferencePhotoRepository,
     IGarmentRepository,
@@ -26,6 +53,34 @@ public sealed class InMemoryOutfitStore :
     private readonly Dictionary<(string UserId, DateOnly Date), ScheduledOutfit> _schedule = new();
     private readonly Dictionary<Guid, TryOnJob> _tryOnJobs = new();
     private readonly Dictionary<string, ShareLink> _shareLinks = new(StringComparer.OrdinalIgnoreCase);
+
+    public InMemoryOutfitStore()
+    {
+    }
+
+    public InMemoryOutfitStore(InMemoryOutfitStoreSnapshot snapshot)
+    {
+        LoadSnapshot(snapshot);
+    }
+
+    public InMemoryOutfitStoreSnapshot ExportSnapshot()
+    {
+        lock (_lock)
+        {
+            return new InMemoryOutfitStoreSnapshot(
+                _users.Values.ToArray(),
+                _externalLogins.Values.ToArray(),
+                _authSessions.Values.ToArray(),
+                _emailVerificationTokens.Values.ToArray(),
+                _passwordResetTokens.Values.ToArray(),
+                _bodyPhotos.Values.ToArray(),
+                _garments.Values.ToArray(),
+                _outfits.Values.ToArray(),
+                _schedule.Values.ToArray(),
+                _tryOnJobs.Values.ToArray(),
+                _shareLinks.Values.ToArray());
+        }
+    }
 
     public GarmentItem CreateGarment(CreateGarmentCommand command)
     {
@@ -631,6 +686,67 @@ public sealed class InMemoryOutfitStore :
     private static string ExternalLoginKey(string provider, string providerSubject)
     {
         return $"{provider.ToLowerInvariant()}:{providerSubject}";
+    }
+
+    private void LoadSnapshot(InMemoryOutfitStoreSnapshot snapshot)
+    {
+        lock (_lock)
+        {
+            foreach (var user in snapshot.Users)
+            {
+                _users[user.Id] = user;
+            }
+
+            foreach (var login in snapshot.ExternalLogins)
+            {
+                _externalLogins[ExternalLoginKey(login.Provider, login.ProviderSubject)] = login;
+            }
+
+            foreach (var session in snapshot.AuthSessions)
+            {
+                _authSessions[session.TokenHash] = session;
+            }
+
+            foreach (var token in snapshot.EmailVerificationTokens)
+            {
+                _emailVerificationTokens[token.TokenHash] = token;
+            }
+
+            foreach (var token in snapshot.PasswordResetTokens)
+            {
+                _passwordResetTokens[token.TokenHash] = token;
+            }
+
+            foreach (var photo in snapshot.BodyPhotos)
+            {
+                _bodyPhotos[photo.Id] = photo;
+            }
+
+            foreach (var garment in snapshot.Garments)
+            {
+                _garments[garment.Id] = garment;
+            }
+
+            foreach (var outfit in snapshot.Outfits)
+            {
+                _outfits[outfit.Id] = outfit;
+            }
+
+            foreach (var scheduled in snapshot.ScheduledOutfits)
+            {
+                _schedule[(scheduled.UserId, scheduled.Date)] = scheduled;
+            }
+
+            foreach (var job in snapshot.TryOnJobs)
+            {
+                _tryOnJobs[job.Id] = job;
+            }
+
+            foreach (var link in snapshot.ShareLinks)
+            {
+                _shareLinks[link.Token] = link;
+            }
+        }
     }
 
     private static bool MatchesGarmentQuery(GarmentItem garment, GarmentQuery query)

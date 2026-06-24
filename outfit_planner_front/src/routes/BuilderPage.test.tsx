@@ -20,6 +20,7 @@ function renderBuilder() {
 describe('BuilderPage', () => {
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -28,7 +29,11 @@ describe('BuilderPage', () => {
       const url = String(input);
 
       if (url.includes('/uploads/garment-photo')) {
-        return jsonResponse({ url: 'http://localhost:5000/uploads/garments/linen-shirt.png' }, 201);
+        return jsonResponse({
+          url: 'http://localhost:5000/api/storage/signed/garments/original/linen-shirt.png?expires=1&signature=orig',
+          thumbnailUrl: 'http://localhost:5000/api/storage/signed/garments/thumbnail/linen-shirt.png?expires=1&signature=thumb',
+          cutoutUrl: 'http://localhost:5000/api/storage/signed/garments/processed-cutout/linen-shirt.png?expires=1&signature=cutout'
+        }, 201);
       }
 
       if (url.endsWith('/garments') && init?.method === 'POST') {
@@ -65,7 +70,8 @@ describe('BuilderPage', () => {
     expect(JSON.parse(createCall?.[1]?.body as string)).toMatchObject({
       name: 'linen shirt',
       category: 'Top',
-      imageUrl: 'http://localhost:5000/uploads/garments/linen-shirt.png',
+      imageUrl: 'http://localhost:5000/api/storage/signed/garments/processed-cutout/linen-shirt.png?expires=1&signature=cutout',
+      thumbnailUrl: 'http://localhost:5000/api/storage/signed/garments/thumbnail/linen-shirt.png?expires=1&signature=thumb',
       tags: []
     });
   });
@@ -357,6 +363,100 @@ describe('BuilderPage', () => {
     expect(JSON.parse(startCall?.[1]?.body as string)).not.toHaveProperty('bodyReferencePhotoUrl');
   });
 
+  it('polls queued try-on jobs until the generated preview is ready', async () => {
+    let jobReads = 0;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            userId: 'user-a',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: '/top.png',
+            thumbnailUrl: '/top.png',
+            tags: [],
+            secondaryColors: [],
+            season: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            laundryStatus: 'clean',
+            createdAt: '2026-06-21T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.endsWith('/body-reference-photos')) {
+        return jsonResponse([{ id: 'body-1', imageUrl: 'https://example.com/body.jpg', createdAt: '2026-06-21T12:00:00Z' }]);
+      }
+
+      if (url.endsWith('/outfits') && init?.method === 'POST') {
+        return jsonResponse({
+          id: 'outfit-1',
+          name: 'Today',
+          items: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: '/top.png' }],
+          tags: [],
+          occasion: [],
+          isFavorite: false,
+          isArchived: false,
+          clothesOnlyPreviewUrl: '/generated/clothes-only/top-1.png',
+          personPreviewUrl: null,
+          createdAt: '2026-06-21T12:00:00Z'
+        }, 201);
+      }
+
+      if (url.endsWith('/outfits/outfit-1/try-on/estimate') && init?.method === 'POST') {
+        return jsonResponse({
+          mode: 'SequentialOutfitTryOn',
+          provider: 'FashnTryOnProvider',
+          bodyTryOnItems: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: '/top.png' }],
+          visualOnlyItems: [],
+          includedGarmentIds: ['top-1'],
+          excludedGarmentIds: [],
+          estimatedCredits: 1,
+          isAvailable: true,
+          requiresAi: true,
+          requiresPremiumConfirmation: false,
+          cacheKey: 'cache-key-a',
+          hasCachedResult: false,
+          summary: 'Sequential outfit try-on will use 1 body garment run(s).',
+          warnings: []
+        });
+      }
+
+      if (url.endsWith('/outfits/outfit-1/try-on') && init?.method === 'POST') {
+        return jsonResponse({ id: 'job-1', status: 'Queued' }, 202);
+      }
+
+      if (url.endsWith('/try-on-jobs/job-1')) {
+        jobReads += 1;
+        return jsonResponse(jobReads === 1
+          ? { id: 'job-1', status: 'Queued' }
+          : { id: 'job-1', status: 'Succeeded', outputImageUrl: 'https://example.com/fashn-output.jpg' });
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderBuilder();
+
+    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /generate preview/i })).toBeEnabled());
+    await userEvent.click(screen.getByRole('button', { name: /generate preview/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /confirm generation/i }));
+
+    expect(await screen.findByText(/queued/i)).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: /generated try-on preview/i })).toHaveAttribute('src', 'https://example.com/fashn-output.jpg');
+    }, { timeout: 2500 });
+  });
+
   it('clears the active saved outfit when the draft selection changes', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
@@ -408,6 +508,102 @@ describe('BuilderPage', () => {
     await userEvent.click(await screen.findByRole('button', { name: /black tee/i }));
 
     expect(screen.getByRole('button', { name: /share/i })).toBeDisabled();
+  });
+
+  it('opens a saved outfit with its generated preview', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/white.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.endsWith('/outfits')) {
+        return jsonResponse([
+          {
+            id: 'outfit-1',
+            name: 'FASHN preview',
+            items: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png' }],
+            tags: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            clothesOnlyPreviewUrl: '/generated/clothes-only/top-1.png',
+            personPreviewUrl: 'https://example.com/fashn-output.jpg',
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderBuilder();
+
+    await userEvent.click(await screen.findByRole('button', { name: /fashn preview/i }));
+
+    expect(screen.getByRole('img', { name: /generated try-on preview/i })).toHaveAttribute('src', 'https://example.com/fashn-output.jpg');
+    expect(screen.getByRole('button', { name: /white tee/i })).toHaveClass('selected');
+    expect(screen.getByDisplayValue('FASHN preview')).toBeInTheDocument();
+  });
+
+  it('does not open synthetic clothes-only preview urls as generated person images', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/white.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.endsWith('/outfits')) {
+        return jsonResponse([
+          {
+            id: 'outfit-1',
+            name: 'Clothes draft',
+            items: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png' }],
+            tags: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            clothesOnlyPreviewUrl: '/generated/clothes-only/top-1.png',
+            personPreviewUrl: null,
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      return jsonResponse([]);
+    });
+
+    const builder = renderBuilder();
+
+    await userEvent.click(await screen.findByRole('button', { name: /clothes draft/i }));
+
+    expect(screen.queryByRole('img', { name: /generated try-on preview/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /white tee/i })).toHaveAttribute('src', 'http://localhost:5000/uploads/garments/white.png');
+    expect(within(builder.container.querySelector('.mode-toggle') as HTMLElement).getByRole('button', { name: /clothes only/i })).toHaveAttribute('aria-pressed', 'true');
   });
 });
 

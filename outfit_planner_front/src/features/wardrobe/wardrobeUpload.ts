@@ -14,9 +14,12 @@ export interface UploadQueueItem {
   id: string;
   file: File;
   name: string;
+  nameEdited: boolean;
   category: GarmentCategory;
   tags: string[];
+  tagsEdited: boolean;
   suggestedTags: string[];
+  existingTags: string[];
   primaryColor: string;
   season: string[];
   warnings: string[];
@@ -26,13 +29,15 @@ export interface UploadQueueItem {
   previewUrl?: string;
 }
 
-export type UploadQueueItemUpdates = Partial<Pick<UploadQueueItem, 'name' | 'category' | 'tags' | 'primaryColor' | 'season'>>;
+export type UploadQueueItemUpdates = Partial<Pick<UploadQueueItem, 'name' | 'nameEdited' | 'category' | 'tags' | 'tagsEdited' | 'primaryColor' | 'season'>>;
 
 export interface SuggestedTagInput {
   fileName: string;
+  name?: string;
   category: GarmentCategory;
   color: string;
   season: string[];
+  selectedTags?: string[];
   existingTags: string[];
 }
 
@@ -53,8 +58,10 @@ export function createUploadQueueItems(files: File[], defaults: UploadQueueDefau
 
 export function createUploadQueueItem(file: File, defaults: UploadQueueDefaults, index = 0): UploadQueueItem {
   const validationError = validateQueueFile(file);
+  const name = inferGarmentName(file.name);
   const suggestedTags = suggestTagsForUpload({
     fileName: file.name,
+    name,
     category: defaults.category,
     color: defaults.color,
     season: defaults.season,
@@ -64,10 +71,13 @@ export function createUploadQueueItem(file: File, defaults: UploadQueueDefaults,
   return {
     id: createUploadQueueItemId(file.name, index),
     file,
-    name: inferGarmentName(file.name),
+    name,
+    nameEdited: false,
     category: defaults.category,
     tags: suggestedTags,
+    tagsEdited: false,
     suggestedTags,
+    existingTags: [...defaults.existingTags],
     primaryColor: defaults.color,
     season: [...defaults.season],
     warnings: getPhotoQualityWarnings(file),
@@ -78,7 +88,21 @@ export function createUploadQueueItem(file: File, defaults: UploadQueueDefaults,
 }
 
 export function updateUploadQueueItem(item: UploadQueueItem, updates: Partial<Omit<UploadQueueItem, 'id' | 'file'>>): UploadQueueItem {
-  return { ...item, ...updates };
+  const tagsEdited = updates.tagsEdited ?? item.tagsEdited;
+  const nameEdited = updates.nameEdited ?? item.nameEdited;
+  const next = { ...item, ...updates, tagsEdited, nameEdited };
+  const suggestedTags = tagsEdited
+    ? uniqueTokens(next.tags)
+    : suggestTagsForUpload({
+        fileName: nameEdited ? '' : item.file.name,
+        name: next.name,
+        category: next.category,
+        color: next.primaryColor,
+        season: next.season,
+        existingTags: next.existingTags
+      });
+
+  return { ...next, tags: suggestedTags, suggestedTags };
 }
 
 export function validateQueueFile(file: File): string | null {
@@ -92,12 +116,15 @@ export function validateQueueFile(file: File): string | null {
 
 export function suggestTagsForUpload(input: SuggestedTagInput): string[] {
   const fromFileName = tokenizeFileName(input.fileName);
+  const fromName = input.name ? tokenizeText(input.name) : [];
   const category = input.category.toLowerCase();
   const tokens = [
     ...fromFileName,
+    ...fromName,
     input.color,
     category,
     ...input.season,
+    ...(input.selectedTags ?? []),
     ...input.existingTags
   ];
 
@@ -141,7 +168,11 @@ export function getPhotoQualityWarnings(file: File, dimensions?: ImageDimensions
 
 function tokenizeFileName(fileName: string): string[] {
   const withoutExtension = fileName.replace(/\.[^.]+$/, '');
-  return withoutExtension
+  return tokenizeText(withoutExtension);
+}
+
+function tokenizeText(value: string): string[] {
+  return value
     .split(/[^a-zA-Z0-9]+/)
     .map((token) => token.trim().toLowerCase())
     .filter((token) => token.length > 1 && !isGenericToken(token));

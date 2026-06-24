@@ -8,6 +8,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
 
 var tests = new List<(string Name, Action Test)>
 {
@@ -24,6 +26,9 @@ var tests = new List<(string Name, Action Test)>
     ("dotnet run defaults api to https localhost 5001", TestDotnetRunDefaultsToHttpsLocalhost5001),
     ("vite dev defaults to https proxy target", TestViteDevDefaultsToHttpsProxyTarget),
     ("postgres store implements application repository ports", TestPostgresStoreImplementsRepositoryPorts),
+    ("local file store implements application repository ports", TestLocalFileStoreImplementsRepositoryPorts),
+    ("local file store persists records across restarts", TestLocalFileStorePersistsRecordsAcrossRestarts),
+    ("api uses local file store when postgres is not configured", TestApiUsesLocalFileStoreWithoutPostgres),
     ("postgres schema contains tables required by repository ports", TestPostgresSchemaContainsRepositoryTables),
     ("postgres schema contains production auth tables and indexes", TestPostgresSchemaContainsAuthTables),
     ("auth service registers email users with hashed passwords and sessions", TestAuthServiceRegistersEmailUsers),
@@ -56,6 +61,7 @@ var tests = new List<(string Name, Action Test)>
     ("try-on service completes clothes-only preview without body reference", TestTryOnServiceCompletesClothesOnlyWithoutBodyReference),
     ("try-on service queues jobs without calling provider inline", TestTryOnServiceQueuesJobsWithoutInlineProviderCall),
     ("try-on processor completes queued jobs through provider", TestTryOnProcessorCompletesQueuedJobs),
+    ("try-on processor stores external provider outputs before exposing them", TestTryOnProcessorStoresExternalProviderOutputs),
     ("try-on processor excludes visual-only items outside composite mode", TestTryOnProcessorExcludesVisualOnlyItemsOutsideCompositeMode),
     ("try-on service forwards sequential flow option to provider", TestTryOnServiceForwardsSequentialFlowOption),
     ("api registers redis try-on queue and provider choices", TestApiRegistersRedisQueueAndProviderChoices),
@@ -67,12 +73,18 @@ var tests = new List<(string Name, Action Test)>
     ("api configures upload body limits", TestApiConfiguresUploadBodyLimits),
     ("api exposes test diagnostics and trace ids", TestApiExposesTestDiagnosticsAndTraceIds),
     ("object storage ports and local/minio adapters exist", TestObjectStoragePortsAndAdapters),
+    ("try-on output storage port and adapter exist", TestTryOnOutputStoragePortAndAdapter),
     ("image processing pipeline exposes privacy preserving variants", TestImageProcessingPipelineContracts),
     ("background removal provider contracts exist", TestBackgroundRemovalProviderContracts),
+    ("background removal auto provider prefers rembg when available", TestBackgroundRemovalAutoProviderPrefersRembg),
+    ("api defaults background removal provider to auto", TestApiDefaultsBackgroundRemovalToAuto),
     ("image processor delegates garment cutouts to background removal provider", TestImageProcessorDelegatesGarmentCutout),
     ("http background removal provider posts multipart image with api key", TestHttpBackgroundRemovalProviderPostsMultipartImageWithApiKey),
+    ("rembg server provider posts multipart file field", TestRembgServerProviderPostsMultipartFileField),
+    ("api registers rembg server provider", TestApiRegistersRembgServerProvider),
     ("single garment extraction scaffold returns one cutout", TestSingleGarmentExtractionScaffoldReturnsOneCutout),
     ("photo upload service stores garment photo variants behind signed url", TestPhotoUploadStoresGarmentPhoto),
+    ("stored photo urls refresh stale garment links to cutouts", TestStoredPhotoUrlRefresherRefreshesGarmentVariants),
     ("photo upload service stores body reference photo privately", TestPhotoUploadStoresBodyReferencePhoto),
     ("wardrobe service deletes garment records and stored photos", TestWardrobeServiceDeletesGarmentAndStoredPhoto),
     ("wardrobe service deletes body reference records and stored photos", TestWardrobeServiceDeletesBodyReferenceAndStoredPhoto),
@@ -296,6 +308,160 @@ static void TestPostgresStoreImplementsRepositoryPorts()
     {
         AssertTrue(port.IsAssignableFrom(storeType), $"Postgres store should implement {port.Name}");
     }
+}
+
+static void TestLocalFileStoreImplementsRepositoryPorts()
+{
+    var storeType = typeof(FileBackedOutfitStore);
+    var requiredPorts = new[]
+    {
+        typeof(IBodyReferencePhotoRepository),
+        typeof(IGarmentRepository),
+        typeof(IOutfitRepository),
+        typeof(IOutfitScheduleRepository),
+        typeof(ITryOnJobRepository),
+        typeof(IShareLinkRepository),
+        typeof(IUserAccountRepository)
+    };
+
+    foreach (var port in requiredPorts)
+    {
+        AssertTrue(port.IsAssignableFrom(storeType), $"Local file store should implement {port.Name}");
+    }
+}
+
+static void TestLocalFileStorePersistsRecordsAcrossRestarts()
+{
+    var tempPath = Path.Combine(Path.GetTempPath(), "outfit-planner-local-store-tests", Guid.NewGuid().ToString("N"));
+
+    try
+    {
+        var snapshotPath = Path.Combine(tempPath, "outfit-store.json");
+        var now = DateTimeOffset.UtcNow;
+        var day = new DateOnly(2026, 6, 24);
+        var user = new UserAccount(
+            "usr_local",
+            "local@example.com",
+            "local@example.com",
+            "Local User",
+            "hashed-password",
+            now,
+            now,
+            null);
+        var bodyPhoto = new BodyReferencePhoto(
+            Guid.Parse("40000000-0000-0000-0000-000000000001"),
+            user.Id,
+            "/api/storage/signed/body-reference-photos/original/body.png?expires=1&signature=test",
+            now);
+        var garment = new GarmentItem(
+            Guid.Parse("40000000-0000-0000-0000-000000000002"),
+            user.Id,
+            "linen shirt",
+            GarmentCategory.Top,
+            BodyZone.Torso,
+            "/api/storage/signed/garments/processed-cutout/shirt.png?expires=1&signature=test",
+            "/api/storage/signed/garments/thumbnail/shirt.png?expires=1&signature=test",
+            new[] { "summer" },
+            "white",
+            Array.Empty<string>(),
+            "linen",
+            null,
+            null,
+            new[] { "summer" },
+            null,
+            null,
+            Array.Empty<string>(),
+            null,
+            null,
+            null,
+            false,
+            false,
+            null,
+            "clean",
+            now);
+        var outfit = new Outfit(
+            Guid.Parse("40000000-0000-0000-0000-000000000003"),
+            user.Id,
+            "saved outfit",
+            new[] { new OutfitItem(garment.Id, garment.Name, garment.Category, garment.BodyZone, garment.ThumbnailUrl) },
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            false,
+            false,
+            null,
+            "/api/storage/signed/try-on-output/preview.png?expires=1&signature=test",
+            now);
+        var job = new TryOnJob(
+            Guid.Parse("40000000-0000-0000-0000-000000000004"),
+            user.Id,
+            outfit.Id,
+            bodyPhoto.ImageUrl,
+            SequentialFlowEnabled: true,
+            TryOnStatus.Succeeded,
+            "provider-job",
+            outfit.PersonPreviewUrl,
+            null,
+            now,
+            now)
+        {
+            ProviderName = "FashnTryOnProvider",
+            SourceBodyPhotoId = bodyPhoto.Id,
+            TryOnMode = TryOnMode.SequentialOutfitTryOn,
+            ConfirmedCredits = 1,
+            CacheKey = "cache-key",
+            ProviderSettingsHash = "settings"
+        };
+
+        var first = new FileBackedOutfitStore(snapshotPath);
+        first.AddUser(user);
+        first.AddAuthSession(new AuthSession(
+            Guid.Parse("40000000-0000-0000-0000-000000000005"),
+            user.Id,
+            "session-hash",
+            "csrf-hash",
+            now.AddDays(1),
+            now,
+            null));
+        first.AddBodyReferencePhoto(bodyPhoto);
+        first.AddGarment(garment);
+        first.AddOutfit(outfit);
+        first.UpsertScheduledOutfit(new ScheduledOutfit(
+            Guid.Parse("40000000-0000-0000-0000-000000000006"),
+            user.Id,
+            day,
+            outfit.Id,
+            now));
+        first.AddTryOnJob(job);
+
+        AssertTrue(File.Exists(snapshotPath), "local file store should write a snapshot file after mutations.");
+
+        var restarted = new FileBackedOutfitStore(snapshotPath);
+
+        AssertEqual(user.Id, restarted.GetUserByNormalizedEmail("local@example.com")?.Id ?? "", "local file store should restore users.");
+        AssertTrue(restarted.GetActiveAuthSessionByTokenHash("session-hash", now) is not null, "local file store should restore auth sessions.");
+        AssertEqual(bodyPhoto.Id, restarted.ListBodyReferencePhotosByUser(user.Id)[0].Id, "local file store should restore body photos.");
+        AssertEqual(garment.Id, restarted.ListGarmentsByUser(user.Id)[0].Id, "local file store should restore garments.");
+        AssertEqual(outfit.Id, restarted.ListOutfitsByUser(user.Id)[0].Id, "local file store should restore outfits.");
+        AssertEqual(outfit.Id, restarted.ListScheduleByUser(user.Id, day, day)[0].OutfitId, "local file store should restore schedule entries.");
+        AssertEqual(job.Id, restarted.GetTryOnJobByUser(user.Id, job.Id)?.Id ?? Guid.Empty, "local file store should restore try-on jobs.");
+    }
+    finally
+    {
+        if (Directory.Exists(tempPath))
+        {
+            Directory.Delete(tempPath, recursive: true);
+        }
+    }
+}
+
+static void TestApiUsesLocalFileStoreWithoutPostgres()
+{
+    var program = File.ReadAllText(Path.Combine("outfit_planner_back", "src", "OutfitPlanner.Api", "Program.cs"));
+
+    AssertTrue(program.Contains("\"LocalFile\"", StringComparison.Ordinal), "empty Postgres configuration should use a durable local file store label.");
+    AssertTrue(program.Contains("FileBackedOutfitStore", StringComparison.Ordinal), "API should register the durable local file store when Postgres is not configured.");
+    AssertTrue(program.Contains("CreateLocalOutfitStore", StringComparison.Ordinal), "API should centralize local file store creation.");
+    AssertTrue(program.Contains("Storage:Local:DataPath", StringComparison.Ordinal), "local file store path should be configurable.");
 }
 
 static void TestPostgresSchemaContainsRepositoryTables()
@@ -1073,6 +1239,30 @@ static void TestTryOnProcessorCompletesQueuedJobs()
     AssertEqual("https://example.com/output.jpg", updatedOutfit?.PersonPreviewUrl, "processed job should update outfit preview.");
 }
 
+static void TestTryOnProcessorStoresExternalProviderOutputs()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id });
+    var provider = new CountingTryOnProvider();
+    var outputStorage = new RecordingTryOnOutputStorage("/api/storage/signed/try-on-output/job-output.png?expires=1&signature=test");
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), new SystemClock(), tryOnOutputStorage: outputStorage);
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SequentialOutfitTryOn, "https://example.com/person.jpg", null);
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SequentialOutfitTryOn, estimate.EstimatedCredits, estimate.CacheKey)
+        .GetAwaiter()
+        .GetResult();
+
+    service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
+    var completed = service.GetJob(userId, job.Id);
+    var updatedOutfit = new OutfitService(store, store, new SystemClock()).GetOutfit(userId, outfit.Id);
+
+    AssertEqual("https://example.com/output.jpg", outputStorage.LastSourceImageUrl, "processor should copy the provider output source.");
+    AssertEqual(outputStorage.StoredUrl, completed?.OutputImageUrl, "processed job should expose the app-owned stored output url.");
+    AssertEqual(outputStorage.StoredUrl, updatedOutfit?.PersonPreviewUrl, "outfit preview should use the app-owned stored output url.");
+}
+
 static void TestTryOnProcessorExcludesVisualOnlyItemsOutsideCompositeMode()
 {
     var store = new InMemoryOutfitStore();
@@ -1130,6 +1320,8 @@ static void TestApiRegistersRedisQueueAndProviderChoices()
     AssertTrue(program.Contains("compositefashntryonprovider", StringComparison.Ordinal), "api should allow selecting the composite FASHN provider by full class-name alias.");
     AssertTrue(program.Contains("selfhostedcatvtonprovider", StringComparison.Ordinal), "api should allow selecting the self-hosted CatVTON provider by full class-name alias.");
     AssertTrue(program.Contains("generalimageedittryonprovider", StringComparison.Ordinal), "api should allow selecting the general image edit provider by full class-name alias.");
+    AssertTrue(program.Contains("backgroundRemovalProvider", StringComparison.Ordinal), "system status should expose the active background removal provider.");
+    AssertTrue(program.Contains("backgroundRemovalConfiguredProvider", StringComparison.Ordinal), "system status should expose the configured background removal provider.");
 }
 
 static void TestDailySchedulePerUser()
@@ -1222,6 +1414,12 @@ static void TestObjectStoragePortsAndAdapters()
     AssertTrue(typeof(MinioObjectStorage).GetInterfaces().Contains(typeof(IObjectStorage)), "minio adapter should implement object storage.");
 }
 
+static void TestTryOnOutputStoragePortAndAdapter()
+{
+    AssertTrue(typeof(ITryOnOutputStorage).IsInterface, "application should expose a try-on output storage port.");
+    AssertTrue(typeof(TryOnOutputStorage).GetInterfaces().Contains(typeof(ITryOnOutputStorage)), "infrastructure should store provider outputs behind the try-on output port.");
+}
+
 static void TestImageProcessingPipelineContracts()
 {
     AssertTrue(typeof(IImageProcessor).IsInterface, "application should expose an image processing port.");
@@ -1238,11 +1436,39 @@ static void TestBackgroundRemovalProviderContracts()
     AssertTrue(typeof(IGarmentExtractionProvider).IsInterface, "infrastructure should expose a garment extraction provider port.");
     AssertTrue(typeof(SimpleBackgroundRemovalProvider).GetInterfaces().Contains(typeof(IBackgroundRemovalProvider)), "simple cutout adapter should implement background removal.");
     AssertTrue(typeof(RembgBackgroundRemovalProvider).GetInterfaces().Contains(typeof(IBackgroundRemovalProvider)), "rembg adapter should implement background removal.");
+    AssertTrue(typeof(RembgServerBackgroundRemovalProvider).GetInterfaces().Contains(typeof(IBackgroundRemovalProvider)), "rembg server adapter should implement background removal.");
     AssertTrue(typeof(HttpBackgroundRemovalProvider).GetInterfaces().Contains(typeof(IBackgroundRemovalProvider)), "http adapter should implement background removal.");
+    AssertTrue(typeof(AutoBackgroundRemovalProvider).GetInterfaces().Contains(typeof(IBackgroundRemovalProvider)), "auto adapter should implement background removal.");
     AssertTrue(typeof(SingleGarmentExtractionProvider).GetInterfaces().Contains(typeof(IGarmentExtractionProvider)), "single item extraction adapter should implement garment extraction.");
     AssertTrue(
         typeof(ImageProcessor).GetConstructors().Any(constructor => constructor.GetParameters().Any(parameter => parameter.ParameterType == typeof(IGarmentExtractionProvider))),
         "image processor should accept a configured garment extraction provider.");
+}
+
+static void TestBackgroundRemovalAutoProviderPrefersRembg()
+{
+    var primary = new RecordingBackgroundRemovalProvider(MinimalPngBytes()) { ProviderName = "rembg" };
+    var fallback = new RecordingBackgroundRemovalProvider(MinimalPngBytes()) { ProviderName = "simple" };
+    var available = new AutoBackgroundRemovalProvider(primary, fallback, () => true);
+    var unavailable = new AutoBackgroundRemovalProvider(primary, fallback, () => false);
+    var request = new BackgroundRemovalRequest("shirt.png", "image/png", MinimalPngBytes());
+
+    var availableResult = available.RemoveBackground(request);
+    var unavailableResult = unavailable.RemoveBackground(request);
+
+    AssertEqual("auto:rembg", available.Name, "auto provider should expose rembg as active when rembg is available");
+    AssertEqual("rembg", availableResult.ProviderName, "auto provider should use rembg when available");
+    AssertEqual(1, primary.Calls, "auto provider should call rembg once when available");
+    AssertEqual("simple", unavailableResult.ProviderName, "auto provider should fall back to simple only when rembg is unavailable");
+    AssertEqual(1, fallback.Calls, "auto provider should call fallback once when rembg is unavailable");
+}
+
+static void TestApiDefaultsBackgroundRemovalToAuto()
+{
+    var program = File.ReadAllText(Path.Combine("outfit_planner_back", "src", "OutfitPlanner.Api", "Program.cs"));
+
+    AssertTrue(program.Contains("configuration[\"BackgroundRemoval:Provider\"] ?? \"Auto\"", StringComparison.Ordinal), "API should default background removal provider to auto.");
+    AssertTrue(program.Contains("\"auto\" => new AutoBackgroundRemovalProvider", StringComparison.Ordinal), "API should wire auto background removal provider.");
 }
 
 static void TestImageProcessorDelegatesGarmentCutout()
@@ -1285,6 +1511,37 @@ static void TestHttpBackgroundRemovalProviderPostsMultipartImageWithApiKey()
     AssertTrue(handler.Body.Contains("shirt.png", StringComparison.Ordinal), "multipart body should preserve upload file name");
 }
 
+static void TestRembgServerProviderPostsMultipartFileField()
+{
+    var handler = new RecordingBackgroundRemovalHandler(MinimalPngBytes());
+    var provider = new RembgServerBackgroundRemovalProvider(
+        new HttpClient(handler),
+        new RembgServerBackgroundRemovalSettings(
+            "http://127.0.0.1:7000/api/remove",
+            "file",
+            "birefnet-general-lite",
+            TimeSpan.FromSeconds(10)));
+
+    var result = provider.RemoveBackground(new BackgroundRemovalRequest("shirt.png", "image/png", MinimalPngBytes()));
+
+    AssertEqual("rembg-server", result.ProviderName, "rembg server provider should identify rembg server outputs.");
+    AssertEqual("/api/remove", handler.Request?.RequestUri?.AbsolutePath, "rembg server provider should call the remove API.");
+    AssertTrue(handler.Body.Contains("name=file", StringComparison.Ordinal), "rembg server provider should post the upload as multipart field file.");
+    AssertTrue(handler.Body.Contains("name=model", StringComparison.Ordinal), "rembg server provider should send the selected model as a multipart field.");
+    AssertTrue(handler.Body.Contains("birefnet-general-lite", StringComparison.Ordinal), "rembg server provider should preserve the configured model name.");
+    AssertTrue(handler.Body.Contains("shirt.png", StringComparison.Ordinal), "rembg server provider should preserve the uploaded filename.");
+}
+
+static void TestApiRegistersRembgServerProvider()
+{
+    var program = File.ReadAllText(Path.Combine("outfit_planner_back", "src", "OutfitPlanner.Api", "Program.cs"));
+
+    AssertTrue(program.Contains("rembgserver", StringComparison.Ordinal), "API should expose an explicit rembg server background removal provider.");
+    AssertTrue(program.Contains("BackgroundRemoval:RembgServer:Endpoint", StringComparison.Ordinal), "API should read rembg server endpoint configuration.");
+    AssertTrue(program.Contains("http://127.0.0.1:7000/api/remove", StringComparison.Ordinal), "API should default rembg server endpoint to local rembg server remove API.");
+    AssertTrue(program.Contains("\"RembgServer\"", StringComparison.Ordinal) && program.Contains("\"ModelName\"", StringComparison.Ordinal), "API should read rembg server model configuration.");
+}
+
 static void TestSingleGarmentExtractionScaffoldReturnsOneCutout()
 {
     var remover = new RecordingBackgroundRemovalProvider(MinimalPngBytes());
@@ -1323,6 +1580,37 @@ static void TestPhotoUploadStoresGarmentPhoto()
         AssertTrue(File.Exists(Path.Combine(tempPath, "garments", "original", stored.FileName)), "original garment object should exist on disk");
         AssertTrue(File.Exists(Path.Combine(tempPath, "garments", "thumbnail", stored.FileName)), "thumbnail garment object should exist on disk");
         AssertTrue(File.Exists(Path.Combine(tempPath, "garments", "processed-cutout", stored.FileName)), "processed cutout garment object should exist on disk");
+        AssertTrue(ImageHasTransparentPixel(Path.Combine(tempPath, "garments", "thumbnail", stored.FileName)), "garment thumbnail should be generated from the processed cutout.");
+    }
+    finally
+    {
+        if (Directory.Exists(tempPath))
+        {
+            Directory.Delete(tempPath, recursive: true);
+        }
+    }
+}
+
+static void TestStoredPhotoUrlRefresherRefreshesGarmentVariants()
+{
+    var tempPath = Path.Combine(Path.GetTempPath(), "outfit-planner-url-refresh-tests", Guid.NewGuid().ToString("N"));
+
+    try
+    {
+        var objects = new LocalObjectStorage(tempPath, "test-signing-key");
+        PutTestObject(objects, "garments/original/shirt.png");
+        PutTestObject(objects, "garments/thumbnail/shirt.png");
+        PutTestObject(objects, "garments/processed-cutout/shirt.png");
+        var staleOriginalUrl = "/api/storage/signed/garments/original/shirt.png?expires=1&signature=stale";
+        var refresher = new StoredPhotoUrlRefresher(objects);
+
+        var refreshedCutout = refresher.RefreshGarmentImageUrl(staleOriginalUrl);
+        var refreshedThumbnail = refresher.RefreshGarmentThumbnailUrl(staleOriginalUrl);
+
+        AssertTrue(refreshedCutout.Contains("/garments/processed-cutout/shirt.png", StringComparison.Ordinal), "stale primary garment URL should refresh to the processed cutout when it exists");
+        AssertTrue(refreshedThumbnail.Contains("/garments/thumbnail/shirt.png", StringComparison.Ordinal), "stale thumbnail garment URL should refresh to the thumbnail variant when it exists");
+        AssertFalse(string.Equals(staleOriginalUrl, refreshedCutout, StringComparison.Ordinal), "refreshed cutout URL should replace the stale signed URL");
+        AssertFalse(refreshedCutout.Contains("signature=stale", StringComparison.Ordinal), "refreshed cutout URL should get a new signature");
     }
     finally
     {
@@ -1570,6 +1858,9 @@ static void TestApiUsesDbUpMigrations()
     AssertTrue(!program.Contains("PostgresSchemaInitializer", StringComparison.Ordinal), "api startup should no longer initialize schema.sql directly.");
     AssertTrue(Directory.Exists(migrationPath), "database migrations directory should exist.");
     AssertTrue(Directory.GetFiles(migrationPath, "*.sql").Length > 0, "database migrations directory should contain SQL migrations.");
+    var archivedGarmentCleanup = File.ReadAllText(Path.Combine(migrationPath, "003_delete_archived_garments.sql"));
+    AssertTrue(archivedGarmentCleanup.Contains("delete from garment_items", StringComparison.OrdinalIgnoreCase), "migrations should delete archived garment records.");
+    AssertTrue(archivedGarmentCleanup.Contains("is_archived = true", StringComparison.OrdinalIgnoreCase), "archived garment cleanup should target archived rows only.");
 }
 
 static void TestProviderAdaptersImplementPort()
@@ -1817,6 +2108,36 @@ static byte[] MinimalPngBytes()
     return Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXY/j///9/AAn7A/0FQ0XKAAAAAElFTkSuQmCC");
 }
 
+static bool ImageHasTransparentPixel(string path)
+{
+    using var image = Image.Load<Rgba32>(path);
+    var hasTransparentPixel = false;
+    image.ProcessPixelRows(accessor =>
+    {
+        for (var y = 0; y < accessor.Height && !hasTransparentPixel; y++)
+        {
+            var row = accessor.GetRowSpan(y);
+            for (var x = 0; x < row.Length; x++)
+            {
+                if (row[x].A < 255)
+                {
+                    hasTransparentPixel = true;
+                    break;
+                }
+            }
+        }
+    });
+
+    return hasTransparentPixel;
+}
+
+static void PutTestObject(IObjectStorage objects, string objectKey)
+{
+    var bytes = MinimalPngBytes();
+    using var stream = new MemoryStream(bytes);
+    objects.PutObject(new ObjectStoragePutRequest(objectKey, "image/png", stream, Private: true));
+}
+
 static Outfit CreateSingleGarmentOutfit()
 {
     return new Outfit(
@@ -1916,6 +2237,14 @@ static void AssertThrows<TException>(Action action, string message)
 static void AssertTrue(bool condition, string message)
 {
     if (!condition)
+    {
+        throw new InvalidOperationException(message);
+    }
+}
+
+static void AssertFalse(bool condition, string message)
+{
+    if (condition)
     {
         throw new InvalidOperationException(message);
     }
@@ -2030,6 +2359,28 @@ sealed class CountingTryOnProvider : ITryOnProvider
     }
 }
 
+sealed class RecordingTryOnOutputStorage : ITryOnOutputStorage
+{
+    public RecordingTryOnOutputStorage(string storedUrl)
+    {
+        StoredUrl = storedUrl;
+    }
+
+    public string StoredUrl { get; }
+    public string? LastSourceImageUrl { get; private set; }
+
+    public Task<string> StoreAsync(Guid jobId, string sourceImageUrl, DateTimeOffset retentionUntil, CancellationToken cancellationToken = default)
+    {
+        LastSourceImageUrl = sourceImageUrl;
+        return Task.FromResult(StoredUrl);
+    }
+
+    public bool DeleteOutput(string outputImageUrl)
+    {
+        return true;
+    }
+}
+
 sealed class RecordingTryOnJobQueue : ITryOnJobQueue
 {
     public List<Guid> Enqueued { get; } = new();
@@ -2066,7 +2417,9 @@ sealed class RecordingBackgroundRemovalProvider : IBackgroundRemovalProvider
 
     public BackgroundRemovalRequest? LastRequest { get; private set; }
 
-    public string Name => "recording";
+    public string ProviderName { get; init; } = "recording";
+
+    public string Name => ProviderName;
 
     public BackgroundRemovalResult RemoveBackground(BackgroundRemovalRequest request)
     {

@@ -40,8 +40,9 @@ public sealed class ImageProcessor : IImageProcessor
         var extension = ExtensionFor(photo.ContentType);
         var fileName = $"{Guid.NewGuid():N}{extension}";
         var original = Encode(image, photo.ContentType);
-        var thumbnail = Encode(ResizeClone(image, ThumbnailSide), photo.ContentType);
         using var cutoutImage = CreateGarmentCutout(photo.FileName, photo.ContentType, original);
+        using var thumbnailImage = ResizeClone(cutoutImage, ThumbnailSide);
+        var thumbnail = EncodePng(thumbnailImage);
         var cutout = EncodePng(cutoutImage);
         var mask = CreateSegmentationMask(cutoutImage);
 
@@ -53,7 +54,7 @@ public sealed class ImageProcessor : IImageProcessor
             new[]
             {
                 new ProcessedImage(StoredImageVariant.Original, photo.ContentType, extension, original),
-                new ProcessedImage(StoredImageVariant.Thumbnail, photo.ContentType, extension, thumbnail),
+                new ProcessedImage(StoredImageVariant.Thumbnail, "image/png", ".png", thumbnail),
                 new ProcessedImage(StoredImageVariant.ProcessedCutout, "image/png", ".png", cutout),
                 new ProcessedImage(StoredImageVariant.SegmentationMask, "image/png", ".png", mask)
             });

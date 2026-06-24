@@ -452,6 +452,7 @@
 
 .wardrobe-card-tags li,
 .suggested-tags button,
+.suggested-tags span,
 .clean-checklist span {
   border: 1px solid var(--editorial-hairline);
   border-radius: 999px;
@@ -504,7 +505,9 @@
   background: var(--editorial-panel);
   display: grid;
   gap: 14px;
+  max-width: 100%;
   min-width: 0;
+  overflow-x: hidden;
   padding: 18px;
 }
 
@@ -520,6 +523,7 @@
   font-size: 0.76rem;
   font-weight: 900;
   gap: 6px;
+  min-width: 0;
 }
 
 .wardrobe-rail-note {
@@ -612,6 +616,12 @@
   position: relative;
 }
 
+.upload-queue,
+.upload-queue-row {
+  max-width: 100%;
+  min-width: 0;
+}
+
 .upload-queue {
   display: grid;
   gap: 10px;
@@ -622,6 +632,8 @@
   border-radius: var(--radius-panel);
   display: grid;
   gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  overflow: hidden;
   padding: 11px;
 }
 
@@ -631,9 +643,10 @@
 
 .upload-queue-heading {
   align-items: center;
-  display: flex;
+  display: grid;
   gap: 10px;
-  justify-content: space-between;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
 }
 
 .upload-queue-heading strong {
@@ -642,8 +655,9 @@
   font-weight: 900;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .upload-queue-heading button {
@@ -651,10 +665,35 @@
   min-height: 30px;
 }
 
-.suggested-tags button {
+.suggested-tags button,
+.suggested-tags span {
   background: var(--wardrobe-panel-subtle);
   min-height: 28px;
+  overflow-wrap: anywhere;
   padding: 0 9px;
+}
+
+.suggested-tags span {
+  align-items: center;
+  display: inline-flex;
+}
+
+.upload-queue-preview {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--editorial-panel-muted) 82%, transparent), transparent),
+    var(--wardrobe-panel-subtle);
+  border: 1px solid var(--editorial-hairline);
+  border-radius: var(--radius-panel);
+  overflow: hidden;
+}
+
+.upload-queue-preview img {
+  aspect-ratio: 4 / 3;
+  display: block;
+  max-height: 220px;
+  object-fit: contain;
+  padding: 10px;
+  width: 100%;
 }
 
 .suggested-tags button[aria-pressed="true"] {

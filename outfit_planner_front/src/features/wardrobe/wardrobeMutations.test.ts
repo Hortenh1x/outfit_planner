@@ -17,7 +17,7 @@ describe('wardrobe mutations', () => {
 
     expect(garmentPhotoUrlsFromUpload(uploaded)).toEqual({
       imageUrl: '/api/storage/signed/garments/processed-cutout/shirt.png',
-      thumbnailUrl: '/api/storage/signed/garments/thumbnail/shirt.png'
+      thumbnailUrl: '/api/storage/signed/garments/processed-cutout/shirt.png'
     });
   });
 

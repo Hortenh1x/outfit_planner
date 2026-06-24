@@ -204,6 +204,7 @@ builder.Services.AddHttpClient("composite-fashn");
 builder.Services.AddHttpClient("self-hosted-catvton");
 builder.Services.AddHttpClient("general-image-edit");
 builder.Services.AddHttpClient("background-removal");
+builder.Services.AddHttpClient("try-on-output-storage");
 builder.Services.AddSingleton<ITryOnProvider>(provider => CreateTryOnProvider(provider, builder.Configuration));
 var redisConnectionString = builder.Configuration["ConnectionStrings:Redis"] ?? builder.Configuration.GetConnectionString("Redis");
 if (string.IsNullOrWhiteSpace(redisConnectionString))
@@ -216,6 +217,10 @@ else
     builder.Services.AddSingleton<ITryOnJobQueue>(provider => new RedisTryOnJobQueue(provider.GetRequiredService<IConnectionMultiplexer>()));
 }
 builder.Services.AddSingleton<IObjectStorage>(provider => CreateObjectStorage(builder.Configuration, builder.Environment));
+builder.Services.AddSingleton<IStoredPhotoUrlRefresher, StoredPhotoUrlRefresher>();
+builder.Services.AddSingleton<ITryOnOutputStorage>(provider => new TryOnOutputStorage(
+    provider.GetRequiredService<IObjectStorage>(),
+    provider.GetRequiredService<IHttpClientFactory>().CreateClient("try-on-output-storage")));
 builder.Services.AddSingleton<IBackgroundRemovalProvider>(provider => CreateBackgroundRemovalProvider(provider, builder.Configuration));
 builder.Services.AddSingleton<IGarmentExtractionProvider>(provider => new SingleGarmentExtractionProvider(provider.GetRequiredService<IBackgroundRemovalProvider>()));
 builder.Services.AddSingleton<IImageProcessor>(provider => new ImageProcessor(provider.GetRequiredService<IGarmentExtractionProvider>()));
@@ -224,7 +229,7 @@ builder.Services.AddSingleton<IPhotoStorage>(provider => provider.GetRequiredSer
 builder.Services.AddSingleton<IStoredPhotoReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IStoredPhotoDeletion>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 var postgresConnectionString = builder.Configuration.GetConnectionString("Postgres");
-var storageProvider = string.IsNullOrWhiteSpace(postgresConnectionString) ? "InMemory" : "Postgres";
+var storageProvider = string.IsNullOrWhiteSpace(postgresConnectionString) ? "LocalFile" : "Postgres";
 if (storageProvider == "Postgres")
 {
     builder.Services.AddSingleton(NpgsqlDataSource.Create(postgresConnectionString!));
@@ -247,14 +252,14 @@ if (storageProvider == "Postgres")
 }
 else
 {
-    builder.Services.AddSingleton<InMemoryOutfitStore>();
-    builder.Services.AddSingleton<IBodyReferencePhotoRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
-    builder.Services.AddSingleton<IGarmentRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
-    builder.Services.AddSingleton<IOutfitRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
-    builder.Services.AddSingleton<IOutfitScheduleRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
-    builder.Services.AddSingleton<ITryOnJobRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
-    builder.Services.AddSingleton<IShareLinkRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
-    builder.Services.AddSingleton<IUserAccountRepository>(provider => provider.GetRequiredService<InMemoryOutfitStore>());
+    builder.Services.AddSingleton(provider => CreateLocalOutfitStore(builder.Configuration, builder.Environment));
+    builder.Services.AddSingleton<IBodyReferencePhotoRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
+    builder.Services.AddSingleton<IGarmentRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
+    builder.Services.AddSingleton<IOutfitRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
+    builder.Services.AddSingleton<IOutfitScheduleRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
+    builder.Services.AddSingleton<ITryOnJobRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
+    builder.Services.AddSingleton<IShareLinkRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
+    builder.Services.AddSingleton<IUserAccountRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
 }
 builder.Services.AddSingleton<WardrobeService>();
 builder.Services.AddSingleton<PhotoUploadService>();
@@ -362,7 +367,7 @@ if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Test"))
 
 api.MapGet("/health", () => Results.Ok(new { status = "ok", service = "outfit-planner-api" }));
 
-api.MapGet("/system/status", async (PostgresConnectionProbe postgres, CancellationToken cancellationToken) =>
+api.MapGet("/system/status", async (PostgresConnectionProbe postgres, IBackgroundRemovalProvider backgroundRemoval, CancellationToken cancellationToken) =>
 {
     var postgresStatus = await postgres.CheckAsync(cancellationToken);
     return Results.Ok(new
@@ -370,7 +375,9 @@ api.MapGet("/system/status", async (PostgresConnectionProbe postgres, Cancellati
         api = "running",
         storage = storageProvider,
         postgres = postgresStatus,
-        aiProvider = builder.Configuration["TryOn:Provider"] ?? "Mock"
+        aiProvider = builder.Configuration["TryOn:Provider"] ?? "Mock",
+        backgroundRemovalProvider = backgroundRemoval.Name,
+        backgroundRemovalConfiguredProvider = builder.Configuration["BackgroundRemoval:Provider"] ?? "Auto"
     });
 });
 
@@ -609,12 +616,12 @@ api.MapDelete("/account", (IUserAccountRepository users, HttpContext context) =>
     return deleted ? Results.NoContent() : Results.NotFound();
 });
 
-api.MapPost("/body-reference-photos", (CreateBodyReferencePhotoRequest request, WardrobeService wardrobe, HttpContext context) =>
+api.MapPost("/body-reference-photos", (CreateBodyReferencePhotoRequest request, WardrobeService wardrobe, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     try
     {
         var photo = wardrobe.CreateBodyReferencePhoto(CurrentUser(context), request.ImageUrl);
-        return Results.Created($"/api/body-reference-photos/{photo.Id}", photo);
+        return Results.Created($"/api/body-reference-photos/{photo.Id}", ToBodyReferencePhotoResponse(photo, photoUrls, context.Request));
     }
     catch (InvalidOperationException ex)
     {
@@ -623,8 +630,10 @@ api.MapPost("/body-reference-photos", (CreateBodyReferencePhotoRequest request, 
 })
     .Produces<BodyReferencePhoto>(StatusCodes.Status201Created);
 
-api.MapGet("/body-reference-photos", (WardrobeService wardrobe, HttpContext context) =>
-    Results.Ok(wardrobe.ListBodyReferencePhotos(CurrentUser(context))))
+api.MapGet("/body-reference-photos", (WardrobeService wardrobe, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
+    Results.Ok(wardrobe.ListBodyReferencePhotos(CurrentUser(context))
+        .Select(photo => ToBodyReferencePhotoResponse(photo, photoUrls, context.Request))
+        .ToArray()))
     .Produces<IReadOnlyList<BodyReferencePhoto>>(StatusCodes.Status200OK);
 
 api.MapDelete("/body-reference-photos/{photoId:guid}", (Guid photoId, WardrobeService wardrobe, HttpContext context) =>
@@ -632,6 +641,7 @@ api.MapDelete("/body-reference-photos/{photoId:guid}", (Guid photoId, WardrobeSe
 
 api.MapGet("/garments", (
     WardrobeService wardrobe,
+    IStoredPhotoUrlRefresher photoUrls,
     HttpContext context,
     GarmentCategory? category,
     string? color,
@@ -657,13 +667,15 @@ api.MapGet("/garments", (
         archived,
         occasion,
         brand,
-        material))))
+        material))
+        .Select(garment => ToGarmentResponse(garment, photoUrls, context.Request))
+        .ToArray()))
     .Produces<IReadOnlyList<GarmentItem>>(StatusCodes.Status200OK);
 
-api.MapGet("/garments/{garmentId:guid}", (Guid garmentId, WardrobeService wardrobe, HttpContext context) =>
+api.MapGet("/garments/{garmentId:guid}", (Guid garmentId, WardrobeService wardrobe, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     var garment = wardrobe.GetGarment(CurrentUser(context), garmentId);
-    return garment is null ? Results.NotFound() : Results.Ok(garment);
+    return garment is null ? Results.NotFound() : Results.Ok(ToGarmentResponse(garment, photoUrls, context.Request));
 })
     .Produces<GarmentItem>(StatusCodes.Status200OK)
     .Produces(StatusCodes.Status404NotFound);
@@ -678,7 +690,7 @@ api.MapPost("/uploads/body-reference-photo", async (HttpRequest request, PhotoUp
     return await UploadPhoto(request, logger, "body-reference", cancellationToken, photo => photos.UploadBodyReferencePhoto(photo));
 });
 
-api.MapPost("/garments", (CreateGarmentRequest request, WardrobeService wardrobe, HttpContext context) =>
+api.MapPost("/garments", (CreateGarmentRequest request, WardrobeService wardrobe, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     try
     {
@@ -706,7 +718,7 @@ api.MapPost("/garments", (CreateGarmentRequest request, WardrobeService wardrobe
             request.LastWornAt,
             request.LaundryStatus));
 
-        return Results.Created($"/api/garments/{garment.Id}", garment);
+        return Results.Created($"/api/garments/{garment.Id}", ToGarmentResponse(garment, photoUrls, context.Request));
     }
     catch (InvalidOperationException ex)
     {
@@ -715,7 +727,7 @@ api.MapPost("/garments", (CreateGarmentRequest request, WardrobeService wardrobe
 })
     .Produces<GarmentItem>(StatusCodes.Status201Created);
 
-api.MapPatch("/garments/{garmentId:guid}", (Guid garmentId, UpdateGarmentRequest request, WardrobeService wardrobe, HttpContext context) =>
+api.MapPatch("/garments/{garmentId:guid}", (Guid garmentId, UpdateGarmentRequest request, WardrobeService wardrobe, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     try
     {
@@ -739,7 +751,7 @@ api.MapPatch("/garments/{garmentId:guid}", (Guid garmentId, UpdateGarmentRequest
             request.IsArchived,
             request.LastWornAt,
             request.LaundryStatus));
-        return garment is null ? Results.NotFound() : Results.Ok(garment);
+        return garment is null ? Results.NotFound() : Results.Ok(ToGarmentResponse(garment, photoUrls, context.Request));
     }
     catch (InvalidOperationException ex)
     {
@@ -754,6 +766,7 @@ api.MapDelete("/garments/{garmentId:guid}", (Guid garmentId, WardrobeService war
 
 api.MapGet("/outfits", (
     OutfitService outfits,
+    IStoredPhotoUrlRefresher photoUrls,
     HttpContext context,
     string? q,
     string? occasion,
@@ -762,23 +775,25 @@ api.MapGet("/outfits", (
     string? sort,
     int? offset,
     int? limit) =>
-    Results.Ok(outfits.ListOutfits(CurrentUser(context), new OutfitQuery(q, occasion, favorite, archived, sort, offset, limit))))
+    Results.Ok(outfits.ListOutfits(CurrentUser(context), new OutfitQuery(q, occasion, favorite, archived, sort, offset, limit))
+        .Select(outfit => ToOutfitResponse(outfit, photoUrls, context.Request))
+        .ToArray()))
     .Produces<IReadOnlyList<Outfit>>(StatusCodes.Status200OK);
 
-api.MapGet("/outfits/{outfitId:guid}", (Guid outfitId, OutfitService outfits, HttpContext context) =>
+api.MapGet("/outfits/{outfitId:guid}", (Guid outfitId, OutfitService outfits, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     var outfit = outfits.GetOutfit(CurrentUser(context), outfitId);
-    return outfit is null ? Results.NotFound() : Results.Ok(outfit);
+    return outfit is null ? Results.NotFound() : Results.Ok(ToOutfitResponse(outfit, photoUrls, context.Request));
 })
     .Produces<Outfit>(StatusCodes.Status200OK)
     .Produces(StatusCodes.Status404NotFound);
 
-api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, HttpContext context) =>
+api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     try
     {
         var outfit = outfits.CreateOutfit(CurrentUser(context), request.Name, request.GarmentIds);
-        return Results.Created($"/api/outfits/{outfit.Id}", outfit);
+        return Results.Created($"/api/outfits/{outfit.Id}", ToOutfitResponse(outfit, photoUrls, context.Request));
     }
     catch (InvalidOperationException ex)
     {
@@ -787,7 +802,7 @@ api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, Htt
 })
     .Produces<Outfit>(StatusCodes.Status201Created);
 
-api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest request, OutfitService outfits, HttpContext context) =>
+api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest request, OutfitService outfits, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     try
     {
@@ -798,7 +813,7 @@ api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest req
             request.Occasion,
             request.IsFavorite,
             request.IsArchived));
-        return outfit is null ? Results.NotFound() : Results.Ok(outfit);
+        return outfit is null ? Results.NotFound() : Results.Ok(ToOutfitResponse(outfit, photoUrls, context.Request));
     }
     catch (InvalidOperationException ex)
     {
@@ -932,22 +947,23 @@ api.MapPost("/outfits/{outfitId:guid}/share", (Guid outfitId, ShareService share
 })
     .Produces<ShareLinkResponse>(StatusCodes.Status200OK);
 
-api.MapGet("/share/{token}", (string token, ShareService share) =>
+api.MapGet("/share/{token}", (string token, ShareService share, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     var outfit = share.GetSharedOutfit(token);
+    var responseOutfit = outfit is null ? null : ToOutfitResponse(outfit, photoUrls, context.Request);
     return outfit is null
         ? Results.NotFound()
         : Results.Ok(new SharedOutfitResponse(
-            outfit.Id,
-            outfit.Name,
-            outfit.Items,
-            outfit.Tags,
-            outfit.Occasion,
-            outfit.IsFavorite,
-            outfit.IsArchived,
-            outfit.ClothesOnlyPreviewUrl,
-            outfit.PersonPreviewUrl,
-            outfit.CreatedAt));
+            responseOutfit!.Id,
+            responseOutfit.Name,
+            responseOutfit.Items,
+            responseOutfit.Tags,
+            responseOutfit.Occasion,
+            responseOutfit.IsFavorite,
+            responseOutfit.IsArchived,
+            responseOutfit.ClothesOnlyPreviewUrl,
+            responseOutfit.PersonPreviewUrl,
+            responseOutfit.CreatedAt));
 })
     .Produces<SharedOutfitResponse>(StatusCodes.Status200OK)
     .Produces(StatusCodes.Status404NotFound);
@@ -1062,6 +1078,43 @@ static string? PublicUploadUrl(HttpRequest request, string? storedUrl)
         : $"{request.Scheme}://{request.Host}{storedUrl}";
 }
 
+static BodyReferencePhoto ToBodyReferencePhotoResponse(BodyReferencePhoto photo, IStoredPhotoUrlRefresher photoUrls, HttpRequest request)
+{
+    return photo with
+    {
+        ImageUrl = PublicUploadUrl(request, photoUrls.RefreshBodyReferencePhotoUrl(photo.ImageUrl)) ?? photo.ImageUrl
+    };
+}
+
+static GarmentItem ToGarmentResponse(GarmentItem garment, IStoredPhotoUrlRefresher photoUrls, HttpRequest request)
+{
+    var imageUrl = PublicUploadUrl(request, photoUrls.RefreshGarmentImageUrl(garment.ImageUrl)) ?? garment.ImageUrl;
+    var thumbnailUrl = PublicUploadUrl(request, photoUrls.RefreshGarmentThumbnailUrl(garment.ThumbnailUrl)) ?? garment.ThumbnailUrl;
+    return garment with
+    {
+        ImageUrl = imageUrl,
+        ThumbnailUrl = thumbnailUrl
+    };
+}
+
+static Outfit ToOutfitResponse(Outfit outfit, IStoredPhotoUrlRefresher photoUrls, HttpRequest request)
+{
+    return outfit with
+    {
+        Items = outfit.Items
+            .Select(item => ToOutfitItemResponse(item, photoUrls, request))
+            .ToArray()
+    };
+}
+
+static OutfitItem ToOutfitItemResponse(OutfitItem item, IStoredPhotoUrlRefresher photoUrls, HttpRequest request)
+{
+    return item with
+    {
+        ThumbnailUrl = PublicUploadUrl(request, photoUrls.RefreshGarmentThumbnailUrl(item.ThumbnailUrl)) ?? item.ThumbnailUrl
+    };
+}
+
 static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfiguration configuration)
 {
     var configuredProvider = configuration["TryOn:Provider"] ?? "Mock";
@@ -1121,18 +1174,25 @@ static IObjectStorage CreateObjectStorage(IConfiguration configuration, IWebHost
     return new LocalObjectStorage(root, configuration["ObjectStorage:Local:SigningSecret"]);
 }
 
+static FileBackedOutfitStore CreateLocalOutfitStore(IConfiguration configuration, IWebHostEnvironment environment)
+{
+    var snapshotPath = configuration["Storage:Local:DataPath"]
+        ?? Path.Combine(environment.ContentRootPath, "storage", "outfit-store.json");
+    return new FileBackedOutfitStore(snapshotPath);
+}
+
 static IBackgroundRemovalProvider CreateBackgroundRemovalProvider(IServiceProvider provider, IConfiguration configuration)
 {
-    var configuredProvider = (configuration["BackgroundRemoval:Provider"] ?? "Simple").Trim().ToLowerInvariant();
+    var configuredProvider = (configuration["BackgroundRemoval:Provider"] ?? "Auto").Trim().ToLowerInvariant();
     var httpSection = BackgroundRemovalHttpSection(configuredProvider);
     return configuredProvider switch
     {
-        "rembg" or "rembgcommand" or "rembg-command" or "rembgexecutable" or "rembg-executable" => new RembgBackgroundRemovalProvider(
-            new RembgBackgroundRemovalSettings(
-                BackgroundRemovalSetting(configuration, "Rembg", "ExecutablePath", "rembg"),
-                BackgroundRemovalSetting(configuration, "Rembg", "ModelName", "birefnet-general"),
-                TimeSpan.FromSeconds(BackgroundRemovalIntSetting(configuration, "Rembg", "TimeoutSeconds", 180)),
-                BackgroundRemovalOptionalSetting(configuration, "Rembg", "ModelHome"))),
+        "auto" => new AutoBackgroundRemovalProvider(
+            CreateRembgBackgroundRemovalProvider(configuration),
+            new SimpleBackgroundRemovalProvider(),
+            () => IsExecutableAvailable(BackgroundRemovalSetting(configuration, "Rembg", "ExecutablePath", "rembg"))),
+        "rembg" or "rembgcommand" or "rembg-command" or "rembgexecutable" or "rembg-executable" => CreateRembgBackgroundRemovalProvider(configuration),
+        "rembgserver" or "rembg-server" or "rembghttp" or "rembg-http" => CreateRembgServerBackgroundRemovalProvider(provider, configuration),
         "http" or "api" or "cloudflare" or "cloudflareimages" or "cloudflare-images" or "photoroom" or "removebg" or "remove-bg" or "clipdrop" => new HttpBackgroundRemovalProvider(
             provider.GetRequiredService<IHttpClientFactory>().CreateClient("background-removal"),
             new HttpBackgroundRemovalSettings(
@@ -1144,6 +1204,82 @@ static IBackgroundRemovalProvider CreateBackgroundRemovalProvider(IServiceProvid
                 TimeSpan.FromSeconds(BackgroundRemovalIntSetting(configuration, httpSection, "TimeoutSeconds", 120)))),
         _ => new SimpleBackgroundRemovalProvider()
     };
+}
+
+static RembgServerBackgroundRemovalProvider CreateRembgServerBackgroundRemovalProvider(IServiceProvider provider, IConfiguration configuration)
+{
+    return new RembgServerBackgroundRemovalProvider(
+        provider.GetRequiredService<IHttpClientFactory>().CreateClient("background-removal"),
+        new RembgServerBackgroundRemovalSettings(
+            configuration["BackgroundRemoval:RembgServer:Endpoint"] ?? "http://127.0.0.1:7000/api/remove",
+            BackgroundRemovalSetting(configuration, "RembgServer", "ImageFieldName", "file"),
+            BackgroundRemovalSetting(
+                configuration,
+                "RembgServer",
+                "ModelName",
+                BackgroundRemovalSetting(configuration, "Rembg", "ModelName", "birefnet-general")),
+            TimeSpan.FromSeconds(BackgroundRemovalIntSetting(configuration, "RembgServer", "TimeoutSeconds", 120))));
+}
+
+static RembgBackgroundRemovalProvider CreateRembgBackgroundRemovalProvider(IConfiguration configuration)
+{
+    return new RembgBackgroundRemovalProvider(
+        new RembgBackgroundRemovalSettings(
+            BackgroundRemovalSetting(configuration, "Rembg", "ExecutablePath", "rembg"),
+            BackgroundRemovalSetting(configuration, "Rembg", "ModelName", "birefnet-general"),
+            TimeSpan.FromSeconds(BackgroundRemovalIntSetting(configuration, "Rembg", "TimeoutSeconds", 180)),
+            BackgroundRemovalOptionalSetting(configuration, "Rembg", "ModelHome")));
+}
+
+static bool IsExecutableAvailable(string executablePath)
+{
+    if (string.IsNullOrWhiteSpace(executablePath))
+    {
+        return false;
+    }
+
+    var trimmed = executablePath.Trim();
+    if (Path.IsPathFullyQualified(trimmed)
+        || trimmed.Contains(Path.DirectorySeparatorChar)
+        || trimmed.Contains(Path.AltDirectorySeparatorChar))
+    {
+        return File.Exists(trimmed);
+    }
+
+    var path = Environment.GetEnvironmentVariable("PATH");
+    if (string.IsNullOrWhiteSpace(path))
+    {
+        return false;
+    }
+
+    foreach (var directory in path.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+    {
+        foreach (var candidateName in CandidateExecutableNames(trimmed))
+        {
+            if (File.Exists(Path.Combine(directory, candidateName)))
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static IEnumerable<string> CandidateExecutableNames(string executableName)
+{
+    yield return executableName;
+
+    if (!OperatingSystem.IsWindows() || !string.IsNullOrWhiteSpace(Path.GetExtension(executableName)))
+    {
+        yield break;
+    }
+
+    var pathExtensions = Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD";
+    foreach (var extension in pathExtensions.Split(';', StringSplitOptions.RemoveEmptyEntries))
+    {
+        yield return executableName + extension;
+    }
 }
 
 static string BackgroundRemovalHttpSection(string provider)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { GarmentCategory } from '../../types';
 import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
+import { isSupportedImageFile } from '../uploads/imageFile';
 import type { UploadQueueItem, UploadQueueItemUpdates } from './wardrobeUpload';
 
 interface UploadQueueTextDraft {
@@ -11,12 +12,11 @@ interface UploadQueueTextDraft {
 interface UploadQueueProps {
   items: UploadQueueItem[];
   disabled?: boolean;
-  onAcceptTag: (itemId: string, tag: string) => void;
   onChangeItem: (itemId: string, updates: UploadQueueItemUpdates) => void;
   onRemove: (itemId: string) => void;
 }
 
-export function UploadQueue({ items, disabled = false, onAcceptTag, onChangeItem, onRemove }: UploadQueueProps) {
+export function UploadQueue({ items, disabled = false, onChangeItem, onRemove }: UploadQueueProps) {
   const [textDrafts, setTextDrafts] = useState<Record<string, UploadQueueTextDraft>>(() => createTextDrafts(items));
 
   useEffect(() => {
@@ -34,6 +34,7 @@ export function UploadQueue({ items, disabled = false, onAcceptTag, onChangeItem
 
         return (
           <article className={item.status === 'invalid' ? 'upload-queue-row invalid' : 'upload-queue-row'} key={item.id}>
+            <UploadQueuePreview item={item} />
             <div className="upload-queue-heading">
               <strong>{item.file.name}</strong>
               <button type="button" aria-label={`Remove ${item.file.name}`} disabled={disabled} onClick={() => onRemove(item.id)}>
@@ -42,7 +43,11 @@ export function UploadQueue({ items, disabled = false, onAcceptTag, onChangeItem
             </div>
             <label>
               <span>Name</span>
-              <input value={item.name} disabled={disabled} onChange={(event) => onChangeItem(item.id, { name: event.target.value })} />
+              <input
+                value={item.name}
+                disabled={disabled}
+                onChange={(event) => onChangeItem(item.id, { name: event.target.value, nameEdited: true })}
+              />
             </label>
             <label>
               <span>Type</span>
@@ -78,22 +83,8 @@ export function UploadQueue({ items, disabled = false, onAcceptTag, onChangeItem
                 onChange={(event) => changeTextDraft(item, { tagsText: event.target.value })}
               />
             </label>
-            <div className="suggested-tags" aria-label={`Suggested tags for ${item.name}`}>
-              {item.suggestedTags.map((tag) => {
-                const isAccepted = item.tags.includes(tag);
-
-                return (
-                  <button
-                    type="button"
-                    key={tag}
-                    aria-pressed={isAccepted}
-                    disabled={disabled || isAccepted}
-                    onClick={() => onAcceptTag(item.id, tag)}
-                  >
-                    {tag}
-                  </button>
-                );
-              })}
+            <div className="suggested-tags upload-tag-chips" aria-label={`Tags for ${item.name}`}>
+              {item.tags.map((tag) => <span key={tag}>{tag}</span>)}
             </div>
             {item.validationError ? <p className="wardrobe-error" role="alert">{item.validationError}</p> : null}
             {item.warnings.length > 0 ? (
@@ -116,9 +107,39 @@ export function UploadQueue({ items, disabled = false, onAcceptTag, onChangeItem
     setTextDrafts((current) => ({ ...current, [item.id]: nextDraft }));
     onChangeItem(item.id, {
       ...(updates.seasonText !== undefined ? { season: parseTokenText(nextDraft.seasonText) } : {}),
-      ...(updates.tagsText !== undefined ? { tags: parseTokenText(nextDraft.tagsText) } : {})
+      ...(updates.tagsText !== undefined ? { tags: parseTokenText(nextDraft.tagsText), tagsEdited: true } : {})
     });
   }
+}
+
+function UploadQueuePreview({ item }: { item: UploadQueueItem }) {
+  const [previewUrl, setPreviewUrl] = useState(item.previewUrl ?? '');
+
+  useEffect(() => {
+    if (item.previewUrl) {
+      setPreviewUrl(item.previewUrl);
+      return undefined;
+    }
+
+    if (!isSupportedImageFile(item.file) || typeof URL.createObjectURL !== 'function') {
+      setPreviewUrl('');
+      return undefined;
+    }
+
+    const objectUrl = URL.createObjectURL(item.file);
+    setPreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [item.file, item.previewUrl]);
+
+  if (!previewUrl) {
+    return null;
+  }
+
+  return (
+    <div className="upload-queue-preview">
+      <img src={previewUrl} alt={`Preview of ${item.file.name}`} />
+    </div>
+  );
 }
 
 function createTextDrafts(items: UploadQueueItem[]): Record<string, UploadQueueTextDraft> {

@@ -59,11 +59,12 @@ describe('wardrobeUpload', () => {
   it('suggests tags from filename category color season and existing tags', () => {
     expect(suggestTagsForUpload({
       fileName: 'cream-linen-shirt.JPG',
+      name: 'Soft office layer',
       category: 'Top',
       color: 'cream',
       season: ['spring', 'summer'],
       existingTags: ['work']
-    })).toEqual(['cream', 'linen', 'shirt', 'top', 'spring', 'summer', 'work']);
+    })).toEqual(['cream', 'linen', 'shirt', 'soft', 'office', 'layer', 'top', 'spring', 'summer', 'work']);
   });
 
   it('adds advisory photo warnings for weak upload candidates', () => {
@@ -83,10 +84,57 @@ describe('wardrobeUpload', () => {
       new File(['shirt'], 'black-shirt.png', { type: 'image/png' })
     ], { category: 'Top', color: 'black', season: [], existingTags: [] });
 
-    const updated = updateUploadQueueItem(row, { name: 'Black evening shirt', tags: ['black', 'evening'] });
+    const updated = updateUploadQueueItem(row, { name: 'Black evening shirt', tags: ['black', 'evening'], tagsEdited: true });
 
     expect(updated).toMatchObject({ name: 'Black evening shirt', tags: ['black', 'evening'] });
     expect(row.name).toBe('Black shirt');
+  });
+
+  it('recomputes suggested tags from edited queue row fields in real time', () => {
+    const [row] = createUploadQueueItems([
+      new File(['shirt'], 'black-shirt.png', { type: 'image/png' })
+    ], { category: 'Top', color: 'black', season: ['summer'], existingTags: ['work'] });
+
+    const updated = updateUploadQueueItem(row, {
+      name: 'Ruby office jacket',
+      nameEdited: true,
+      category: 'Outerwear',
+      primaryColor: 'ruby',
+      season: ['fall']
+    });
+
+    expect(updated.suggestedTags).toEqual([
+      'ruby',
+      'office',
+      'jacket',
+      'outerwear',
+      'fall',
+      'work'
+    ]);
+    expect(updated.tags).toEqual(updated.suggestedTags);
+    expect(row.suggestedTags).toEqual(['black', 'shirt', 'top', 'summer', 'work']);
+  });
+
+  it('drops filename-derived tags after the upload row name is cleared manually', () => {
+    const [row] = createUploadQueueItems([
+      new File(['shirt'], '2026-06-23-221835552.png', { type: 'image/png' })
+    ], { category: 'Top', color: '', season: [], existingTags: [] });
+
+    const updated = updateUploadQueueItem(row, { name: '', nameEdited: true });
+
+    expect(updated.tags).toEqual(['top']);
+    expect(updated.suggestedTags).toEqual(['top']);
+  });
+
+  it('uses manually edited tags as the live visible tag chips', () => {
+    const [row] = createUploadQueueItems([
+      new File(['shirt'], 'plain-shirt.png', { type: 'image/png' })
+    ], { category: 'Top', color: 'black', season: ['summer'], existingTags: ['work'] });
+
+    const updated = updateUploadQueueItem(row, { tags: ['formal'], tagsEdited: true });
+
+    expect(updated.suggestedTags).toEqual(['formal']);
+    expect(updated.tags).toEqual(['formal']);
   });
 
   it('uses unique row ids across separate queue creation calls', () => {
