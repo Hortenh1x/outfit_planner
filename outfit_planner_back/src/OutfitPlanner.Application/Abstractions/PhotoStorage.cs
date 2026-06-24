@@ -95,3 +95,19 @@ public interface IStoredPhotoDeletion
 
     bool DeleteBodyReferencePhoto(string photoUrl);
 }
+
+public interface ITryOnOutputStorage
+{
+    Task<string> StoreAsync(Guid jobId, string sourceImageUrl, DateTimeOffset retentionUntil, CancellationToken cancellationToken = default);
+
+    bool DeleteOutput(string outputImageUrl);
+}
+
+public interface IStoredPhotoUrlRefresher
+{
+    string RefreshGarmentImageUrl(string photoUrl);
+
+    string RefreshGarmentThumbnailUrl(string photoUrl);
+
+    string RefreshBodyReferencePhotoUrl(string photoUrl);
+}

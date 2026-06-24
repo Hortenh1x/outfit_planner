@@ -4,12 +4,14 @@ import {
   deleteGarment,
   updateGarment,
   uploadGarmentPhoto,
-  type UploadedPhotoResponse,
   type UpdateGarmentInput
 } from '../../api/client';
+import { garmentPhotoUrlsFromUpload } from '../uploads/uploadedPhotoUrls';
 import type { GarmentItem } from '../../types';
 import { duplicateGarmentInput } from './wardrobeFilters';
 import type { UploadQueueItem } from './wardrobeUpload';
+
+export { garmentPhotoUrlsFromUpload } from '../uploads/uploadedPhotoUrls';
 
 export const wardrobeQueryKey = ['garments'] as const;
 
@@ -21,11 +23,6 @@ export function useWardrobeMutations() {
 
   const favoriteMutation = useMutation({
     mutationFn: (garment: GarmentItem) => updateGarment(garment.id, { isFavorite: !garment.isFavorite }),
-    onSuccess: invalidateWardrobe
-  });
-
-  const archiveMutation = useMutation({
-    mutationFn: (garment: GarmentItem) => updateGarment(garment.id, { isArchived: !garment.isArchived }),
     onSuccess: invalidateWardrobe
   });
 
@@ -70,18 +67,9 @@ export function useWardrobeMutations() {
 
   return {
     favoriteMutation,
-    archiveMutation,
     editMutation,
     duplicateMutation,
     deleteMutation,
     uploadQueueMutation
-  };
-}
-
-export function garmentPhotoUrlsFromUpload(uploadedPhoto: UploadedPhotoResponse) {
-  const imageUrl = uploadedPhoto.cutoutUrl || uploadedPhoto.url;
-  return {
-    imageUrl,
-    thumbnailUrl: uploadedPhoto.thumbnailUrl || imageUrl
   };
 }

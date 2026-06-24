@@ -1,11 +1,10 @@
-import { AlertTriangle, Archive, Copy, Heart, Pencil, Trash2 } from 'lucide-react';
+import { AlertTriangle, Copy, Heart, Pencil, Trash2 } from 'lucide-react';
 import type { GarmentItem } from '../../types';
 
 interface GarmentCardProps {
   garment: GarmentItem;
   needsBetterPhoto?: boolean;
   pendingAction?: string;
-  onArchive: (garment: GarmentItem) => void;
   onDelete: (garment: GarmentItem) => void;
   onDuplicate: (garment: GarmentItem) => void;
   onEdit: (garment: GarmentItem) => void;
@@ -16,7 +15,6 @@ export function GarmentCard({
   garment,
   needsBetterPhoto = false,
   pendingAction,
-  onArchive,
   onDelete,
   onDuplicate,
   onEdit,
@@ -65,14 +63,6 @@ export function GarmentCard({
           </button>
           <button type="button" aria-label={`Duplicate ${garment.name}`} disabled={disabled} onClick={() => onDuplicate(garment)}>
             <Copy size={15} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            aria-label={`${garment.isArchived ? 'Restore' : 'Archive'} ${garment.name}`}
-            disabled={disabled}
-            onClick={() => onArchive(garment)}
-          >
-            <Archive size={15} aria-hidden="true" />
           </button>
           <button type="button" aria-label={`Delete ${garment.name}`} disabled={disabled} onClick={() => onDelete(garment)}>
             <Trash2 size={15} aria-hidden="true" />

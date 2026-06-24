@@ -146,14 +146,6 @@ export function WardrobeFilters({
           />
           Favorites
         </label>
-        <label className="wardrobe-check">
-          <input
-            type="checkbox"
-            checked={filters.archived}
-            onChange={(event) => onChange({ ...filters, archived: event.target.checked })}
-          />
-          Archived
-        </label>
         <label>
           <span>Sort</span>
           <select value={filters.sort} onChange={(event) => onChange({ ...filters, sort: event.target.value as WardrobeFilterState['sort'] })}>

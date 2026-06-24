@@ -25,7 +25,6 @@ interface WardrobeUploadPanelProps {
   queue: UploadQueueItem[];
   isUploading: boolean;
   defaults: WardrobeUploadDefaults;
-  onAcceptTag: (itemId: string, tag: string) => void;
   onAddFiles: (files: File[]) => void;
   onChangeItem: (itemId: string, updates: UploadQueueItemUpdates) => void;
   onDefaultsChange: (defaults: WardrobeUploadDefaults) => void;
@@ -37,7 +36,6 @@ export function WardrobeUploadPanel({
   queue,
   isUploading,
   defaults,
-  onAcceptTag,
   onAddFiles,
   onChangeItem,
   onDefaultsChange,
@@ -153,7 +151,6 @@ export function WardrobeUploadPanel({
       <UploadQueue
         items={queue}
         disabled={isUploading}
-        onAcceptTag={onAcceptTag}
         onChangeItem={onChangeItem}
         onRemove={onRemoveItem}
       />

@@ -68,16 +68,6 @@ export function WardrobePage() {
     setUploadQueue((current) => current.map((item) => (item.id === itemId ? updateUploadQueueItem(item, updates) : item)));
   }
 
-  function acceptSuggestedTag(itemId: string, tag: string) {
-    setUploadQueue((current) => current.map((item) => {
-      if (item.id !== itemId || item.tags.includes(tag)) {
-        return item;
-      }
-
-      return updateUploadQueueItem(item, { tags: [...item.tags, tag] });
-    }));
-  }
-
   function resetFilters() {
     setFilters(defaultWardrobeFilters);
   }
@@ -122,7 +112,6 @@ export function WardrobePage() {
                 garment={garment}
                 needsBetterPhoto={needsBetterPhoto(garment)}
                 pendingAction={pendingActionFor(garment, mutations)}
-                onArchive={(item) => mutations.archiveMutation.mutate(item)}
                 onDelete={(item) => mutations.deleteMutation.mutate(item.id)}
                 onDuplicate={(item) => mutations.duplicateMutation.mutate(item)}
                 onEdit={setEditingGarment}
@@ -134,7 +123,6 @@ export function WardrobePage() {
         {[
           garmentsQuery.error,
           mutations.favoriteMutation.error,
-          mutations.archiveMutation.error,
           mutations.editMutation.error,
           mutations.duplicateMutation.error,
           mutations.deleteMutation.error,
@@ -155,7 +143,6 @@ export function WardrobePage() {
           queue={uploadQueue}
           isUploading={mutations.uploadQueueMutation.isPending}
           defaults={uploadDefaults}
-          onAcceptTag={acceptSuggestedTag}
           onAddFiles={addFiles}
           onChangeItem={changeQueueItem}
           onDefaultsChange={setUploadDefaults}
@@ -180,9 +167,6 @@ function WardrobeEmptyState({ filtered, onReset }: { filtered: boolean; onReset:
 function pendingActionFor(garment: GarmentItem, mutations: ReturnType<typeof useWardrobeMutations>): string | undefined {
   if (mutations.favoriteMutation.isPending && mutations.favoriteMutation.variables?.id === garment.id) {
     return 'favorite';
-  }
-  if (mutations.archiveMutation.isPending && mutations.archiveMutation.variables?.id === garment.id) {
-    return 'archive';
   }
   if (mutations.duplicateMutation.isPending && mutations.duplicateMutation.variables?.id === garment.id) {
     return 'duplicate';

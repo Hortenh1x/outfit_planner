@@ -10,7 +10,6 @@ export interface WardrobeFilterState {
   season: string;
   tag: string;
   favorite: boolean;
-  archived: boolean;
   sort: NonNullable<GarmentFilters['sort']>;
 }
 
@@ -21,7 +20,6 @@ export const defaultWardrobeFilters: WardrobeFilterState = {
   season: '',
   tag: '',
   favorite: false,
-  archived: false,
   sort: 'recent'
 };
 
@@ -32,7 +30,7 @@ export function toGarmentFilters(filters: WardrobeFilterState): GarmentFilters {
     ...(filters.color.trim() ? { color: filters.color.trim() } : {}),
     ...(filters.season.trim() ? { season: filters.season.trim() } : {}),
     ...(filters.favorite ? { favorite: true } : {}),
-    archived: filters.archived,
+    archived: false,
     sort: filters.sort
   };
 }

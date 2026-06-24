@@ -10,11 +10,14 @@ import { OutfitList } from '../features/builder/OutfitList';
 import { SlotPicker } from '../features/builder/SlotPicker';
 import { CATEGORY_SELECTION_KEYS, GARMENT_CATEGORIES, groupGarmentsByCategory, selectedGarmentIds, selectionLabel } from '../features/outfits/outfitUtils';
 import { creditsLabel, modeLabel } from '../features/tryon/tryOnText';
+import { garmentPhotoUrlsFromUpload } from '../features/uploads/uploadedPhotoUrls';
 import { validateUploadImageFile } from '../features/uploads/imageFile';
 import { EmptyPreview } from '../shared/ui/EmptyPreview';
 import { PanelTitle } from '../shared/ui/PanelTitle';
 import { PanelSkeleton } from '../shared/ui/Skeletons';
 import type { GarmentCategory, Outfit, OutfitSelection, PreviewMode, TryOnCostEstimate, TryOnMode } from '../types';
+
+const tryOnJobPollIntervalMs = 1000;
 
 export function BuilderPage() {
   const queryClient = useQueryClient();
@@ -50,7 +53,11 @@ export function BuilderPage() {
   const tryOnJobQuery = useQuery({
     queryKey: ['try-on-job', tryOnMutation.data?.id],
     queryFn: () => getTryOnJob(tryOnMutation.data?.id ?? ''),
-    enabled: Boolean(tryOnMutation.data?.id)
+    enabled: Boolean(tryOnMutation.data?.id),
+    refetchInterval: (query) => {
+      const job = query.state.data;
+      return job?.status === 'Queued' || job?.status === 'Processing' ? tryOnJobPollIntervalMs : false;
+    }
   });
   const bodyPhotoUploadMutation = useMutation({
     mutationFn: async (file: File) => {
@@ -81,11 +88,12 @@ export function BuilderPage() {
       validateUploadImageFile(input.file);
 
       const uploadedPhoto = await uploadGarmentPhoto(input.file);
+      const photoUrls = garmentPhotoUrlsFromUpload(uploadedPhoto);
       return await createGarment({
         name: garmentNameFromFile(input.file, input.category),
         category: input.category,
-        imageUrl: uploadedPhoto.url,
-        thumbnailUrl: uploadedPhoto.url,
+        imageUrl: photoUrls.imageUrl,
+        thumbnailUrl: photoUrls.thumbnailUrl,
         tags: []
       });
     },
@@ -104,7 +112,8 @@ export function BuilderPage() {
   const selectedIds = selectedGarmentIds(selection);
   const selectedGarments = garments.filter((garment) => selectedIds.includes(garment.id));
   const latestTryOnJob = tryOnJobQuery.data ?? tryOnMutation.data;
-  const previewUrl = latestTryOnJob?.outputImageUrl ?? activeOutfit?.personPreviewUrl;
+  const activeOutfitPreviewUrl = activeOutfit?.personPreviewUrl;
+  const previewUrl = latestTryOnJob?.outputImageUrl ?? activeOutfitPreviewUrl;
   const bodyPhotos = bodyPhotosQuery.data ?? [];
   const selectedBodyPhoto = bodyPhotos.find((photo) => photo.id === selectedBodyPhotoId) ?? bodyPhotos[0];
   const selectedBodyReferenceInput = selectedBodyPhoto?.imageUrl
@@ -128,6 +137,12 @@ export function BuilderPage() {
       setPendingEstimate(null);
     }
   }, [bodyPhotos, selectedBodyPhotoId]);
+
+  useEffect(() => {
+    if (latestTryOnJob?.status === 'Succeeded') {
+      void queryClient.invalidateQueries({ queryKey: ['outfits'] });
+    }
+  }, [latestTryOnJob?.status, latestTryOnJob?.outputImageUrl, queryClient]);
 
   async function ensureOutfit() {
     if (activeOutfit) {
@@ -166,6 +181,16 @@ export function BuilderPage() {
       setActiveOutfit(null);
       setPendingEstimate(null);
     }
+  }
+
+  function handlePickOutfit(outfit: Outfit) {
+    setActiveOutfit(outfit);
+    setSelection(selectionFromOutfit(outfit));
+    setOutfitName(outfit.name);
+    setPendingEstimate(null);
+    estimateMutation.reset();
+    tryOnMutation.reset();
+    setMode(outfit.personPreviewUrl ? 'person' : 'clothes');
   }
 
   return (
@@ -358,9 +383,16 @@ export function BuilderPage() {
               {(error as Error).message}
             </p>
           ))}
-          <OutfitList outfits={outfitsQuery.data ?? []} onPick={setActiveOutfit} />
+          <OutfitList outfits={outfitsQuery.data ?? []} onPick={handlePickOutfit} />
         </div>
       </aside>
     </section>
   );
+}
+
+function selectionFromOutfit(outfit: Outfit): OutfitSelection {
+  return outfit.items.reduce((nextSelection, item) => {
+    nextSelection[CATEGORY_SELECTION_KEYS[item.category]] = item.garmentId;
+    return nextSelection;
+  }, {} as OutfitSelection);
 }

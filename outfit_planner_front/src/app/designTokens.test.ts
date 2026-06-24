@@ -59,4 +59,12 @@ describe('Editorial responsive layout rules', () => {
   it('keeps the selected current calendar day legible', () => {
     expect(stylesCss).toMatch(/\.calendar-day\.today\.selected-day span\s*\{[\s\S]*color: var\(--ink-inverse\)/);
   });
+
+  it('constrains wardrobe upload queue rows to the rail width', () => {
+    expect(wardrobeCss).toMatch(/\.wardrobe-rail,\s*\.wardrobe-rail-form\s*\{[\s\S]*max-width: 100%/);
+    expect(wardrobeCss).toMatch(/\.upload-queue,\s*\.upload-queue-row\s*\{[\s\S]*min-width: 0/);
+    expect(wardrobeCss).toMatch(/\.upload-queue-row\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\)/);
+    expect(wardrobeCss).toMatch(/\.upload-queue-heading\s*\{[\s\S]*grid-template-columns: minmax\(0, 1fr\) auto/);
+    expect(wardrobeCss).toMatch(/\.upload-queue-heading strong\s*\{[\s\S]*overflow-wrap: anywhere/);
+  });
 });

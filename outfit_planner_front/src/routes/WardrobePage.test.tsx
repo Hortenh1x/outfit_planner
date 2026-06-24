@@ -94,6 +94,7 @@ describe('WardrobePage', () => {
     expect(await screen.findByRole('heading', { name: /every piece has/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/search wardrobe/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/category filter/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^archived$/i)).not.toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: /^tags$/i })).toBeInTheDocument();
     expect(within(screen.getByLabelText(/garment categories/i)).getByRole('button', { name: /outerwear/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/clean photo checklist/i)).toHaveTextContent(/front view/i);
@@ -159,7 +160,7 @@ describe('WardrobePage', () => {
     expect(await screen.findByRole('button', { name: /reset filters/i })).toBeInTheDocument();
   });
 
-  it('favorites archives edits duplicates and deletes garments through existing API calls', async () => {
+  it('favorites edits duplicates and deletes garments through existing API calls', async () => {
     const fetchMock = mockWardrobeFetch();
 
     renderWardrobe();
@@ -169,10 +170,7 @@ describe('WardrobePage', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/garments/garment-1', expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('"isFavorite":true') }));
     });
 
-    await userEvent.click(await screen.findByRole('button', { name: /archive black silk cami/i }));
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/garments/garment-1', expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('"isArchived":true') }));
-    });
+    expect(screen.queryByRole('button', { name: /archive black silk cami/i })).not.toBeInTheDocument();
 
     await userEvent.click(await screen.findByRole('button', { name: /duplicate black silk cami/i }));
     await waitFor(() => {
@@ -208,9 +206,10 @@ describe('WardrobePage', () => {
     await userEvent.upload(fileInput, [shirt, tiny]);
 
     expect(await screen.findByLabelText(/upload queue/i)).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: /preview of cream-linen-shirt\.png/i })).toHaveAttribute('src', 'blob:preview');
     expect(screen.getByDisplayValue(/cream linen shirt/i)).toBeInTheDocument();
     expect(screen.getAllByText(/needs better photo/i).length).toBeGreaterThan(0);
-    expect(within(screen.getByLabelText(/suggested tags for cream linen shirt/i)).getByRole('button', { name: /linen/i })).toBeInTheDocument();
+    expect(within(screen.getByLabelText(/tags for cream linen shirt/i)).getByText(/linen/i)).toBeInTheDocument();
 
     const dropZone = screen.getByText(/upload photos/i).closest('label');
     expect(dropZone).not.toBeNull();
@@ -228,6 +227,57 @@ describe('WardrobePage', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/garments', expect.objectContaining({ method: 'POST', body: expect.stringContaining('Cream linen shirt') }));
       expect(fetchMock).toHaveBeenCalledWith('/api/garments', expect.objectContaining({ method: 'POST', body: expect.stringContaining('Brown wool blazer') }));
     });
+  });
+
+  it('updates upload queue tag chips while editing row fields', async () => {
+    mockWardrobeFetch();
+
+    renderWardrobe();
+
+    await screen.findByText(/black silk cami/i);
+    await userEvent.upload(
+      screen.getByLabelText(/garment photos/i),
+      new File(['shirt'], 'plain-shirt.png', { type: 'image/png' })
+    );
+
+    const uploadQueue = await screen.findByLabelText(/upload queue/i);
+    const nameInput = within(uploadQueue).getByLabelText(/^name$/i);
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Ruby office jacket');
+
+    const rowTags = await screen.findByLabelText(/tags for ruby office jacket/i);
+    expect(within(rowTags).getByText('ruby')).toBeInTheDocument();
+    expect(within(rowTags).getByText('office')).toBeInTheDocument();
+    expect(within(rowTags).getByText('jacket')).toBeInTheDocument();
+    expect(within(rowTags).queryByText('plain')).not.toBeInTheDocument();
+    expect(within(rowTags).queryByText('shirt')).not.toBeInTheDocument();
+
+    await userEvent.clear(nameInput);
+    expect(within(rowTags).queryByText('ruby')).not.toBeInTheDocument();
+    expect(within(rowTags).queryByText('office')).not.toBeInTheDocument();
+    expect(within(rowTags).queryByText('jacket')).not.toBeInTheDocument();
+    expect(within(rowTags).getByText('top')).toBeInTheDocument();
+
+    await userEvent.type(nameInput, 'Ruby office jacket');
+
+    await userEvent.clear(within(uploadQueue).getByLabelText(/^color$/i));
+    await userEvent.type(within(uploadQueue).getByLabelText(/^color$/i), 'rose');
+    expect(within(rowTags).getByText('rose')).toBeInTheDocument();
+
+    await userEvent.clear(within(uploadQueue).getByLabelText(/^season$/i));
+    await userEvent.type(within(uploadQueue).getByLabelText(/^season$/i), 'winter');
+    expect(within(rowTags).getByText('winter')).toBeInTheDocument();
+
+    await userEvent.selectOptions(within(uploadQueue).getByLabelText(/^type$/i), 'Bottom');
+    expect(within(rowTags).getByText('bottom')).toBeInTheDocument();
+    expect(within(rowTags).queryByText('top')).not.toBeInTheDocument();
+
+    await userEvent.clear(within(uploadQueue).getByLabelText(/^tags$/i));
+    await userEvent.type(within(uploadQueue).getByLabelText(/^tags$/i), 'formal');
+    expect(within(rowTags).getByText('formal')).toBeInTheDocument();
+    expect(within(rowTags).queryByText('plain')).not.toBeInTheDocument();
+    expect(within(rowTags).queryByText('shirt')).not.toBeInTheDocument();
+    expect(within(rowTags).queryByText('bottom')).not.toBeInTheDocument();
   });
 });
 

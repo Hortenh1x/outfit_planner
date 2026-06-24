@@ -87,8 +87,9 @@ Photo uploads are private by default:
 
 - Uploads are validated server-side by image magic bytes, then decoded, auto-oriented, stripped of metadata, resized/compressed, and stored as object variants.
 - Garment uploads store original, thumbnail, processed cutout, optional segmentation mask, and perceptual hash. The upload response exposes variant URLs, and new wardrobe items use the processed cutout as their primary image.
-- Garment cutouts use `BackgroundRemoval__Provider`; the default `Simple` provider keeps local development dependency-free, `Rembg` runs a local model executable, and `Http`/provider aliases call an API that returns a transparent image. Garment extraction currently assumes one clothing item per upload through a single-item provider boundary; multi-item detection/separation is intentionally not active yet.
+- Garment cutouts use `BackgroundRemoval__Provider`; the default `Auto` provider uses local `rembg` when the executable is available and otherwise falls back to the dependency-free `Simple` provider. `Rembg` can be selected explicitly for one CLI process per upload, `RembgServer` targets a long-running local `rembg s` server, and `Http`/provider aliases call an API that returns a transparent image. Garment extraction currently assumes one clothing item per upload through a single-item provider boundary; multi-item detection/separation is intentionally not active yet.
 - Body reference uploads store original, thumbnail, blurred private preview, and perceptual hash. Public `/uploads/body-reference-photos/{fileName}` access is disabled; clients receive signed object URLs.
+- Local signed object URLs are refreshed when wardrobe, body-reference, outfit, share, and try-on flows read saved records, so persisted local uploads keep rendering after URL expiry or API restarts.
 
 Try-on jobs are queued at request time:
 
@@ -272,11 +273,15 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `ObjectStorage__S3__AccessKey` / `Minio__AccessKey` | empty | S3-compatible access key. |
 | `ObjectStorage__S3__SecretKey` / `Minio__SecretKey` | empty | S3-compatible secret key. |
 | `ObjectStorage__S3__Bucket` / `Minio__Bucket` | `outfit-planner-private` | Private bucket for uploaded image variants. |
-| `BackgroundRemoval__Provider` | `Simple` | Use `Simple`, `Rembg`, `Http`, `CloudflareImages`, `PhotoRoom`, `RemoveBg`, or `Clipdrop` for garment cutout generation. Unknown values use `Simple`. |
-| `BackgroundRemoval__Rembg__ExecutablePath` | `rembg` | Local executable used when `BackgroundRemoval__Provider=Rembg`. |
+| `BackgroundRemoval__Provider` | `Auto` | Use `Auto`, `Simple`, `Rembg`, `RembgServer`, `Http`, `CloudflareImages`, `PhotoRoom`, `RemoveBg`, or `Clipdrop` for garment cutout generation. `Auto` uses `rembg` when available and falls back to `Simple`; unknown values use `Simple`. |
+| `BackgroundRemoval__Rembg__ExecutablePath` | `rembg` | Local executable used when `BackgroundRemoval__Provider=Auto` or `Rembg`. |
 | `BackgroundRemoval__Rembg__ModelName` | `birefnet-general` | Local `rembg` model. Use `birefnet-general-lite` if CPU runtime is too slow. |
 | `BackgroundRemoval__Rembg__ModelHome` | empty | Optional model cache directory passed as `U2NET_HOME` for `rembg`. |
 | `BackgroundRemoval__Rembg__TimeoutSeconds` | `180` | Local `rembg` process timeout. |
+| `BackgroundRemoval__RembgServer__Endpoint` | `http://127.0.0.1:7000/api/remove` | Long-running `rembg s` remove endpoint used when `BackgroundRemoval__Provider=RembgServer`. |
+| `BackgroundRemoval__RembgServer__ImageFieldName` | `file` | Multipart field name expected by the `rembg s` remove endpoint. |
+| `BackgroundRemoval__RembgServer__ModelName` | `birefnet-general` | Model sent to the `rembg s` endpoint as form field `model`. Falls back to `BackgroundRemoval__Rembg__ModelName` when unset. |
+| `BackgroundRemoval__RembgServer__TimeoutSeconds` | `120` | HTTP timeout for the local `rembg s` provider. |
 | `BackgroundRemoval__Http__Endpoint` | empty | Multipart background-removal endpoint used by `Http` and as a fallback for HTTP provider aliases. Must return image bytes, preferably transparent PNG. |
 | `BackgroundRemoval__Http__ApiKey` | empty | API key for the HTTP background-removal endpoint. |
 | `BackgroundRemoval__Http__ApiKeyHeader` | `X-Api-Key` | Header name for the HTTP API key. `CloudflareImages` defaults to `Authorization`. |
@@ -322,14 +327,32 @@ Frontend configuration:
 
 ## Garment Background Removal
 
-Garment photo uploads always create original, thumbnail, processed cutout, and segmentation mask variants. The upload response includes `originalUrl`, `thumbnailUrl`, `cutoutUrl`, and `maskUrl`; the frontend stores `cutoutUrl` as the garment image and `thumbnailUrl` as the card thumbnail. By default, the backend uses the dependency-free `Simple` cutout provider. It is useful for local development, but production-quality item cutouts should use `Rembg` locally or an HTTP provider in production.
+Garment photo uploads always create original, thumbnail, processed cutout, and segmentation mask variants. The upload response includes `originalUrl`, `thumbnailUrl`, `cutoutUrl`, and `maskUrl`; the frontend stores `cutoutUrl` as the garment image and `thumbnailUrl` as the card thumbnail. By default, the backend uses `Auto` background removal: local `rembg` when it is available, otherwise the dependency-free `Simple` fallback. Real photos on textured backgrounds need `rembg` locally or an HTTP provider in production; the simple fallback is only a development safety net.
 
 The extraction layer currently assumes exactly one garment per upload. `SingleGarmentExtractionProvider` is a placeholder boundary around background removal so a future detector can return multiple candidates without changing the lower-level image variant pipeline.
 
-Local `rembg` with the recommended model:
+Local `rembg` with the recommended long-running server:
 
 ```powershell
-$env:BackgroundRemoval__Provider = "Rembg"
+python tools\rembg_server.py --host 127.0.0.1 --port 7000 --model birefnet-general-lite
+```
+
+The wrapper prints the ONNX Runtime path, providers, and device before starting `rembg s`; for GPU execution, providers must include `CUDAExecutionProvider` and the device should be `GPU`. It also sends one prewarm request for the selected model, so the slow model load happens at server startup instead of the first garment upload. You can still run `rembg.exe s --host 127.0.0.1 --port 7000 --no-ui` directly, but the wrapper is easier to diagnose on Windows because it preloads CUDA/cuDNN DLLs installed through pip packages.
+
+Run the API in another PowerShell session:
+
+```powershell
+$env:BackgroundRemoval__Provider = "RembgServer"
+$env:BackgroundRemoval__RembgServer__Endpoint = "http://127.0.0.1:7000/api/remove"
+$env:BackgroundRemoval__RembgServer__ModelName = "birefnet-general-lite"
+dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
+```
+
+The older CLI-per-upload path still works, but it starts Python and loads the model for every garment upload:
+
+```powershell
+# Install rembg separately so the `rembg` executable is available in PATH.
+# With BackgroundRemoval__Provider unset, Auto will use rembg when `where rembg` succeeds.
 $env:BackgroundRemoval__Rembg__ExecutablePath = "rembg"
 $env:BackgroundRemoval__Rembg__ModelName = "birefnet-general"
 dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj

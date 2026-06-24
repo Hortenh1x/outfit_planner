@@ -132,6 +132,35 @@ public sealed class SimpleBackgroundRemovalProvider : IBackgroundRemovalProvider
     }
 }
 
+public sealed class AutoBackgroundRemovalProvider : IBackgroundRemovalProvider
+{
+    private readonly IBackgroundRemovalProvider _preferred;
+    private readonly IBackgroundRemovalProvider _fallback;
+    private readonly Func<bool> _isPreferredAvailable;
+
+    public AutoBackgroundRemovalProvider(
+        IBackgroundRemovalProvider preferred,
+        IBackgroundRemovalProvider fallback,
+        Func<bool> isPreferredAvailable)
+    {
+        _preferred = preferred;
+        _fallback = fallback;
+        _isPreferredAvailable = isPreferredAvailable;
+    }
+
+    public string Name => $"auto:{ActiveProvider().Name}";
+
+    public BackgroundRemovalResult RemoveBackground(BackgroundRemovalRequest request)
+    {
+        return ActiveProvider().RemoveBackground(request);
+    }
+
+    private IBackgroundRemovalProvider ActiveProvider()
+    {
+        return _isPreferredAvailable() ? _preferred : _fallback;
+    }
+}
+
 public sealed record RembgBackgroundRemovalSettings(
     string ExecutablePath,
     string ModelName,
@@ -247,6 +276,92 @@ public sealed class RembgBackgroundRemovalProvider : IBackgroundRemovalProvider
         catch (InvalidOperationException)
         {
         }
+    }
+
+    private static string TrimForError(string value)
+    {
+        value = value.Trim();
+        return value.Length <= 800 ? value : value[..800];
+    }
+}
+
+public sealed record RembgServerBackgroundRemovalSettings(
+    string Endpoint,
+    string ImageFieldName,
+    string ModelName,
+    TimeSpan Timeout);
+
+public sealed class RembgServerBackgroundRemovalProvider : IBackgroundRemovalProvider
+{
+    private readonly HttpClient _client;
+    private readonly RembgServerBackgroundRemovalSettings _settings;
+
+    public RembgServerBackgroundRemovalProvider(HttpClient client, RembgServerBackgroundRemovalSettings settings)
+    {
+        _client = client;
+        _settings = settings;
+        if (settings.Timeout > TimeSpan.Zero)
+        {
+            _client.Timeout = settings.Timeout;
+        }
+    }
+
+    public string Name => "rembg-server";
+
+    public BackgroundRemovalResult RemoveBackground(BackgroundRemovalRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.Endpoint))
+        {
+            throw new InvalidOperationException("BackgroundRemoval:RembgServer:Endpoint must be configured.");
+        }
+
+        using var content = new MultipartFormDataContent();
+        if (!string.IsNullOrWhiteSpace(_settings.ModelName))
+        {
+            content.Add(new StringContent(_settings.ModelName), "model");
+        }
+
+        using var imageContent = new ByteArrayContent(request.ImageBytes);
+        imageContent.Headers.ContentType = MediaTypeHeaderValue.Parse(request.ContentType);
+        content.Add(imageContent, FieldName(), SafeFileName(request.FileName));
+
+        using var message = new HttpRequestMessage(HttpMethod.Post, _settings.Endpoint)
+        {
+            Content = content
+        };
+        message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("image/png"));
+
+        using var response = _client.Send(message);
+        if (!response.IsSuccessStatusCode)
+        {
+            var detail = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            throw new InvalidOperationException($"Background removal provider rembg-server returned {(int)response.StatusCode}: {TrimForError(detail)}");
+        }
+
+        var bytes = response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+        if (bytes.Length == 0)
+        {
+            throw new InvalidOperationException("Background removal provider rembg-server returned an empty image.");
+        }
+
+        var contentType = response.Content.Headers.ContentType?.MediaType ?? "image/png";
+        if (!contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Background removal provider rembg-server returned non-image content type {contentType}.");
+        }
+
+        return new BackgroundRemovalResult(bytes, contentType, Name);
+    }
+
+    private string FieldName()
+    {
+        return string.IsNullOrWhiteSpace(_settings.ImageFieldName) ? "file" : _settings.ImageFieldName;
+    }
+
+    private static string SafeFileName(string fileName)
+    {
+        var safe = Path.GetFileName(fileName);
+        return string.IsNullOrWhiteSpace(safe) ? "image.png" : safe;
     }
 
     private static string TrimForError(string value)
