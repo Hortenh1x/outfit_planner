@@ -4,6 +4,7 @@ using OutfitPlanner.Domain;
 using OutfitPlanner.Infrastructure.Security;
 using OutfitPlanner.Infrastructure.Storage;
 using OutfitPlanner.Infrastructure.TryOn;
+using Microsoft.Extensions.Configuration;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -57,14 +58,18 @@ var tests = new List<(string Name, Action Test)>
     ("try-on service exposes only confirmed start contract", TestTryOnServiceExposesOnlyConfirmedStartContract),
     ("try-on service enforces confirmed credits and cache key", TestTryOnServiceEnforcesConfirmedCost),
     ("try-on service returns cache hits without queueing provider work", TestTryOnServiceReturnsCacheHitsWithoutQueueing),
+    ("try-on service deletes active preview output from outfit", TestTryOnServiceDeletesActivePreviewOutputFromOutfit),
+    ("try-on service deletes active preview output by outfit", TestTryOnServiceDeletesActivePreviewOutputByOutfit),
     ("try-on service completes clothes-only preview without ai", TestTryOnServiceCompletesClothesOnlyWithoutAi),
     ("try-on service completes clothes-only preview without body reference", TestTryOnServiceCompletesClothesOnlyWithoutBodyReference),
     ("try-on service queues jobs without calling provider inline", TestTryOnServiceQueuesJobsWithoutInlineProviderCall),
     ("try-on processor completes queued jobs through provider", TestTryOnProcessorCompletesQueuedJobs),
+    ("try-on processor sends public absolute storage urls to external providers", TestTryOnProcessorSendsPublicStorageUrlsToProvider),
     ("try-on processor stores external provider outputs before exposing them", TestTryOnProcessorStoresExternalProviderOutputs),
     ("try-on processor excludes visual-only items outside composite mode", TestTryOnProcessorExcludesVisualOnlyItemsOutsideCompositeMode),
     ("try-on service forwards sequential flow option to provider", TestTryOnServiceForwardsSequentialFlowOption),
     ("api registers redis try-on queue and provider choices", TestApiRegistersRedisQueueAndProviderChoices),
+    ("api maps dot env FASHN aliases into canonical config", TestApiMapsDotEnvFashnAliases),
     ("schedule service stores one planned outfit per user and day", TestDailySchedulePerUser),
     ("share token generator emits url safe high entropy tokens", TestShareTokenGenerator),
     ("photo upload service rejects unsupported content types", TestPhotoUploadRejectsUnsupportedContentType),
@@ -73,6 +78,7 @@ var tests = new List<(string Name, Action Test)>
     ("api configures upload body limits", TestApiConfiguresUploadBodyLimits),
     ("api exposes test diagnostics and trace ids", TestApiExposesTestDiagnosticsAndTraceIds),
     ("object storage ports and local/minio adapters exist", TestObjectStoragePortsAndAdapters),
+    ("local object storage can emit public absolute signed urls", TestLocalObjectStorageEmitsPublicAbsoluteSignedUrls),
     ("try-on output storage port and adapter exist", TestTryOnOutputStoragePortAndAdapter),
     ("image processing pipeline exposes privacy preserving variants", TestImageProcessingPipelineContracts),
     ("background removal provider contracts exist", TestBackgroundRemovalProviderContracts),
@@ -98,6 +104,7 @@ var tests = new List<(string Name, Action Test)>
     ("json try-on provider rejects unsupported modes before network call", TestJsonProviderRejectsUnsupportedModesBeforeNetworkCall),
     ("fashn provider sends only body try-on items for normal modes", TestFashnProviderSendsOnlyBodyTryOnItems),
     ("fashn provider requires api key before network call", TestFashnProviderRequiresApiKey),
+    ("fashn provider sends configured generation options", TestFashnProviderSendsConfiguredGenerationOptions),
     ("fashn provider submits try-on request and polls status", TestFashnProviderSubmitsRequestAndPollsStatus),
     ("fashn provider rejects multi-garment outfits when sequential flow is off", TestFashnProviderRejectsMultiGarmentOutfitsWhenSequentialOff),
     ("fashn provider runs multi-garment outfits sequentially when enabled", TestFashnProviderRunsSequentialMultiGarmentOutfits)
@@ -664,6 +671,7 @@ static void TestApiExposesEditDeleteFilterAndRevokeEndpoints()
     AssertTrue(program.Contains("MapGet(\"/outfits/{outfitId:guid}\"", StringComparison.Ordinal), "api should expose outfit detail reads.");
     AssertTrue(program.Contains("MapPatch(\"/outfits/{outfitId:guid}\"", StringComparison.Ordinal), "api should expose outfit edits.");
     AssertTrue(program.Contains("MapDelete(\"/outfits/{outfitId:guid}\"", StringComparison.Ordinal), "api should expose outfit deletion.");
+    AssertTrue(program.Contains("MapDelete(\"/outfits/{outfitId:guid}/try-on-preview\"", StringComparison.Ordinal), "api should expose active outfit preview deletion.");
     AssertTrue(program.Contains("MapPost(\"/outfits/{outfitId:guid}/try-on/estimate\"", StringComparison.Ordinal), "api should expose try-on estimate endpoint.");
     AssertTrue(program.Contains("MapDelete(\"/schedule/{date}\"", StringComparison.Ordinal), "api should expose unscheduling by date.");
     AssertTrue(program.Contains("MapDelete(\"/share/{token}\"", StringComparison.Ordinal), "api should expose share revocation.");
@@ -1142,6 +1150,59 @@ static void TestTryOnServiceReturnsCacheHitsWithoutQueueing()
     AssertEqual(0, provider.Calls, "cache hit should not call provider.");
 }
 
+static void TestTryOnServiceDeletesActivePreviewOutputFromOutfit()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id });
+    var provider = new CountingTryOnProvider();
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), new SystemClock());
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SequentialOutfitTryOn, "https://example.com/person.jpg", null);
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SequentialOutfitTryOn, estimate.EstimatedCredits, estimate.CacheKey)
+        .GetAwaiter()
+        .GetResult();
+
+    service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
+    AssertEqual("https://example.com/output.jpg", new OutfitService(store, store, new SystemClock()).GetOutfit(userId, outfit.Id)?.PersonPreviewUrl, "processed job should become the active outfit preview.");
+
+    var deleted = service.DeleteOutput(userId, job.Id);
+    var deletedJob = service.GetJob(userId, job.Id);
+    var updatedOutfit = new OutfitService(store, store, new SystemClock()).GetOutfit(userId, outfit.Id);
+
+    AssertTrue(deleted, "deleting a stored preview output should report success.");
+    AssertTrue(deletedJob?.OutputImageUrl is null, "deleted try-on job should no longer expose an output image.");
+    AssertTrue(deletedJob?.IsDeleted == true, "deleted try-on job should be marked deleted.");
+    AssertTrue(updatedOutfit?.PersonPreviewUrl is null, "deleting the active preview output should clear the outfit person preview.");
+}
+
+static void TestTryOnServiceDeletesActivePreviewOutputByOutfit()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id });
+    var provider = new CountingTryOnProvider();
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), new SystemClock());
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SequentialOutfitTryOn, "https://example.com/person.jpg", null);
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SequentialOutfitTryOn, estimate.EstimatedCredits, estimate.CacheKey)
+        .GetAwaiter()
+        .GetResult();
+
+    service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
+
+    var deleted = service.DeleteActiveOutfitOutput(userId, outfit.Id);
+    var deletedJob = service.GetJob(userId, job.Id);
+    var updatedOutfit = new OutfitService(store, store, new SystemClock()).GetOutfit(userId, outfit.Id);
+
+    AssertTrue(deleted, "deleting the active outfit preview should report success.");
+    AssertTrue(deletedJob?.OutputImageUrl is null, "matching try-on job should no longer expose an output image.");
+    AssertTrue(deletedJob?.IsDeleted == true, "matching try-on job should be marked deleted.");
+    AssertTrue(updatedOutfit?.PersonPreviewUrl is null, "deleting by outfit should clear the outfit person preview.");
+}
+
 static void TestTryOnServiceCompletesClothesOnlyWithoutAi()
 {
     var store = new InMemoryOutfitStore();
@@ -1239,6 +1300,50 @@ static void TestTryOnProcessorCompletesQueuedJobs()
     AssertEqual("https://example.com/output.jpg", updatedOutfit?.PersonPreviewUrl, "processed job should update outfit preview.");
 }
 
+static void TestTryOnProcessorSendsPublicStorageUrlsToProvider()
+{
+    var tempPath = Path.Combine(Path.GetTempPath(), "outfit-planner-provider-url-tests", Guid.NewGuid().ToString("N"));
+
+    try
+    {
+        var objects = new LocalObjectStorage(tempPath, "test-signing-key");
+        PutTestObject(objects, "body-reference-photos/original/person.png");
+        PutTestObject(objects, "garments/processed-cutout/shirt.png");
+        var refresher = new StoredPhotoUrlRefresher(objects, "https://outfitplanner.net");
+        var store = new InMemoryOutfitStore();
+        var userId = "user-a";
+        var bodyUrl = objects.CreateSignedReadUrl("body-reference-photos/original/person.png", TimeSpan.FromMinutes(15));
+        var garmentUrl = objects.CreateSignedReadUrl("garments/processed-cutout/shirt.png", TimeSpan.FromMinutes(15));
+        var top = store.CreateGarment(new CreateGarmentCommand(
+            userId,
+            "white tee",
+            GarmentCategory.Top,
+            garmentUrl,
+            garmentUrl,
+            Array.Empty<string>()));
+        var outfit = new OutfitService(store, store, new SystemClock())
+            .CreateOutfit(userId, "casual", new[] { top.Id });
+        var provider = new CountingTryOnProvider();
+        var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), new SystemClock(), refresher);
+        var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SequentialOutfitTryOn, bodyUrl, null);
+        var job = service.StartAsync(userId, outfit.Id, bodyUrl, consentAccepted: true, TryOnMode.SequentialOutfitTryOn, estimate.EstimatedCredits, estimate.CacheKey)
+            .GetAwaiter()
+            .GetResult();
+
+        service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
+
+        AssertTrue(provider.LastRequest?.BodyReferencePhotoUrl.StartsWith("https://outfitplanner.net/api/storage/signed/", StringComparison.Ordinal) == true, "provider body reference URL should be public and absolute.");
+        AssertTrue(provider.LastRequest?.BodyTryOnItems.Single().ThumbnailUrl.StartsWith("https://outfitplanner.net/api/storage/signed/", StringComparison.Ordinal) == true, "provider garment URL should be public and absolute.");
+    }
+    finally
+    {
+        if (Directory.Exists(tempPath))
+        {
+            Directory.Delete(tempPath, recursive: true);
+        }
+    }
+}
+
 static void TestTryOnProcessorStoresExternalProviderOutputs()
 {
     var store = new InMemoryOutfitStore();
@@ -1322,6 +1427,32 @@ static void TestApiRegistersRedisQueueAndProviderChoices()
     AssertTrue(program.Contains("generalimageedittryonprovider", StringComparison.Ordinal), "api should allow selecting the general image edit provider by full class-name alias.");
     AssertTrue(program.Contains("backgroundRemovalProvider", StringComparison.Ordinal), "system status should expose the active background removal provider.");
     AssertTrue(program.Contains("backgroundRemovalConfiguredProvider", StringComparison.Ordinal), "system status should expose the configured background removal provider.");
+}
+
+static void TestApiMapsDotEnvFashnAliases()
+{
+    var programPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "OutfitPlanner.Api", "Program.cs"));
+    var program = File.ReadAllText(programPath);
+
+    AssertTrue(program.Contains("LoadDotEnvConfigurationAliases", StringComparison.Ordinal), "api startup should load supported aliases from the repository .env file.");
+
+    foreach (var mapping in new[]
+    {
+        "(\"FASHN_API_KEY\", \"Fashn:ApiKey\")",
+        "(\"FASHN_BASE_URL\", \"Fashn:BaseUrl\")",
+        "(\"FASHN_MODEL_NAME\", \"Fashn:ModelName\")",
+        "(\"FASHN_MODE\", \"Fashn:Mode\")",
+        "(\"FASHN_NUM_SAMPLES\", \"Fashn:NumSamples\")",
+        "(\"FASHN_OUTPUT_FORMAT\", \"Fashn:OutputFormat\")",
+        "(\"FASHN_RETURN_BASE64\", \"Fashn:ReturnBase64\")",
+        "(\"FASHN_SEGMENTATION_FREE\", \"Fashn:SegmentationFree\")",
+        "(\"FASHN_GARMENT_PHOTO_TYPE\", \"Fashn:GarmentPhotoType\")",
+        "(\"FASHN_SEED\", \"Fashn:Seed\")",
+        "(\"FASHN_PERSON_HINT\", \"Fashn:PersonHint\")"
+    })
+    {
+        AssertTrue(program.Contains(mapping, StringComparison.Ordinal), $"api startup should map {mapping}.");
+    }
 }
 
 static void TestDailySchedulePerUser()
@@ -1412,6 +1543,27 @@ static void TestObjectStoragePortsAndAdapters()
     AssertTrue(typeof(IObjectStorage).IsInterface, "application should expose an object storage port.");
     AssertTrue(typeof(LocalObjectStorage).GetInterfaces().Contains(typeof(IObjectStorage)), "local adapter should implement object storage.");
     AssertTrue(typeof(MinioObjectStorage).GetInterfaces().Contains(typeof(IObjectStorage)), "minio adapter should implement object storage.");
+}
+
+static void TestLocalObjectStorageEmitsPublicAbsoluteSignedUrls()
+{
+    var tempPath = Path.Combine(Path.GetTempPath(), "outfit-planner-object-url-tests", Guid.NewGuid().ToString("N"));
+
+    try
+    {
+        var localOnly = new LocalObjectStorage(tempPath, "test-signing-key");
+        var publicStorage = new LocalObjectStorage(tempPath, "test-signing-key", "https://outfitplanner.net");
+
+        AssertTrue(localOnly.CreateSignedReadUrl("garments/original/shirt.png", TimeSpan.FromMinutes(5)).StartsWith("/api/storage/signed/", StringComparison.Ordinal), "local object storage should keep relative signed URLs without public origin.");
+        AssertTrue(publicStorage.CreateSignedReadUrl("garments/original/shirt.png", TimeSpan.FromMinutes(5)).StartsWith("https://outfitplanner.net/api/storage/signed/", StringComparison.Ordinal), "public object storage should emit absolute signed URLs for external providers.");
+    }
+    finally
+    {
+        if (Directory.Exists(tempPath))
+        {
+            Directory.Delete(tempPath, recursive: true);
+        }
+    }
 }
 
 static void TestTryOnOutputStoragePortAndAdapter()
@@ -1998,7 +2150,7 @@ static void TestFashnProviderSendsOnlyBodyTryOnItems()
     var visualItems = outfit.Items.Where(item => item.Category == GarmentCategory.Bag).ToArray();
     var provider = new FashnTryOnProvider(
         new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
-        new FashnTryOnSettings("test-key", "tryon-v1.6", "balanced", 2, TimeSpan.Zero));
+        CreateTestFashnSettings("test-key", "tryon-v1.6", "balanced", 2));
 
     var generation = provider.Generate(new TryOnProviderRequest(
         "user-a",
@@ -2019,12 +2171,47 @@ static void TestFashnProviderRequiresApiKey()
     var handler = new RecordingFashnHandler();
     var provider = new FashnTryOnProvider(
         new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
-        new FashnTryOnSettings("", "tryon-v1.6", "balanced", 1, TimeSpan.Zero));
+        CreateTestFashnSettings("", "tryon-v1.6", "balanced", 1));
 
     AssertThrows<InvalidOperationException>(
         () => provider.Generate(CreateProviderRequest(CreateSingleGarmentOutfit(), TryOnMode.SingleGarmentTryOn)),
         "fashn provider should require an API key");
     AssertEqual(0, handler.Requests.Count, "missing key must stop before network call");
+}
+
+static void TestFashnProviderSendsConfiguredGenerationOptions()
+{
+    var handler = new RecordingFashnHandler();
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-1\",\"error\":null}");
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-1\",\"status\":\"completed\",\"output\":[\"https://cdn.fashn.ai/output.webp\"],\"error\":null}");
+    var provider = new FashnTryOnProvider(
+        new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
+        new FashnTryOnSettings(
+            "test-key",
+            "tryon-v1.6",
+            "quality",
+            2,
+            TimeSpan.Zero,
+            NumSamples: 2,
+            OutputFormat: "webp",
+            ReturnBase64: true,
+            SegmentationFree: false,
+            GarmentPhotoType: "model",
+            Seed: 42,
+            PersonHint: "original"));
+
+    provider.Generate(CreateProviderRequest(CreateSingleGarmentOutfit(), TryOnMode.SingleGarmentTryOn));
+
+    using var body = JsonDocument.Parse(handler.Requests[0].Body);
+    var inputs = body.RootElement.GetProperty("inputs");
+    AssertEqual("quality", inputs.GetProperty("mode").GetString(), "request should use configured FASHN mode.");
+    AssertEqual(2, inputs.GetProperty("num_samples").GetInt32(), "request should use configured sample count.");
+    AssertEqual("webp", inputs.GetProperty("output_format").GetString(), "request should use configured output format.");
+    AssertTrue(inputs.GetProperty("return_base64").GetBoolean(), "request should use configured base64 return flag.");
+    AssertTrue(!inputs.GetProperty("segmentation_free").GetBoolean(), "request should use configured segmentation mode.");
+    AssertEqual("model", inputs.GetProperty("garment_photo_type").GetString(), "request should use configured garment photo type.");
+    AssertEqual(42, inputs.GetProperty("seed").GetInt32(), "request should use configured seed.");
+    AssertEqual("original", inputs.GetProperty("person_hint").GetString(), "request should use configured person hint.");
 }
 
 static void TestFashnProviderSubmitsRequestAndPollsStatus()
@@ -2034,7 +2221,7 @@ static void TestFashnProviderSubmitsRequestAndPollsStatus()
     handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-1\",\"status\":\"completed\",\"output\":[\"https://cdn.fashn.ai/output.png\"],\"error\":null}");
     var provider = new FashnTryOnProvider(
         new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
-        new FashnTryOnSettings("test-key", "tryon-v1.6", "performance", 2, TimeSpan.Zero));
+        CreateTestFashnSettings("test-key", "tryon-v1.6", "performance", 2));
 
     var generation = provider.Generate(CreateProviderRequest(CreateSingleGarmentOutfit(), TryOnMode.SingleGarmentTryOn));
 
@@ -2058,7 +2245,7 @@ static void TestFashnProviderRejectsMultiGarmentOutfitsWhenSequentialOff()
     var handler = new RecordingFashnHandler();
     var provider = new FashnTryOnProvider(
         new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
-        new FashnTryOnSettings("test-key", "tryon-v1.6", "balanced", 1, TimeSpan.Zero));
+        CreateTestFashnSettings("test-key", "tryon-v1.6", "balanced", 1));
 
     AssertThrows<InvalidOperationException>(
         () => provider.Generate(CreateProviderRequest(CreateTwoGarmentOutfit(), TryOnMode.SingleGarmentTryOn)),
@@ -2075,7 +2262,7 @@ static void TestFashnProviderRunsSequentialMultiGarmentOutfits()
     handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-bottom\",\"status\":\"completed\",\"output\":[\"https://cdn.fashn.ai/final.png\"],\"error\":null}");
     var provider = new FashnTryOnProvider(
         new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
-        new FashnTryOnSettings("test-key", "tryon-v1.6", "balanced", 2, TimeSpan.Zero));
+        CreateTestFashnSettings("test-key", "tryon-v1.6", "balanced", 2));
 
     var generation = provider.Generate(CreateProviderRequest(CreateTwoGarmentOutfit(), TryOnMode.SequentialOutfitTryOn));
 
@@ -2101,6 +2288,63 @@ static CreateGarmentCommand CreateGarment(string userId, string name, GarmentCat
         $"https://example.com/{Uri.EscapeDataString(name)}.jpg",
         null,
         Array.Empty<string>());
+}
+
+#pragma warning disable CS8321
+static FashnTryOnSettings CreateFashnSettings(IConfiguration configuration)
+{
+    var section = configuration.GetSection("Fashn");
+
+    return new FashnTryOnSettings(
+        ApiKey: section["ApiKey"] ?? "",
+        ModelName: section["ModelName"] ?? "tryon-v1.6",
+        Mode: section["Mode"] ?? "balanced",
+        MaxPollingAttempts: ReadInt(section["MaxPollingAttempts"], 90),
+        PollInterval: TimeSpan.FromSeconds(ReadInt(section["PollIntervalSeconds"], 2)),
+
+        NumSamples: ReadInt(section["NumSamples"], 1),
+        OutputFormat: section["OutputFormat"] ?? "png",
+        ReturnBase64: ReadBool(section["ReturnBase64"], false),
+
+        // Для твоей проблемы я бы начал именно с false.
+        SegmentationFree: ReadBool(section["SegmentationFree"], false),
+
+        GarmentPhotoType: section["GarmentPhotoType"] ?? "auto",
+        Seed: ReadNullableInt(section["Seed"]),
+        PersonHint: section["PersonHint"]);
+}
+#pragma warning restore CS8321
+
+static FashnTryOnSettings CreateTestFashnSettings(string apiKey, string modelName, string mode, int maxPollingAttempts)
+{
+    return new FashnTryOnSettings(
+        apiKey,
+        modelName,
+        mode,
+        maxPollingAttempts,
+        TimeSpan.Zero,
+        NumSamples: 1,
+        OutputFormat: "png",
+        ReturnBase64: false,
+        SegmentationFree: true,
+        GarmentPhotoType: "auto",
+        Seed: null,
+        PersonHint: null);
+}
+
+static int ReadInt(string? value, int fallback)
+{
+    return int.TryParse(value, out var result) ? result : fallback;
+}
+
+static bool ReadBool(string? value, bool fallback)
+{
+    return bool.TryParse(value, out var result) ? result : fallback;
+}
+
+static int? ReadNullableInt(string? value)
+{
+    return int.TryParse(value, out var result) ? result : null;
 }
 
 static byte[] MinimalPngBytes()

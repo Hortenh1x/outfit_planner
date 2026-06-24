@@ -411,6 +411,12 @@ export function deleteOutfit(outfitId: string): Promise<void> {
   });
 }
 
+export function deleteOutfitTryOnPreview(outfitId: string): Promise<void> {
+  return request<void>(`/outfits/${outfitId}/try-on-preview`, {
+    method: 'DELETE'
+  });
+}
+
 export function estimateTryOn(input: {
   outfitId: string;
   bodyReferencePhotoUrl?: string;
@@ -451,6 +457,12 @@ export function startTryOn(input: {
 
 export function getTryOnJob(jobId: string): Promise<TryOnJob> {
   return request<TryOnJob>(`/try-on-jobs/${jobId}`);
+}
+
+export function deleteTryOnJobOutput(jobId: string): Promise<void> {
+  return request<void>(`/try-on-jobs/${jobId}/output`, {
+    method: 'DELETE'
+  });
 }
 
 export function scheduleOutfit(input: { date: string; outfitId: string }): Promise<ScheduledOutfit> {

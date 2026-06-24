@@ -32,6 +32,8 @@ const string ExternalAuthCookieScheme = "outfit_external";
 const string CurrentUserItemKey = "outfit.current_user_id";
 const string CsrfHeaderName = "X-CSRF-Token";
 
+LoadDotEnvConfigurationAliases(builder.Configuration, builder.Environment.ContentRootPath, args);
+
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = MaxUploadRequestBytes;
@@ -108,6 +110,7 @@ builder.Services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
 builder.Services.AddSingleton<IAuthTokenService, SecureAuthTokenService>();
 var authenticationBuilder = builder.Services.AddAuthentication();
 var externalAuthPublicOrigin = NormalizePublicOrigin(builder.Configuration["Authentication:PublicOrigin"]);
+var publicOrigin = NormalizePublicOrigin(builder.Configuration["PublicOrigin"]) ?? externalAuthPublicOrigin;
 authenticationBuilder.AddCookie(ExternalAuthCookieScheme, options =>
 {
     options.Cookie.Name = ExternalAuthCookieScheme;
@@ -216,8 +219,10 @@ else
     builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnectionString));
     builder.Services.AddSingleton<ITryOnJobQueue>(provider => new RedisTryOnJobQueue(provider.GetRequiredService<IConnectionMultiplexer>()));
 }
-builder.Services.AddSingleton<IObjectStorage>(provider => CreateObjectStorage(builder.Configuration, builder.Environment));
-builder.Services.AddSingleton<IStoredPhotoUrlRefresher, StoredPhotoUrlRefresher>();
+builder.Services.AddSingleton<IObjectStorage>(provider => CreateObjectStorage(builder.Configuration, builder.Environment, publicOrigin));
+builder.Services.AddSingleton<IStoredPhotoUrlRefresher>(provider => new StoredPhotoUrlRefresher(
+    provider.GetRequiredService<IObjectStorage>(),
+    publicOrigin));
 builder.Services.AddSingleton<ITryOnOutputStorage>(provider => new TryOnOutputStorage(
     provider.GetRequiredService<IObjectStorage>(),
     provider.GetRequiredService<IHttpClientFactory>().CreateClient("try-on-output-storage")));
@@ -826,6 +831,9 @@ api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest req
 api.MapDelete("/outfits/{outfitId:guid}", (Guid outfitId, OutfitService outfits, HttpContext context) =>
     outfits.DeleteOutfit(CurrentUser(context), outfitId) ? Results.NoContent() : Results.NotFound());
 
+api.MapDelete("/outfits/{outfitId:guid}/try-on-preview", (Guid outfitId, TryOnService tryOn, HttpContext context) =>
+    tryOn.DeleteActiveOutfitOutput(CurrentUser(context), outfitId) ? Results.NoContent() : Results.NotFound());
+
 api.MapPost("/outfits/{outfitId:guid}/try-on/estimate", (
     Guid outfitId,
     EstimateTryOnRequest request,
@@ -1129,7 +1137,14 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
                 configuration["Fashn:ModelName"] ?? "tryon-v1.6",
                 configuration["Fashn:Mode"] ?? "balanced",
                 configuration.GetValue("Fashn:MaxPollingAttempts", 30),
-                TimeSpan.FromSeconds(configuration.GetValue("Fashn:PollIntervalSeconds", 2)))),
+                TimeSpan.FromSeconds(configuration.GetValue("Fashn:PollIntervalSeconds", 2)),
+                configuration.GetValue("Fashn:NumSamples", 1),
+                configuration["Fashn:OutputFormat"] ?? "png",
+                configuration.GetValue("Fashn:ReturnBase64", false),
+                configuration.GetValue("Fashn:SegmentationFree", true),
+                configuration["Fashn:GarmentPhotoType"] ?? "auto",
+                configuration.GetValue<int?>("Fashn:Seed"),
+                configuration["Fashn:PersonHint"])),
         "localvton" or "local-vton" or "localvtonprovider" => new LocalVtonProvider(
             httpFactory.CreateClient("local-vton"),
             HttpProviderSettings(configuration, "LocalVton", "http://localhost:7860/", "try-on", requiresApiKey: false)),
@@ -1155,7 +1170,7 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
     };
 }
 
-static IObjectStorage CreateObjectStorage(IConfiguration configuration, IWebHostEnvironment environment)
+static IObjectStorage CreateObjectStorage(IConfiguration configuration, IWebHostEnvironment environment, string? publicOrigin)
 {
     var provider = (configuration["ObjectStorage:Provider"] ?? "Local").Trim().ToLowerInvariant();
     if (provider is "s3" or "minio")
@@ -1171,7 +1186,7 @@ static IObjectStorage CreateObjectStorage(IConfiguration configuration, IWebHost
 
     var root = configuration["ObjectStorage:Local:Root"]
         ?? Path.Combine(environment.ContentRootPath, "storage", "objects");
-    return new LocalObjectStorage(root, configuration["ObjectStorage:Local:SigningSecret"]);
+    return new LocalObjectStorage(root, configuration["ObjectStorage:Local:SigningSecret"], publicOrigin);
 }
 
 static FileBackedOutfitStore CreateLocalOutfitStore(IConfiguration configuration, IWebHostEnvironment environment)
@@ -1538,6 +1553,120 @@ static string? NormalizePublicOrigin(string? origin)
     }
 
     return uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
+}
+
+static void LoadDotEnvConfigurationAliases(ConfigurationManager configuration, string contentRootPath, string[] args)
+{
+    var dotEnvPath = FindDotEnvPath(contentRootPath)
+        ?? FindDotEnvPath(Directory.GetCurrentDirectory());
+    var dotEnvValues = dotEnvPath is null
+        ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        : ReadDotEnvValues(dotEnvPath);
+    var aliases = new[]
+    {
+        ("FASHN_API_KEY", "Fashn:ApiKey"),
+        ("FASHN_BASE_URL", "Fashn:BaseUrl"),
+        ("FASHN_MODEL_NAME", "Fashn:ModelName"),
+        ("FASHN_MODE", "Fashn:Mode"),
+        ("FASHN_MAX_POLLING_ATTEMPTS", "Fashn:MaxPollingAttempts"),
+        ("FASHN_POLL_INTERVAL_SECONDS", "Fashn:PollIntervalSeconds"),
+        ("FASHN_TIMEOUT_SECONDS", "Fashn:TimeoutSeconds"),
+        ("FASHN_NUM_SAMPLES", "Fashn:NumSamples"),
+        ("FASHN_OUTPUT_FORMAT", "Fashn:OutputFormat"),
+        ("FASHN_RETURN_BASE64", "Fashn:ReturnBase64"),
+        ("FASHN_SEGMENTATION_FREE", "Fashn:SegmentationFree"),
+        ("FASHN_GARMENT_PHOTO_TYPE", "Fashn:GarmentPhotoType"),
+        ("FASHN_SEED", "Fashn:Seed"),
+        ("FASHN_PERSON_HINT", "Fashn:PersonHint")
+    };
+
+    var mappedValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+    foreach (var (sourceKey, configurationKey) in aliases)
+    {
+        var value = Environment.GetEnvironmentVariable(sourceKey);
+        if (string.IsNullOrWhiteSpace(value) && dotEnvValues.TryGetValue(sourceKey, out var dotEnvValue))
+        {
+            value = dotEnvValue;
+        }
+
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            mappedValues[configurationKey] = value;
+        }
+    }
+
+    if (mappedValues.Count == 0)
+    {
+        return;
+    }
+
+    configuration.AddInMemoryCollection(mappedValues);
+    configuration.AddEnvironmentVariables();
+    configuration.AddCommandLine(args);
+}
+
+static string? FindDotEnvPath(string startPath)
+{
+    if (string.IsNullOrWhiteSpace(startPath))
+    {
+        return null;
+    }
+
+    var directory = Directory.Exists(startPath)
+        ? new DirectoryInfo(startPath)
+        : new FileInfo(startPath).Directory;
+    while (directory is not null)
+    {
+        var candidate = Path.Combine(directory.FullName, ".env");
+        if (File.Exists(candidate))
+        {
+            return candidate;
+        }
+
+        directory = directory.Parent;
+    }
+
+    return null;
+}
+
+static Dictionary<string, string> ReadDotEnvValues(string path)
+{
+    var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    foreach (var rawLine in File.ReadLines(path))
+    {
+        var line = rawLine.Trim();
+        if (line.Length == 0 || line.StartsWith('#'))
+        {
+            continue;
+        }
+
+        if (line.StartsWith("export ", StringComparison.Ordinal))
+        {
+            line = line["export ".Length..].TrimStart();
+        }
+
+        var separatorIndex = line.IndexOf('=');
+        if (separatorIndex <= 0)
+        {
+            continue;
+        }
+
+        var key = line[..separatorIndex].Trim();
+        var value = line[(separatorIndex + 1)..].Trim();
+        if (value.Length >= 2
+            && ((value[0] == '"' && value[^1] == '"')
+                || (value[0] == '\'' && value[^1] == '\'')))
+        {
+            value = value[1..^1];
+        }
+
+        if (key.Length > 0)
+        {
+            values[key] = value;
+        }
+    }
+
+    return values;
 }
 
 static string BuildExternalCallbackUri(string publicOrigin, PathString callbackPath)

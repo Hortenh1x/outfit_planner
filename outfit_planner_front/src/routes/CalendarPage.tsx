@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addMonths, format, isToday, subMonths } from 'date-fns';
-import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react';
-import { listOutfits, listSchedule, scheduleOutfit } from '../api/client';
+import { CalendarDays, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { listOutfits, listSchedule, scheduleOutfit, unscheduleOutfit } from '../api/client';
 import { buildMonthCalendar, weekDayLabels } from '../features/calendar/calendarUtils';
 import { OutfitChoiceList } from '../features/calendar/OutfitChoiceList';
 import { EditorialDatePicker } from '../shared/ui/EditorialDatePicker';
@@ -22,7 +22,19 @@ export function CalendarPage() {
     mutationFn: scheduleOutfit,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['schedule'] })
   });
+  const unscheduleMutation = useMutation({
+    mutationFn: unscheduleOutfit,
+    onSuccess: () => {
+      setOutfitId('');
+      void queryClient.invalidateQueries({ queryKey: ['schedule'] });
+    }
+  });
   const outfits = outfitsQuery.data ?? [];
+  const selectedScheduledOutfit = scheduleQuery.data?.find((item) => item.date === date);
+
+  useEffect(() => {
+    setOutfitId(selectedScheduledOutfit?.outfitId ?? '');
+  }, [date, selectedScheduledOutfit?.outfitId]);
 
   return (
     <section className="calendar-editorial-page">
@@ -93,6 +105,22 @@ export function CalendarPage() {
             <CalendarDays size={16} />
             {mutation.isPending ? 'Planning' : 'Plan day'}
           </button>
+          {selectedScheduledOutfit ? (
+            <button
+              type="button"
+              className="secondary-action danger-action"
+              disabled={unscheduleMutation.isPending}
+              onClick={() => unscheduleMutation.mutate(date)}
+            >
+              <X size={16} />
+              {unscheduleMutation.isPending ? 'Removing' : 'Remove from date'}
+            </button>
+          ) : null}
+          {[mutation.error, unscheduleMutation.error].filter(Boolean).map((error) => (
+            <p className="error" key={(error as Error).message}>
+              {(error as Error).message}
+            </p>
+          ))}
         </form>
       </aside>
     </section>

@@ -1,8 +1,8 @@
 import { type ChangeEvent, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { GitBranch, Layers3, Link2, Plus, ScanFace, Sparkles, Wand2 } from 'lucide-react';
-import { createBodyReferencePhoto, createGarment, createOutfit, deleteBodyReferencePhoto, estimateTryOn, getTryOnJob, listBodyReferencePhotos, listGarments, listOutfits, shareOutfit, startTryOn, uploadBodyReferencePhoto, uploadGarmentPhoto } from '../api/client';
+import { GitBranch, Layers3, Link2, Plus, ScanFace, Sparkles, Trash2, Wand2 } from 'lucide-react';
+import { createBodyReferencePhoto, createGarment, createOutfit, deleteBodyReferencePhoto, deleteOutfit, deleteOutfitTryOnPreview, deleteTryOnJobOutput, estimateTryOn, getTryOnJob, listBodyReferencePhotos, listGarments, listOutfits, shareOutfit, startTryOn, updateOutfit, uploadBodyReferencePhoto, uploadGarmentPhoto } from '../api/client';
 import { ModeToggle } from '../components/ModeToggle';
 import { BodyReferenceManager } from '../features/builder/BodyReferenceManager';
 import { garmentNameFromFile } from '../features/builder/garmentName';
@@ -35,9 +35,16 @@ export function BuilderPage() {
   const [tryOnMode, setTryOnMode] = useState<TryOnMode>('SequentialOutfitTryOn');
   const [pendingEstimate, setPendingEstimate] = useState<TryOnCostEstimate | null>(null);
   const [activeOutfit, setActiveOutfit] = useState<Outfit | null>(null);
+  const selectedIds = selectedGarmentIds(selection);
+  const activeOutfitHasChanges = activeOutfit
+    ? outfitName !== activeOutfit.name || !sameIds(selectedIds, activeOutfit.items.map((item) => item.garmentId))
+    : false;
 
   const saveMutation = useMutation({
-    mutationFn: createOutfit,
+    mutationFn: () => {
+      const input = { name: outfitName, garmentIds: selectedIds };
+      return activeOutfit ? updateOutfit(activeOutfit.id, input) : createOutfit(input);
+    },
     onSuccess: (outfit) => {
       setActiveOutfit(outfit);
       void queryClient.invalidateQueries({ queryKey: ['outfits'] });
@@ -109,11 +116,50 @@ export function BuilderPage() {
     onError: (error) => setQuickAddGarmentError((error as Error).message)
   });
   const shareMutation = useMutation({ mutationFn: shareOutfit });
-  const selectedIds = selectedGarmentIds(selection);
+  const deleteOutfitMutation = useMutation({
+    mutationFn: deleteOutfit,
+    onSuccess: (_, deletedOutfitId) => {
+      if (activeOutfit?.id === deletedOutfitId) {
+        setActiveOutfit(null);
+        setPendingEstimate(null);
+        estimateMutation.reset();
+        tryOnMutation.reset();
+        shareMutation.reset();
+        setMode('clothes');
+      }
+
+      void queryClient.invalidateQueries({ queryKey: ['outfits'] });
+      void queryClient.invalidateQueries({ queryKey: ['schedule'] });
+    }
+  });
   const selectedGarments = garments.filter((garment) => selectedIds.includes(garment.id));
   const latestTryOnJob = tryOnJobQuery.data ?? tryOnMutation.data;
   const activeOutfitPreviewUrl = activeOutfit?.personPreviewUrl;
   const previewUrl = latestTryOnJob?.outputImageUrl ?? activeOutfitPreviewUrl;
+  const canDeletePreview = Boolean(latestTryOnJob?.outputImageUrl || activeOutfitPreviewUrl);
+  const deletePreviewMutation = useMutation({
+    mutationFn: (input: { jobId?: string; outfitId?: string }) => {
+      if (input.jobId) {
+        return deleteTryOnJobOutput(input.jobId);
+      }
+
+      if (!input.outfitId) {
+        throw new Error('No preview selected for deletion.');
+      }
+
+      return deleteOutfitTryOnPreview(input.outfitId);
+    },
+    onSuccess: () => {
+      const deletedOutputUrl = latestTryOnJob?.outputImageUrl ?? activeOutfitPreviewUrl;
+      setActiveOutfit((current) => current && current.personPreviewUrl === deletedOutputUrl
+        ? { ...current, personPreviewUrl: null }
+        : current);
+      setPendingEstimate(null);
+      tryOnMutation.reset();
+      setMode('clothes');
+      void queryClient.invalidateQueries({ queryKey: ['outfits'] });
+    }
+  });
   const bodyPhotos = bodyPhotosQuery.data ?? [];
   const selectedBodyPhoto = bodyPhotos.find((photo) => photo.id === selectedBodyPhotoId) ?? bodyPhotos[0];
   const selectedBodyReferenceInput = selectedBodyPhoto?.imageUrl
@@ -145,11 +191,11 @@ export function BuilderPage() {
   }, [latestTryOnJob?.status, latestTryOnJob?.outputImageUrl, queryClient]);
 
   async function ensureOutfit() {
-    if (activeOutfit) {
+    if (activeOutfit && !activeOutfitHasChanges) {
       return activeOutfit;
     }
 
-    return await saveMutation.mutateAsync({ name: outfitName, garmentIds: selectedIds });
+    return await saveMutation.mutateAsync();
   }
 
   function handleBodyPhotoFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -178,8 +224,10 @@ export function BuilderPage() {
     });
 
     if (selection[selectionKey] !== id) {
-      setActiveOutfit(null);
       setPendingEstimate(null);
+      estimateMutation.reset();
+      tryOnMutation.reset();
+      shareMutation.reset();
     }
   }
 
@@ -349,10 +397,25 @@ export function BuilderPage() {
               </div>
             </div>
           ) : null}
+          {canDeletePreview ? (
+            <button
+              type="button"
+              className="secondary-action danger-action"
+              disabled={deletePreviewMutation.isPending}
+              onClick={() => deletePreviewMutation.mutate(
+                latestTryOnJob?.id && latestTryOnJob.outputImageUrl
+                  ? { jobId: latestTryOnJob.id }
+                  : { outfitId: activeOutfit?.id }
+              )}
+            >
+              <Trash2 size={16} />
+              {deletePreviewMutation.isPending ? 'Deleting preview' : 'Delete preview'}
+            </button>
+          ) : null}
           <button
             type="button"
             className="secondary-action"
-            disabled={!activeOutfit || shareMutation.isPending}
+            disabled={!activeOutfit || activeOutfitHasChanges || shareMutation.isPending}
             onClick={() => activeOutfit && shareMutation.mutate(activeOutfit.id)}
           >
             <Link2 size={16} />
@@ -366,19 +429,39 @@ export function BuilderPage() {
           <div className="builder-save-block">
             <label>
               <span>Outfit name</span>
-              <input value={outfitName} onChange={(event) => setOutfitName(event.target.value)} />
+              <input
+                value={outfitName}
+                onChange={(event) => {
+                  setOutfitName(event.target.value);
+                  setPendingEstimate(null);
+                  estimateMutation.reset();
+                  tryOnMutation.reset();
+                  shareMutation.reset();
+                }}
+              />
             </label>
             <button
               type="button"
               className="primary-action"
               disabled={selectedIds.length === 0 || saveMutation.isPending}
-              onClick={() => saveMutation.mutate({ name: outfitName, garmentIds: selectedIds })}
+              onClick={() => saveMutation.mutate()}
             >
               <Plus size={16} />
-              {saveMutation.isPending ? 'Saving' : 'Save outfit'}
+              {saveMutation.isPending ? 'Saving' : activeOutfit ? 'Save changes' : 'Save outfit'}
             </button>
           </div>
-          {[quickAddGarmentError ? new Error(quickAddGarmentError) : null, bodyPhotoUploadError ? new Error(bodyPhotoUploadError) : null, saveMutation.error, estimateMutation.error, tryOnMutation.error, shareMutation.error, deleteBodyPhotoMutation.error, tryOnJobQuery.error].filter(Boolean).map((error) => (
+          {activeOutfit ? (
+            <button
+              type="button"
+              className="secondary-action danger-action"
+              disabled={deleteOutfitMutation.isPending}
+              onClick={() => deleteOutfitMutation.mutate(activeOutfit.id)}
+            >
+              <Trash2 size={16} />
+              {deleteOutfitMutation.isPending ? 'Deleting outfit' : 'Delete outfit'}
+            </button>
+          ) : null}
+          {[quickAddGarmentError ? new Error(quickAddGarmentError) : null, bodyPhotoUploadError ? new Error(bodyPhotoUploadError) : null, saveMutation.error, estimateMutation.error, tryOnMutation.error, shareMutation.error, deleteBodyPhotoMutation.error, deleteOutfitMutation.error, deletePreviewMutation.error, tryOnJobQuery.error].filter(Boolean).map((error) => (
             <p className="error" key={(error as Error).message}>
               {(error as Error).message}
             </p>
@@ -395,4 +478,14 @@ function selectionFromOutfit(outfit: Outfit): OutfitSelection {
     nextSelection[CATEGORY_SELECTION_KEYS[item.category]] = item.garmentId;
     return nextSelection;
   }, {} as OutfitSelection);
+}
+
+function sameIds(left: string[], right: string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every((id, index) => id === sortedRight[index]);
 }

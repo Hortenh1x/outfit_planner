@@ -1,0 +1,774 @@
+Ниже — **пошаговый план “чтобы реально заработало”**. Я бы делал именно так: **один домен → Cloudflare → VPS → Docker Compose → nginx/frontend → ASP.NET API → Postgres/Redis/rembg/local object storage → Fashn**.
+
+Текущий repo уже под это почти готов: production `docker-compose.yml` поднимает `postgres`, `minio`, `redis`, `api`, `frontend`, а наружу публикует только `80` и `443` через frontend/nginx.  Nginx уже проксирует `/api/` внутрь на `api:8080`, а React SPA отдаёт сам.
+
+---
+
+# 0. Итоговая архитектура
+
+Будет так:
+
+```text
+https://outfit.your-domain.com
+        ↓
+Cloudflare DNS + Proxy + HTTPS
+        ↓
+VPS, ports 80/443
+        ↓
+frontend nginx container
+        ├─ React frontend
+        └─ /api/* → ASP.NET backend container
+                    ├─ PostgreSQL container
+                    ├─ Redis container
+                    ├─ rembg server container
+                    └─ local signed object storage volume
+```
+
+На первом этапе я **не советую выносить frontend/backend на разные домены**. Делай один домен:
+
+```text
+https://outfit.your-domain.com
+https://outfit.your-domain.com/api/health
+https://outfit.your-domain.com/api/storage/signed/...
+```
+
+Так проще с cookies, CSRF, OAuth и Fashn. Твой frontend и production nginx уже рассчитаны на same-origin `/api`.
+
+---
+
+# 1. Выбери VPS
+
+Для первого деплоя бери обычный Ubuntu VPS.
+
+Минимум:
+
+```text
+2 vCPU
+4 GB RAM
+40–80 GB SSD
+Ubuntu 24.04 LTS
+```
+
+Лучше:
+
+```text
+4 vCPU
+8 GB RAM
+80+ GB SSD
+```
+
+Почему лучше 8 GB: `rembg` может быть тяжёлым, особенно модели `birefnet-*`. Официальный `rembg` поддерживает CPU/GPU backend, HTTP server mode и Docker usage, но модели скачиваются при первом использовании. ([GitHub][1])
+
+---
+
+# 2. Подготовь домен в Cloudflare
+
+Допустим, домен:
+
+```text
+your-domain.com
+```
+
+А приложение будет:
+
+```text
+outfit.your-domain.com
+```
+
+В Cloudflare:
+
+1. Add site → добавь домен.
+2. У регистратора домена поменяй nameservers на Cloudflare.
+3. Cloudflare → DNS → Records → Add record:
+
+```text
+Type: A
+Name: outfit
+IPv4 address: <IP твоего VPS>
+Proxy status: Proxied / orange cloud
+TTL: Auto
+```
+
+Cloudflare DNS records создаются через DNS Records page, а для `A`, `AAAA`, `CNAME` можно выбрать, будет ли трафик proxied через Cloudflare. ([Cloudflare Docs][2])
+
+Cloudflare proxy по умолчанию работает для HTTP/HTTPS портов, включая `80` и `443`, поэтому твой текущий compose с nginx на `80/443` подходит. ([Cloudflare Docs][3])
+
+---
+
+# 3. Подготовь HTTPS origin certificate
+
+Твой `docker-compose.yml` уже ожидает TLS-файлы здесь:
+
+```text
+.secrets/tls/fullchain.pem
+.secrets/tls/privkey.pem
+```
+
+Это видно в compose: frontend контейнер монтирует эти файлы в nginx.
+
+В Cloudflare:
+
+1. SSL/TLS → Origin Server.
+2. Create Certificate.
+3. Hostnames:
+
+   ```text
+   outfit.your-domain.com
+   ```
+
+   Можно также `*.your-domain.com`, если хочешь wildcard.
+4. Key format: PEM.
+5. Скопируй:
+
+   * Origin Certificate → `fullchain.pem`
+   * Private Key → `privkey.pem`
+
+Cloudflare Origin CA certificates предназначены как раз для шифрования трафика между Cloudflare и твоим origin-сервером, и после установки можно включить Full Strict mode. ([Cloudflare Docs][4])
+
+В Cloudflare потом поставь:
+
+```text
+SSL/TLS encryption mode: Full (strict)
+```
+
+---
+
+# 4. Подготовь VPS
+
+Подключись по SSH:
+
+```bash
+ssh root@YOUR_VPS_IP
+```
+
+Обнови систему:
+
+```bash
+apt update && apt upgrade -y
+apt install -y git curl ca-certificates ufw nano
+```
+
+Настрой firewall:
+
+```bash
+ufw allow OpenSSH
+ufw allow 80/tcp
+ufw allow 443/tcp
+ufw enable
+ufw status
+```
+
+Не открывай наружу Postgres, Redis, MinIO, backend port. Только `80/443` и SSH.
+
+---
+
+# 5. Установи Docker и Docker Compose plugin
+
+На Ubuntu лучше ставить Docker из официального apt repository. Docker docs рекомендуют сначала настроить apt repository Docker, затем устанавливать Docker Engine оттуда. ([Docker Documentation][5])
+
+Команды:
+
+```bash
+apt update
+apt install -y ca-certificates curl
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" \
+  > /etc/apt/sources.list.d/docker.list
+
+apt update
+apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+Проверь:
+
+```bash
+docker --version
+docker compose version
+```
+
+Docker Compose на Linux ставится как CLI plugin, и проверяется командой `docker compose version`. ([Docker Documentation][6])
+
+---
+
+# 6. Склонируй проект на сервер
+
+```bash
+mkdir -p /opt/apps
+cd /opt/apps
+
+git clone https://github.com/Hortenh1x/outfit_planner.git
+cd outfit_planner
+```
+
+Создай папки для secrets и persistent data:
+
+```bash
+mkdir -p .secrets/tls
+mkdir -p data/api-storage
+mkdir -p data/rembg-models
+chmod 700 .secrets
+```
+
+Вставь Cloudflare cert/key:
+
+```bash
+nano .secrets/tls/fullchain.pem
+nano .secrets/tls/privkey.pem
+```
+
+Проверь:
+
+```bash
+ls -la .secrets/tls
+```
+
+Должно быть:
+
+```text
+fullchain.pem
+privkey.pem
+```
+
+---
+
+# 7. Очень важное исправление: persistent upload storage
+
+Сейчас production compose **не монтирует storage volume в API контейнер**. А код по умолчанию использует local object storage в `/app/storage/objects`, если `ObjectStorage:Provider` не выставлен в MinIO/S3.  Если не добавить volume, uploads могут потеряться при пересоздании контейнера.
+
+Для первого production-деплоя я советую использовать **LocalObjectStorage + bind mount**:
+
+```text
+./data/api-storage:/app/storage
+```
+
+Почему не MinIO прямо сейчас: твой `MinioObjectStorage` генерирует presigned URL через S3 client, и если endpoint будет внутренний `http://minio:9000`, Fashn не сможет скачать картинку снаружи.  LocalObjectStorage генерирует относительный signed URL вида `/api/storage/signed/...`, а backend потом превращает его в публичный URL через request scheme/host.  Это идеально подходит под `https://outfit.your-domain.com/api/storage/signed/...`.
+
+---
+
+# 8. Создай `.env`
+
+В корне проекта:
+
+```bash
+nano .env
+```
+
+Вставь и замени значения:
+
+```env
+APP_HOST=outfit.your-domain.com
+PUBLIC_ORIGIN=https://outfit.your-domain.com
+
+POSTGRES_DB=outfit_planner
+POSTGRES_USER=outfit
+POSTGRES_PASSWORD=CHANGE_ME_LONG_RANDOM_DB_PASSWORD
+
+MINIO_ROOT_USER=outfit
+MINIO_ROOT_PASSWORD=CHANGE_ME_LONG_RANDOM_MINIO_PASSWORD
+
+OBJECT_SIGNING_SECRET=CHANGE_ME_LONG_RANDOM_OBJECT_SIGNING_SECRET
+
+GOOGLE_CLIENT_ID=532128728407-hq0loomsvp1s8orrh8hh3gsfvnpot268.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=CHANGE_ME_ROTATED_GOOGLE_SECRET
+
+APPLE_CLIENT_ID=
+APPLE_CLIENT_SECRET=
+
+FASHN_API_KEY=YOUR_FASHN_API_KEY
+FASHN_BASE_URL=https://api.fashn.ai/v1/
+FASHN_MODEL_NAME=tryon-v1.6
+FASHN_MODE=balanced
+```
+
+Сгенерировать random secret можно так:
+
+```bash
+openssl rand -base64 48
+```
+
+И сразу сделай:
+
+```bash
+chmod 600 .env
+```
+
+Важно: Google `ClientSecret`, который ты показывал раньше, лучше **rotate/revoke** в Google Cloud Console. Даже если это dev secret.
+
+---
+
+# 9. Создай production override для Docker Compose
+
+Не редактируй пока основной `docker-compose.yml`. Создай отдельный override:
+
+```bash
+nano docker-compose.prod.override.yml
+```
+
+Вставь:
+
+```yaml
+services:
+  postgres:
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+  redis:
+    restart: unless-stopped
+
+  minio:
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+
+  rembg:
+    image: danielgatis/rembg:latest
+    restart: unless-stopped
+    command:
+      - s
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7000"
+      - --log_level
+      - info
+      - --no-ui
+    volumes:
+      - ./data/rembg-models:/root/.u2net
+
+  api:
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+
+      Authentication__PublicOrigin: ${PUBLIC_ORIGIN}
+      Authentication__Google__ClientId: ${GOOGLE_CLIENT_ID}
+      Authentication__Google__ClientSecret: ${GOOGLE_CLIENT_SECRET}
+      Authentication__Apple__ClientId: ${APPLE_CLIENT_ID}
+      Authentication__Apple__ClientSecret: ${APPLE_CLIENT_SECRET}
+
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD};GSS Encryption Mode=Disable
+      ConnectionStrings__Redis: redis:6379
+
+      TryOn__Provider: Fashn
+      Fashn__ApiKey: ${FASHN_API_KEY}
+      Fashn__BaseUrl: ${FASHN_BASE_URL}
+      Fashn__ModelName: ${FASHN_MODEL_NAME}
+      Fashn__Mode: ${FASHN_MODE}
+      Fashn__MaxPollingAttempts: "90"
+      Fashn__PollIntervalSeconds: "2"
+      Fashn__TimeoutSeconds: "180"
+
+      ObjectStorage__Provider: Local
+      ObjectStorage__Local__Root: /app/storage/objects
+      ObjectStorage__Local__SigningSecret: ${OBJECT_SIGNING_SECRET}
+
+      BackgroundRemoval__Provider: RembgServer
+      BackgroundRemoval__RembgServer__Endpoint: http://rembg:7000/api/remove
+      BackgroundRemoval__RembgServer__ImageFieldName: file
+      BackgroundRemoval__RembgServer__ModelName: birefnet-general-lite
+      BackgroundRemoval__RembgServer__TimeoutSeconds: "180"
+
+    volumes:
+      - ./data/api-storage:/app/storage
+    depends_on:
+      rembg:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  frontend:
+    restart: unless-stopped
+```
+
+Почему именно `BackgroundRemoval__RembgServer__Endpoint=http://rembg:7000/api/remove`: твой backend по умолчанию ожидал бы `127.0.0.1:7000`, но в Docker отдельный контейнер — это не localhost API-контейнера. В коде endpoint для RembgServer читается из `BackgroundRemoval:RembgServer:Endpoint`, а default — `http://127.0.0.1:7000/api/remove`.
+
+`rembg s` официально стартует HTTP server, а `/api/remove` принимает upload через form field `file`. ([GitHub][1])
+
+---
+
+# 10. Проверь Google OAuth
+
+В Google Cloud Console для OAuth Client добавь:
+
+Authorized JavaScript origins:
+
+```text
+https://outfit.your-domain.com
+```
+
+Authorized redirect URI:
+
+```text
+https://outfit.your-domain.com/api/auth/external/google/callback
+```
+
+В README проекта для local указан такой же callback pattern `/api/auth/external/google/callback`, только с localhost.  В backend Google callback path тоже прописан как `/api/auth/external/google/callback`.
+
+Если Google login пока не нужен — можешь оставить Google secret пустым и пользоваться email/password.
+
+---
+
+# 11. Запусти приложение
+
+Из корня проекта:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml up -d --build
+```
+
+Проверь контейнеры:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml ps
+```
+
+Посмотри логи:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml logs -f api
+```
+
+В другом окне:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml logs -f frontend
+```
+
+И rembg:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml logs -f rembg
+```
+
+Первый запуск `rembg` может быть долгим, потому что модель скачивается в `./data/rembg-models`.
+
+---
+
+# 12. Проверь локально на сервере
+
+С VPS:
+
+```bash
+curl -k https://localhost/api/health
+```
+
+Ожидаешь:
+
+```json
+{"status":"ok","service":"outfit-planner-api"}
+```
+
+Потом:
+
+```bash
+curl -k https://localhost/api/system/status
+```
+
+Ожидаемый смысл ответа:
+
+```json
+{
+  "api": "running",
+  "storage": "Postgres",
+  "postgres": "...",
+  "aiProvider": "Fashn",
+  "backgroundRemovalProvider": "...",
+  "backgroundRemovalConfiguredProvider": "RembgServer"
+}
+```
+
+Endpoint `/api/system/status` в коде показывает `storage`, `postgres`, `aiProvider` и `backgroundRemovalProvider`, поэтому это лучший быстрый health-check.
+
+---
+
+# 13. Проверь снаружи через домен
+
+Открой:
+
+```text
+https://outfit.your-domain.com
+```
+
+Потом:
+
+```text
+https://outfit.your-domain.com/api/health
+```
+
+Если не работает:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml logs --tail=200 frontend
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml logs --tail=200 api
+```
+
+Также проверь Cloudflare:
+
+```text
+DNS record: orange cloud enabled
+SSL/TLS mode: Full (strict)
+A record IP: IP твоего VPS
+```
+
+---
+
+# 14. Проверь uploads
+
+В приложении:
+
+1. Зарегистрируйся.
+2. Загрузи garment photo.
+3. Загрузи body reference photo.
+4. Открой DevTools → Network.
+5. Найди response от upload endpoint.
+
+URL должен быть примерно такой:
+
+```text
+https://outfit.your-domain.com/api/storage/signed/garments/...
+```
+
+Он **не должен** быть:
+
+```text
+https://localhost:5173/...
+https://localhost:5001/...
+http://api:8080/...
+http://minio:9000/...
+```
+
+Это критично для Fashn. Твой код строит public upload URL из `request.Scheme` и `request.Host`, если stored URL относительный.  Nginx прокидывает в API `Host`, `X-Forwarded-For` и `X-Forwarded-Proto`, поэтому при нормальном HTTPS-деплое API должен видеть внешний host/scheme.
+
+---
+
+# 15. Проверь background removal
+
+Загрузи garment photo. Если всё нормально, backend отправит картинку в rembg server, получит PNG/cutout и сохранит processed cutout.
+
+Смотри логи:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml logs -f api
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml logs -f rembg
+```
+
+Если rembg падает или тормозит, временно переключи:
+
+```yaml
+BackgroundRemoval__Provider: Simple
+```
+
+И перезапусти:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml up -d --build
+```
+
+`Simple` хуже по качеству, но поможет проверить весь остальной pipeline без rembg.
+
+---
+
+# 16. Проверь Fashn try-on
+
+После upload body photo и garments:
+
+1. Создай outfit.
+2. Запусти try-on.
+3. Смотри backend logs:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml logs -f api
+```
+
+Ты должен увидеть:
+
+```text
+POST https://api.fashn.ai/v1/run
+GET  https://api.fashn.ai/v1/status/...
+```
+
+Если job failed, открой в браузере или DevTools:
+
+```text
+GET https://outfit.your-domain.com/api/try-on-jobs/<job-id>
+```
+
+Там смотри поле:
+
+```json
+"error": "..."
+```
+
+В твоих прошлых логах Fashn `/run` и `/status` возвращали `200`, а проблема была не в ключе, а в том, что input image URLs были `localhost`. После деплоя они должны стать публичными `https://outfit.your-domain.com/api/storage/signed/...`.
+
+---
+
+# 17. Что делать с MinIO
+
+Сейчас я бы **оставил MinIO контейнер, но не использовал его для production uploads**.
+
+Почему:
+
+* текущий compose уже поднимает MinIO, но API не включает `ObjectStorage__Provider=Minio` автоматически;
+* если включить MinIO с internal endpoint `http://minio:9000`, generated presigned URLs будут указывать на internal Docker hostname, который не доступен браузеру/Fashn;
+* LocalObjectStorage через `/api/storage/signed/...` проще и сразу решает проблему Fashn.
+
+Когда проект станет стабильнее, лучше заменить это не на self-hosted MinIO, а на **Cloudflare R2 / AWS S3 / Backblaze B2** с публично корректными presigned URLs. Но для первого рабочего деплоя local signed storage через API — самый простой путь.
+
+---
+
+# 18. Как обновлять код после деплоя
+
+Обычный ручной деплой:
+
+```bash
+cd /opt/apps/outfit_planner
+git pull
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml up -d --build
+```
+
+Посмотреть, что всё живо:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml ps
+curl -k https://localhost/api/health
+```
+
+Логи:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml logs -f api
+```
+
+---
+
+# 19. Backup
+
+## Backup PostgreSQL
+
+```bash
+mkdir -p backups
+
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml exec -T postgres \
+  pg_dump -U outfit outfit_planner > backups/outfit_planner_$(date +%F_%H-%M).sql
+```
+
+## Backup uploads
+
+Так как мы сделали bind mount:
+
+```bash
+tar -czf backups/api-storage_$(date +%F_%H-%M).tar.gz data/api-storage
+```
+
+## Backup `.env` и TLS
+
+```bash
+tar -czf backups/secrets_$(date +%F_%H-%M).tar.gz .env .secrets/tls
+```
+
+Не заливай эти backup-файлы в GitHub.
+
+---
+
+# 20. Частые проблемы
+
+## `api/health` работает на VPS, но не через домен
+
+Проверь:
+
+```bash
+ufw status
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml ps
+```
+
+И в Cloudflare:
+
+```text
+A record points to VPS IP
+Proxy enabled
+SSL/TLS = Full (strict)
+```
+
+## Browser показывает SSL error
+
+Если используешь Cloudflare Origin CA certificate, он доверенный **для Cloudflare**, но не как обычный browser certificate при прямом заходе на IP/origin. Cloudflare предупреждает, что visitors могут увидеть untrusted certificate errors, если proxy отключён или Cloudflare paused. ([Cloudflare Docs][4]) Поэтому заходи через домен с orange cloud.
+
+## Try-on всё ещё failed
+
+Проверь в DevTools, какие URLs уходят в backend:
+
+```text
+bodyReferencePhotoUrl
+garment thumbnail/image URL
+```
+
+Они должны быть публичными:
+
+```text
+https://outfit.your-domain.com/api/storage/signed/...
+```
+
+Потом открой этот URL в incognito/private browser. Если картинка открывается — Fashn тоже должен иметь шанс её скачать.
+
+## После изменения POSTGRES_PASSWORD приложение не логинится в БД
+
+Если volume уже был создан, `POSTGRES_PASSWORD` из env не меняет существующий пароль автоматически. Для чистого тестового деплоя можно снести volume:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml down -v
+```
+
+Но это удалит БД. Для production так не делай без backup.
+
+---
+
+# 21. Короткий порядок действий
+
+1. Купить/поднять VPS Ubuntu.
+2. Подключить домен к Cloudflare.
+3. Создать `A outfit → VPS IP`, orange cloud.
+4. Создать Cloudflare Origin Certificate.
+5. Установить Docker на VPS.
+6. `git clone` repo.
+7. Создать `.env`.
+8. Создать `docker-compose.prod.override.yml`.
+9. Положить TLS files в `.secrets/tls`.
+10. Запустить:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.override.yml up -d --build
+```
+
+11. Проверить:
+
+```text
+https://outfit.your-domain.com/api/health
+https://outfit.your-domain.com/api/system/status
+```
+
+12. Проверить upload URLs.
+13. Проверить rembg.
+14. Проверить Fashn try-on.
+
+Главная цель: добиться, чтобы input images для Fashn были не `localhost`, а публичными `https://outfit.your-domain.com/api/storage/signed/...`. После этого твоя текущая проблема с failed try-on должна уйти.
+
+[1]: https://github.com/danielgatis/rembg "GitHub - danielgatis/rembg: Rembg is a tool to remove images background · GitHub"
+[2]: https://developers.cloudflare.com/dns/manage-dns-records/how-to/create-dns-records/ "Manage DNS records · Cloudflare DNS docs"
+[3]: https://developers.cloudflare.com/fundamentals/reference/network-ports/ "Network ports · Cloudflare Fundamentals docs"
+[4]: https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/ "Cloudflare origin CA · Cloudflare SSL/TLS docs"
+[5]: https://docs.docker.com/engine/install/ubuntu/ "Install Docker Engine on Ubuntu | Docker Docs"
+[6]: https://docs.docker.com/compose/install/linux/ "Install the Docker Compose plugin | Docker Docs"

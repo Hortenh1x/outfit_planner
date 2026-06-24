@@ -117,7 +117,8 @@ The frontend uses an editorial fashion/product visual system across authenticate
 - The authenticated shell and Wardrobe slice use scoped editorial CSS with warm paper and dark ink themes, serif display headings, crimson emphasis, hairline borders, flat panels, restrained shadows, compact controls, and tactile crimson primary buttons.
 - The canonical light palette and typography come from `design_references/light_theme` Crimson Plinth tokens; `design_references/dark_theme` is the dark orientation, with the same pink primary actions preserved in dark mode.
 - Wardrobe filtering should use category tabs as the single category control, keep search in the compact top control row, and expose existing tags through a writable tag combobox. On mobile, creation/planning rails come before browsing content, while the authenticated account shell sits below page content.
-- Builder controls prioritize body references and try-on generation before the save-outfit block. Calendar mobile layout puts Plan day before the calendar grid, and selected current-day numbers must stay high-contrast.
+- Builder controls prioritize body references and try-on generation before the save-outfit block. Selected saved outfits can be edited, deleted, or regenerated, and the latest generated try-on preview can be removed from the active outfit.
+- Calendar mobile layout puts Plan day before the calendar grid, selected current-day numbers must stay high-contrast, and planned outfits can be reassigned or removed from a date.
 - Do not extend the removed claymorphism system; lavender canvases, animated blobs, oversized rounded panels, recessed controls, convex purple gradients, and multi-layer neumorphic shadows are no longer part of the active frontend language.
 - Frontend composition is split across `outfit_planner_front/src/app`, route pages under `src/routes`, feature components under `src/features`, and reusable UI under `src/shared/ui`. `src/App.tsx` remains a compatibility export.
 - Frontend API response types are generated from the backend OpenAPI document into ignored local artifacts and re-exported through committed aliases.
@@ -296,6 +297,14 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `Fashn__MaxPollingAttempts` | `30` | Status polling limit. |
 | `Fashn__PollIntervalSeconds` | `2` | Delay between status polls. |
 | `Fashn__TimeoutSeconds` | `180` | HTTP client timeout. |
+| `Fashn__NumSamples` | `1` | Number of FASHN samples to request. |
+| `Fashn__OutputFormat` | `png` | FASHN output image format. |
+| `Fashn__ReturnBase64` | `false` | Whether FASHN should return base64 image data. |
+| `Fashn__SegmentationFree` | `true` | Whether FASHN should use segmentation-free garment processing. |
+| `Fashn__GarmentPhotoType` | `auto` | FASHN garment photo type hint. |
+| `Fashn__Seed` | empty | Optional FASHN generation seed. |
+| `Fashn__PersonHint` | empty | Optional FASHN person hint, sent as `person_hint`. |
+| `FASHN_*` `.env` aliases | empty | Repository `.env` keys such as `FASHN_API_KEY`, `FASHN_BASE_URL`, `FASHN_MODEL_NAME`, `FASHN_MODE`, `FASHN_NUM_SAMPLES`, `FASHN_OUTPUT_FORMAT`, `FASHN_RETURN_BASE64`, `FASHN_SEGMENTATION_FREE`, `FASHN_GARMENT_PHOTO_TYPE`, `FASHN_SEED`, and `FASHN_PERSON_HINT` are mapped to the matching `Fashn__*` settings at API startup. |
 | `TryOn__CompositeFashn__ApiKey` | empty | Required when `TryOn__Provider=CompositeFashn`. |
 | `TryOn__LocalVton__BaseUrl` | `http://localhost:7860/` | Local/dev VTON endpoint base URL. |
 | `TryOn__LocalVton__Endpoint` | `/try-on` | Local/dev VTON generation endpoint. |
@@ -449,10 +458,11 @@ Private routes require the `outfit_session` cookie. Mutating private routes also
 | `POST` | `/outfits` | Create an outfit. |
 | `PATCH` | `/outfits/{outfitId}` | Edit outfit name, garments, tags, occasion, favorite, and archive state. |
 | `DELETE` | `/outfits/{outfitId}` | Delete an outfit. |
+| `DELETE` | `/outfits/{outfitId}/try-on-preview` | Remove the active try-on preview from a saved outfit, deleting the matching stored output when available. |
 | `POST` | `/outfits/{outfitId}/try-on/estimate` | Estimate mode availability, credits, included/excluded garments, cache key, and cache-hit status before generation. |
 | `POST` | `/outfits/{outfitId}/try-on` | Confirm the server estimate and return `202 Accepted` with a try-on job. Free and cached jobs can already be `Succeeded`; paid uncached jobs are queued. |
 | `GET` | `/try-on-jobs/{jobId}` | Read try-on job status/result. |
-| `DELETE` | `/try-on-jobs/{jobId}/output` | Mark one try-on output deleted and remove the stored output URL from the job. |
+| `DELETE` | `/try-on-jobs/{jobId}/output` | Mark one try-on output deleted, remove the stored output URL from the job, and clear the linked outfit preview when that output is active. |
 | `POST` | `/privacy/purge-ai-outputs` | Mark all current-user AI outputs deleted and remove stored output URLs from jobs. |
 | `POST` | `/schedule` | Plan an outfit for a date. |
 | `GET` | `/schedule?from=YYYY-MM-DD&to=YYYY-MM-DD` | List planned outfits for a date range. |

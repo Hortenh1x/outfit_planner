@@ -359,9 +359,16 @@ public sealed class TryOnService
             return false;
         }
 
-        if (!string.IsNullOrWhiteSpace(job.OutputImageUrl))
+        var outputImageUrl = job.OutputImageUrl;
+        if (!string.IsNullOrWhiteSpace(outputImageUrl))
         {
-            _tryOnOutputStorage?.DeleteOutput(job.OutputImageUrl);
+            _tryOnOutputStorage?.DeleteOutput(outputImageUrl);
+
+            var outfit = _outfits.GetOutfitByUser(normalizedUserId, job.OutfitId);
+            if (outfit?.PersonPreviewUrl == outputImageUrl)
+            {
+                _outfits.UpdateOutfit(outfit with { PersonPreviewUrl = null });
+            }
         }
 
         _jobs.UpdateTryOnJob(job with
@@ -370,6 +377,28 @@ public sealed class TryOnService
             IsDeleted = true,
             UpdatedAt = _clock.UtcNow
         });
+        return true;
+    }
+
+    public bool DeleteActiveOutfitOutput(string userId, Guid outfitId)
+    {
+        var normalizedUserId = InputGuard.NormalizeUserId(userId);
+        var outfit = _outfits.GetOutfitByUser(normalizedUserId, outfitId);
+        if (outfit is null || string.IsNullOrWhiteSpace(outfit.PersonPreviewUrl))
+        {
+            return false;
+        }
+
+        var activeOutputUrl = outfit.PersonPreviewUrl;
+        var matchingJob = _jobs.ListTryOnJobsByUser(normalizedUserId)
+            .FirstOrDefault(job => job.OutfitId == outfitId && job.OutputImageUrl == activeOutputUrl && !job.IsDeleted);
+        if (matchingJob is not null)
+        {
+            return DeleteOutput(normalizedUserId, matchingJob.Id);
+        }
+
+        _tryOnOutputStorage?.DeleteOutput(activeOutputUrl);
+        _outfits.UpdateOutfit(outfit with { PersonPreviewUrl = null });
         return true;
     }
 
