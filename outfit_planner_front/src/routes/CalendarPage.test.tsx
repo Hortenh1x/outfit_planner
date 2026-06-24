@@ -1,5 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { format } from 'date-fns';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CalendarPage } from './CalendarPage';
@@ -58,6 +60,48 @@ describe('CalendarPage', () => {
     expect(await screen.findByRole('heading', { name: /plan your looks, every day/i })).toBeInTheDocument();
     expect(container.querySelector('.calendar-editorial-page')).toBeInTheDocument();
     expect(container.querySelector('.clay-button, .tool-panel, .page-grid, .clay-date-picker')).not.toBeInTheDocument();
+  });
+
+  it('preselects and removes the outfit assigned to the selected date', async () => {
+    const today = format(new Date(), 'yyyy-MM-dd');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+
+      if (url.endsWith('/outfits')) {
+        return jsonResponse([
+          {
+            id: 'outfit-1',
+            name: 'Weekend look',
+            items: [],
+            createdAt: '2026-06-07T12:00:00Z'
+          },
+          {
+            id: 'outfit-2',
+            name: 'Office look',
+            items: [],
+            createdAt: '2026-06-08T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.includes('/schedule?')) {
+        return jsonResponse([{ id: 'schedule-1', date: today, outfitId: 'outfit-1', createdAt: '2026-06-09T12:00:00Z' }]);
+      }
+
+      if (url.endsWith(`/schedule/${today}`) && init?.method === 'DELETE') {
+        return new Response(null, { status: 204 });
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderCalendar();
+
+    expect(await screen.findByRole('radio', { name: /weekend look/i })).toHaveAttribute('aria-checked', 'true');
+
+    await userEvent.click(screen.getByRole('button', { name: /remove from date/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`/schedule/${today}$`)), expect.objectContaining({ method: 'DELETE' }));
   });
 });
 

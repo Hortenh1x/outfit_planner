@@ -71,7 +71,7 @@ describe('BuilderPage', () => {
       name: 'linen shirt',
       category: 'Top',
       imageUrl: 'http://localhost:5000/api/storage/signed/garments/processed-cutout/linen-shirt.png?expires=1&signature=cutout',
-      thumbnailUrl: 'http://localhost:5000/api/storage/signed/garments/thumbnail/linen-shirt.png?expires=1&signature=thumb',
+      thumbnailUrl: 'http://localhost:5000/api/storage/signed/garments/processed-cutout/linen-shirt.png?expires=1&signature=cutout',
       tags: []
     });
   });
@@ -511,7 +511,7 @@ describe('BuilderPage', () => {
   });
 
   it('opens a saved outfit with its generated preview', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
 
       if (url.endsWith('/garments')) {
@@ -546,6 +546,10 @@ describe('BuilderPage', () => {
         ]);
       }
 
+      if (url.endsWith('/outfits/outfit-1/try-on-preview') && init?.method === 'DELETE') {
+        return new Response(null, { status: 204 });
+      }
+
       return jsonResponse([]);
     });
 
@@ -556,6 +560,178 @@ describe('BuilderPage', () => {
     expect(screen.getByRole('img', { name: /generated try-on preview/i })).toHaveAttribute('src', 'https://example.com/fashn-output.jpg');
     expect(screen.getByRole('button', { name: /white tee/i })).toHaveClass('selected');
     expect(screen.getByDisplayValue('FASHN preview')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /delete preview/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/outfits\/outfit-1\/try-on-preview$/), expect.objectContaining({ method: 'DELETE' }));
+    expect(screen.queryByRole('img', { name: /generated try-on preview/i })).not.toBeInTheDocument();
+  });
+
+  it('updates and deletes the selected saved outfit', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/white.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          },
+          {
+            id: 'top-2',
+            name: 'black tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/black.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/black.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.endsWith('/outfits') && !init?.method) {
+        return jsonResponse([
+          {
+            id: 'outfit-1',
+            name: 'FASHN preview',
+            items: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png' }],
+            tags: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            clothesOnlyPreviewUrl: '/generated/clothes-only/top-1.png',
+            personPreviewUrl: 'https://example.com/fashn-output.jpg',
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.endsWith('/outfits/outfit-1') && init?.method === 'PATCH') {
+        return jsonResponse({
+          id: 'outfit-1',
+          name: 'Updated preview',
+          items: [{ garmentId: 'top-2', name: 'black tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: 'http://localhost:5000/uploads/garments/black.png' }],
+          tags: [],
+          occasion: [],
+          isFavorite: false,
+          isArchived: false,
+          clothesOnlyPreviewUrl: '/generated/clothes-only/top-2.png',
+          personPreviewUrl: null,
+          createdAt: '2026-06-09T12:00:00Z'
+        });
+      }
+
+      if (url.endsWith('/outfits/outfit-1') && init?.method === 'DELETE') {
+        return new Response(null, { status: 204 });
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderBuilder();
+
+    await userEvent.click(await screen.findByRole('button', { name: /fashn preview/i }));
+    await userEvent.clear(screen.getByLabelText(/outfit name/i));
+    await userEvent.type(screen.getByLabelText(/outfit name/i), 'Updated preview');
+    await userEvent.click(await screen.findByRole('button', { name: /black tee/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    const updateCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/outfits/outfit-1') && init?.method === 'PATCH');
+    expect(updateCall).toBeDefined();
+    expect(JSON.parse(updateCall?.[1]?.body as string)).toMatchObject({
+      name: 'Updated preview',
+      garmentIds: ['top-2']
+    });
+
+    await userEvent.click(screen.getByRole('button', { name: /delete outfit/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/outfits\/outfit-1$/), expect.objectContaining({ method: 'DELETE' }));
+  });
+
+  it('deletes the latest generated try-on preview output', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/white.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.endsWith('/body-reference-photos')) {
+        return jsonResponse([{ id: 'body-1', imageUrl: 'https://example.com/person.jpg', createdAt: '2026-06-09T12:00:00Z' }]);
+      }
+
+      if (url.endsWith('/outfits') && init?.method === 'POST') {
+        return jsonResponse({
+          id: 'outfit-1',
+          name: 'Today',
+          items: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png' }],
+          createdAt: '2026-06-09T12:00:00Z'
+        }, 201);
+      }
+
+      if (url.endsWith('/outfits/outfit-1/try-on/estimate') && init?.method === 'POST') {
+        return jsonResponse({
+          mode: 'SequentialOutfitTryOn',
+          provider: 'FashnTryOnProvider',
+          bodyTryOnItems: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: '/top.png' }],
+          visualOnlyItems: [],
+          includedGarmentIds: ['top-1'],
+          excludedGarmentIds: [],
+          estimatedCredits: 1,
+          isAvailable: true,
+          requiresAi: true,
+          requiresPremiumConfirmation: false,
+          cacheKey: 'cache-key-a',
+          hasCachedResult: false,
+          summary: 'Sequential outfit try-on will use 1 body garment run(s).',
+          warnings: []
+        });
+      }
+
+      if (url.endsWith('/outfits/outfit-1/try-on') && init?.method === 'POST') {
+        return jsonResponse({ id: 'job-1', status: 'Succeeded', outputImageUrl: 'https://example.com/fashn-output.jpg' }, 202);
+      }
+
+      if (url.endsWith('/try-on-jobs/job-1')) {
+        return jsonResponse({ id: 'job-1', status: 'Succeeded', outputImageUrl: 'https://example.com/fashn-output.jpg' });
+      }
+
+      if (url.endsWith('/try-on-jobs/job-1/output') && init?.method === 'DELETE') {
+        return new Response(null, { status: 204 });
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderBuilder();
+
+    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    await userEvent.click(screen.getByRole('button', { name: /generate preview/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /confirm generation/i }));
+    expect(await screen.findByRole('img', { name: /generated try-on preview/i })).toHaveAttribute('src', 'https://example.com/fashn-output.jpg');
+
+    await userEvent.click(screen.getByRole('button', { name: /delete preview/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/try-on-jobs\/job-1\/output$/), expect.objectContaining({ method: 'DELETE' }));
+    expect(screen.queryByRole('img', { name: /generated try-on preview/i })).not.toBeInTheDocument();
   });
 
   it('does not open synthetic clothes-only preview urls as generated person images', async () => {

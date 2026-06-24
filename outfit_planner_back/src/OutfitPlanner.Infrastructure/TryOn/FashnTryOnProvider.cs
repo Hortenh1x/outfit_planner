@@ -12,7 +12,14 @@ public sealed record FashnTryOnSettings(
     string ModelName,
     string Mode,
     int MaxPollingAttempts,
-    TimeSpan PollInterval);
+    TimeSpan PollInterval,
+    int NumSamples,
+    string OutputFormat,
+    bool ReturnBase64,
+    bool SegmentationFree,
+    string GarmentPhotoType,
+    int? Seed,
+    string? PersonHint);
 
 public sealed class FashnTryOnProvider : ITryOnProvider
 {
@@ -94,9 +101,13 @@ public sealed class FashnTryOnProvider : ITryOnProvider
                     item.ThumbnailUrl,
                     FashnCategory(item.Category),
                     _settings.Mode,
-                    1,
-                    "png",
-                    false)))
+                    _settings.NumSamples,
+                    _settings.OutputFormat,
+                    _settings.ReturnBase64,
+                    _settings.SegmentationFree,
+                    _settings.GarmentPhotoType,
+                    _settings.Seed,
+                    _settings.PersonHint)))
         };
         AddAuth(request);
 
@@ -217,7 +228,11 @@ file sealed record FashnTryOnInputs(
     [property: JsonPropertyName("mode")] string Mode,
     [property: JsonPropertyName("num_samples")] int NumSamples,
     [property: JsonPropertyName("output_format")] string OutputFormat,
-    [property: JsonPropertyName("return_base64")] bool ReturnBase64);
+    [property: JsonPropertyName("return_base64")] bool ReturnBase64,
+    [property: JsonPropertyName("segmentation_free")] bool SegmentationFree,
+    [property: JsonPropertyName("garment_photo_type")] string GarmentPhotoType,
+    [property: JsonPropertyName("seed")] int? Seed,
+    [property: JsonPropertyName("person_hint")] string? PersonHint);
 
 file sealed record FashnRunResponse(
     [property: JsonPropertyName("id")] string? Id,

@@ -8,13 +8,15 @@ public sealed class LocalObjectStorage : IObjectStorage
 {
     private readonly string _storageRoot;
     private readonly byte[] _signingKey;
+    private readonly string? _publicOrigin;
 
-    public LocalObjectStorage(string storageRoot, string? signingSecret = null)
+    public LocalObjectStorage(string storageRoot, string? signingSecret = null, string? publicOrigin = null)
     {
         _storageRoot = Path.GetFullPath(storageRoot);
         _signingKey = Encoding.UTF8.GetBytes(string.IsNullOrWhiteSpace(signingSecret)
             ? "local-object-storage-development-signing-key"
             : signingSecret);
+        _publicOrigin = NormalizePublicOrigin(publicOrigin);
     }
 
     public StoredObject PutObject(ObjectStoragePutRequest request)
@@ -83,7 +85,8 @@ public sealed class LocalObjectStorage : IObjectStorage
         var expires = DateTimeOffset.UtcNow.Add(lifetime).ToUnixTimeSeconds();
         var signature = Sign(objectKey, expires);
         var escapedKey = string.Join('/', objectKey.Split('/').Select(Uri.EscapeDataString));
-        return $"/api/storage/signed/{escapedKey}?expires={expires}&signature={Uri.EscapeDataString(signature)}";
+        var signedPath = $"/api/storage/signed/{escapedKey}?expires={expires}&signature={Uri.EscapeDataString(signature)}";
+        return _publicOrigin is null ? signedPath : $"{_publicOrigin}{signedPath}";
     }
 
     public StoredObjectFile? GetSignedObject(string objectKey, long expiresUnixTimeSeconds, string signature, DateTimeOffset now)
@@ -142,6 +145,22 @@ public sealed class LocalObjectStorage : IObjectStorage
         }
 
         return normalized;
+    }
+
+    private static string? NormalizePublicOrigin(string? publicOrigin)
+    {
+        if (string.IsNullOrWhiteSpace(publicOrigin))
+        {
+            return null;
+        }
+
+        var trimmed = publicOrigin.Trim().TrimEnd('/');
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+        {
+            throw new InvalidOperationException("Public origin must be an absolute HTTP or HTTPS origin.");
+        }
+
+        return uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
     }
 
     private static string ContentTypeForExtension(string extension)

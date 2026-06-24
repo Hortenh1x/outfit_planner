@@ -1,0 +1,69 @@
+services:
+  rembg:
+    image: danielgatis/rembg:latest
+    command:
+      - s
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7000"
+      - --log_level
+      - info
+      - --no-ui
+    volumes:
+      - rembg_models:/root/.u2net
+    restart: unless-stopped
+
+  api:
+    volumes:
+      - ./outfit_planner_back:/src
+      - ./outfit_planner_back/src/OutfitPlanner.Api/storage:/src/src/OutfitPlanner.Api/storage
+      - ./.aspnet/https:/https:ro
+      - api_dataprotection:/root/.aspnet/DataProtection-Keys
+
+    command: >
+      sh -c "dotnet watch
+      --project src/OutfitPlanner.Api/OutfitPlanner.Api.csproj
+      run
+      --no-launch-profile
+      --urls https://0.0.0.0:8081"
+
+    environment:
+      Authentication__PublicOrigin: ${PUBLIC_ORIGIN}
+
+      TryOn__Provider: Fashn
+
+      Fashn__ApiKey: ${FASHN_API_KEY}
+      Fashn__BaseUrl: ${FASHN_BASE_URL}
+      Fashn__ModelName: ${FASHN_MODEL_NAME}
+      Fashn__Mode: ${FASHN_MODE}
+      Fashn__MaxPollingAttempts: "90"
+      Fashn__PollIntervalSeconds: "2"
+      Fashn__TimeoutSeconds: "180"
+
+      Fashn__NumSamples: ${FASHN_NUM_SAMPLES}
+      Fashn__OutputFormat: ${FASHN_OUTPUT_FORMAT}
+      Fashn__ReturnBase64: ${FASHN_RETURN_BASE64}
+      Fashn__SegmentationFree: ${FASHN_SEGMENTATION_FREE}
+      Fashn__GarmentPhotoType: ${FASHN_GARMENT_PHOTO_TYPE}
+      Fashn__Seed: ${FASHN_SEED}
+      Fashn__PersonHint: ${FASHN_PERSON_HINT}
+
+      Authentication__Google__ClientId: ${GOOGLE_CLIENT_ID}
+      Authentication__Google__ClientSecret: ${GOOGLE_CLIENT_SECRET}
+      Authentication__Apple__ClientId: ${APPLE_CLIENT_ID}
+      Authentication__Apple__ClientSecret: ${APPLE_CLIENT_SECRET}
+
+      BackgroundRemoval__Provider: RembgServer
+      BackgroundRemoval__RembgServer__Endpoint: http://rembg:7000/api/remove
+      BackgroundRemoval__RembgServer__ImageFieldName: file
+      BackgroundRemoval__RembgServer__ModelName: u2netp
+      BackgroundRemoval__RembgServer__TimeoutSeconds: "60"
+
+    depends_on:
+      rembg:
+        condition: service_started
+
+volumes:
+  rembg_models:
+  api_dataprotection:

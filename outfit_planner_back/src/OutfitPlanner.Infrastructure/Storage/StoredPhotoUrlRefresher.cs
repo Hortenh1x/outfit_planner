@@ -8,10 +8,12 @@ public sealed class StoredPhotoUrlRefresher : IStoredPhotoUrlRefresher
     private const string LocalSignedRoutePrefix = "/api/storage/signed/";
 
     private readonly IObjectStorage _objects;
+    private readonly string? _publicOrigin;
 
-    public StoredPhotoUrlRefresher(IObjectStorage objects)
+    public StoredPhotoUrlRefresher(IObjectStorage objects, string? publicOrigin = null)
     {
         _objects = objects;
+        _publicOrigin = NormalizePublicOrigin(publicOrigin);
     }
 
     public string RefreshGarmentImageUrl(string photoUrl)
@@ -41,7 +43,7 @@ public sealed class StoredPhotoUrlRefresher : IStoredPhotoUrlRefresher
             ?? (ObjectExists(objectKey) ? objectKey : null);
         return refreshedObjectKey is null
             ? photoUrl
-            : _objects.CreateSignedReadUrl(refreshedObjectKey, SignedUrlLifetime);
+            : ToPublicUrl(_objects.CreateSignedReadUrl(refreshedObjectKey, SignedUrlLifetime));
     }
 
     private string? PreferredVariantObjectKey(string objectKey, string collection, StoredImageVariant preferredVariant)
@@ -93,6 +95,34 @@ public sealed class StoredPhotoUrlRefresher : IStoredPhotoUrlRefresher
         return string.IsNullOrWhiteSpace(encodedKey)
             ? null
             : Uri.UnescapeDataString(encodedKey);
+    }
+
+    private string ToPublicUrl(string signedUrl)
+    {
+        if (_publicOrigin is null || Uri.TryCreate(signedUrl, UriKind.Absolute, out _))
+        {
+            return signedUrl;
+        }
+
+        return signedUrl.StartsWith("/", StringComparison.Ordinal)
+            ? $"{_publicOrigin}{signedUrl}"
+            : signedUrl;
+    }
+
+    private static string? NormalizePublicOrigin(string? publicOrigin)
+    {
+        if (string.IsNullOrWhiteSpace(publicOrigin))
+        {
+            return null;
+        }
+
+        var trimmed = publicOrigin.Trim().TrimEnd('/');
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+        {
+            throw new InvalidOperationException("Public origin must be an absolute HTTP or HTTPS origin.");
+        }
+
+        return uri.GetLeftPart(UriPartial.Authority).TrimEnd('/');
     }
 
     private static string VariantFolder(StoredImageVariant variant)
