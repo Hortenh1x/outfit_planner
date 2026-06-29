@@ -1,7 +1,8 @@
+import type { UploadedPhotoResponse } from '../../api/client';
 import type { GarmentCategory } from '../../types';
 import { validateUploadImageFile } from '../uploads/imageFile';
 
-export type UploadQueueStatus = 'ready' | 'invalid' | 'uploading' | 'uploaded' | 'failed';
+export type UploadQueueStatus = 'invalid' | 'queued' | 'processing' | 'processed' | 'failed';
 
 export interface UploadQueueDefaults {
   category: GarmentCategory;
@@ -26,6 +27,7 @@ export interface UploadQueueItem {
   validationError: string | null;
   status: UploadQueueStatus;
   error: string | null;
+  uploadedPhoto?: UploadedPhotoResponse | null;
   previewUrl?: string;
 }
 
@@ -82,8 +84,9 @@ export function createUploadQueueItem(file: File, defaults: UploadQueueDefaults,
     season: [...defaults.season],
     warnings: getPhotoQualityWarnings(file),
     validationError,
-    status: validationError ? 'invalid' : 'ready',
-    error: null
+    status: validationError ? 'invalid' : 'queued',
+    error: null,
+    uploadedPhoto: null
   };
 }
 
@@ -112,6 +115,34 @@ export function validateQueueFile(file: File): string | null {
   } catch (error) {
     return (error as Error).message;
   }
+}
+
+/**
+ * Returns the queued items that should start background processing now, given a
+ * concurrency `limit` and the ids of uploads already in flight. The caller owns
+ * the in-flight set so this stays a pure, deterministic selection.
+ */
+export function selectQueueItemsToStart(
+  items: UploadQueueItem[],
+  limit: number,
+  inFlightIds: ReadonlySet<string>
+): UploadQueueItem[] {
+  const availableSlots = limit - inFlightIds.size;
+  if (availableSlots <= 0) {
+    return [];
+  }
+
+  return items
+    .filter((item) => item.status === 'queued' && !inFlightIds.has(item.id))
+    .slice(0, availableSlots);
+}
+
+export function isQueueProcessing(items: UploadQueueItem[]): boolean {
+  return items.some((item) => item.status === 'queued' || item.status === 'processing');
+}
+
+export function hasCreatableItems(items: UploadQueueItem[]): boolean {
+  return items.some((item) => item.status === 'processed' || item.status === 'failed');
 }
 
 export function suggestTagsForUpload(input: SuggestedTagInput): string[] {
@@ -178,10 +209,21 @@ function tokenizeText(value: string): string[] {
     .filter((token) => token.length > 1 && !isGenericToken(token));
 }
 
-function uniqueTokens(tokens: string[]): string[] {
+export function normalizeTagToken(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+export function parseTokenText(value: string): string[] {
+  return value
+    .split(',')
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+export function uniqueTokens(tokens: string[]): string[] {
   const seen = new Set<string>();
   return tokens
-    .map((token) => token.trim().toLowerCase())
+    .map(normalizeTagToken)
     .filter((token) => token.length > 0)
     .filter((token) => {
       if (seen.has(token)) {

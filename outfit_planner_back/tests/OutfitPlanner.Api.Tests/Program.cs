@@ -11,6 +11,7 @@ using System.Text;
 using System.Text.Json;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SixLabors.ImageSharp.Processing;
 
 var tests = new List<(string Name, Action Test)>
 {
@@ -30,9 +31,12 @@ var tests = new List<(string Name, Action Test)>
     ("local file store implements application repository ports", TestLocalFileStoreImplementsRepositoryPorts),
     ("local file store persists records across restarts", TestLocalFileStorePersistsRecordsAcrossRestarts),
     ("api uses local file store when postgres is not configured", TestApiUsesLocalFileStoreWithoutPostgres),
+    ("api fails closed without a local object storage signing secret", TestApiFailsClosedWithoutObjectStorageSigningSecret),
     ("postgres schema contains tables required by repository ports", TestPostgresSchemaContainsRepositoryTables),
     ("postgres schema contains production auth tables and indexes", TestPostgresSchemaContainsAuthTables),
+    ("postgres schema contains user account profile fields", TestPostgresSchemaContainsUserAccountProfileFields),
     ("auth service registers email users with hashed passwords and sessions", TestAuthServiceRegistersEmailUsers),
+    ("auth service updates username avatar and gender profile fields", TestAuthServiceUpdatesAccountProfile),
     ("auth service requires password length digit and letter only", TestAuthServicePasswordPolicy),
     ("auth service rejects duplicate email registration", TestAuthServiceRejectsDuplicateEmailRegistration),
     ("auth service signs in existing external accounts and auto-registers missing accounts", TestAuthServiceExternalLoginAutoRegisters),
@@ -45,14 +49,19 @@ var tests = new List<(string Name, Action Test)>
     ("api documents frontend response bodies for generated types", TestApiDocumentsFrontendResponseBodies),
     ("maps expanded garment categories to richer body zones", TestCategoryMapping),
     ("wardrobe service updates structured garment metadata without reupload", TestWardrobeServiceUpdatesStructuredMetadata),
+    ("wardrobe service auto-straightens clothing categories on create only", TestWardrobeServiceAutoStraightensClothingOnly),
+    ("wardrobe service rotates and persists garment rotation on update", TestWardrobeServiceRotatesGarmentOnUpdate),
     ("wardrobe service filters sorts and paginates garments", TestWardrobeServiceFiltersSortsAndPaginatesGarments),
     ("outfit service updates gets filters and deletes outfits", TestOutfitServiceUpdatesFiltersAndDeletesOutfits),
     ("outfit service applies slot compatibility rules", TestOutfitSlotCompatibilityRules),
+    ("outfit rules carry garment rotation onto outfit items", TestOutfitRulesPreservesGarmentRotation),
     ("schedule service can unschedule a planned date", TestScheduleServiceUnschedulesDate),
     ("share service can revoke current user share links", TestShareServiceRevokesShareLinks),
     ("try-on estimator classifies outfit items and prices modes", TestTryOnCostEstimatorClassifiesAndPricesModes),
+    ("try-on cache key varies with garment rotation", TestTryOnCacheKeyVariesWithGarmentRotation),
     ("try-on estimator marks unavailable modes", TestTryOnCostEstimatorMarksUnavailableModes),
     ("try-on service requires explicit AI consent before provider call", TestTryOnConsentRequired),
+    ("try-on service blocks ai generation until user gender is set", TestTryOnServiceBlocksAiUntilGenderIsSet),
     ("try-on service estimates cost before generation", TestTryOnServiceEstimatesCost),
     ("try-on service marks provider unsupported modes unavailable", TestTryOnServiceMarksProviderUnsupportedModesUnavailable),
     ("try-on service exposes only confirmed start contract", TestTryOnServiceExposesOnlyConfirmedStartContract),
@@ -60,6 +69,7 @@ var tests = new List<(string Name, Action Test)>
     ("try-on service returns cache hits without queueing provider work", TestTryOnServiceReturnsCacheHitsWithoutQueueing),
     ("try-on service deletes active preview output from outfit", TestTryOnServiceDeletesActivePreviewOutputFromOutfit),
     ("try-on service deletes active preview output by outfit", TestTryOnServiceDeletesActivePreviewOutputByOutfit),
+    ("try-on service sends cutout garment image to provider", TestTryOnServiceSendsCutoutGarmentImageToProvider),
     ("try-on service completes clothes-only preview without ai", TestTryOnServiceCompletesClothesOnlyWithoutAi),
     ("try-on service completes clothes-only preview without body reference", TestTryOnServiceCompletesClothesOnlyWithoutBodyReference),
     ("try-on service queues jobs without calling provider inline", TestTryOnServiceQueuesJobsWithoutInlineProviderCall),
@@ -67,6 +77,7 @@ var tests = new List<(string Name, Action Test)>
     ("try-on processor sends public absolute storage urls to external providers", TestTryOnProcessorSendsPublicStorageUrlsToProvider),
     ("try-on processor stores external provider outputs before exposing them", TestTryOnProcessorStoresExternalProviderOutputs),
     ("try-on processor excludes visual-only items outside composite mode", TestTryOnProcessorExcludesVisualOnlyItemsOutsideCompositeMode),
+    ("try-on processor passes user gender to provider requests", TestTryOnProcessorPassesGenderToProvider),
     ("try-on service forwards sequential flow option to provider", TestTryOnServiceForwardsSequentialFlowOption),
     ("api registers redis try-on queue and provider choices", TestApiRegistersRedisQueueAndProviderChoices),
     ("api maps dot env FASHN aliases into canonical config", TestApiMapsDotEnvFashnAliases),
@@ -81,6 +92,10 @@ var tests = new List<(string Name, Action Test)>
     ("local object storage can emit public absolute signed urls", TestLocalObjectStorageEmitsPublicAbsoluteSignedUrls),
     ("try-on output storage port and adapter exist", TestTryOnOutputStoragePortAndAdapter),
     ("image processing pipeline exposes privacy preserving variants", TestImageProcessingPipelineContracts),
+    ("garment processing emits an immutable base cutout variant", TestImageProcessorEmitsBaseCutoutVariant),
+    ("garment deskew straightens a tilted silhouette", TestGarmentDeskewStraightensTiltedSilhouette),
+    ("garment deskew skips square and extreme tilts", TestGarmentDeskewSkipsSquareAndExtremeTilt),
+    ("garment rotation render produces rotated variants", TestImageProcessorRendersRotatedGarmentVariants),
     ("background removal provider contracts exist", TestBackgroundRemovalProviderContracts),
     ("background removal auto provider prefers rembg when available", TestBackgroundRemovalAutoProviderPrefersRembg),
     ("api defaults background removal provider to auto", TestApiDefaultsBackgroundRemovalToAuto),
@@ -105,6 +120,8 @@ var tests = new List<(string Name, Action Test)>
     ("fashn provider sends only body try-on items for normal modes", TestFashnProviderSendsOnlyBodyTryOnItems),
     ("fashn provider requires api key before network call", TestFashnProviderRequiresApiKey),
     ("fashn provider sends configured generation options", TestFashnProviderSendsConfiguredGenerationOptions),
+    ("fashn provider sends tryon max quality gender prompt", TestFashnProviderSendsTryOnMaxQualityGenderPrompt),
+    ("fashn provider omits prompt when no template configured", TestFashnProviderOmitsPromptWhenNoTemplateConfigured),
     ("fashn provider submits try-on request and polls status", TestFashnProviderSubmitsRequestAndPollsStatus),
     ("fashn provider rejects multi-garment outfits when sequential flow is off", TestFashnProviderRejectsMultiGarmentOutfitsWhenSequentialOff),
     ("fashn provider runs multi-garment outfits sequentially when enabled", TestFashnProviderRunsSequentialMultiGarmentOutfits)
@@ -270,6 +287,7 @@ static void TestDevelopmentDockerPublishesHttpsDefaults()
     var compose = File.ReadAllText(Path.Combine(rootPath, "docker-compose.dev.yml"));
 
     AssertTrue(compose.Contains("ASPNETCORE_URLS: https://+:8081", StringComparison.Ordinal), "development api container should listen on HTTPS.");
+    AssertTrue(compose.Contains("--no-launch-profile", StringComparison.Ordinal), "development api container should not let launchSettings bind localhost:5001 inside Docker.");
     AssertTrue(compose.Contains("\"5001:8081\"", StringComparison.Ordinal), "development api should publish HTTPS on host port 5001.");
     AssertTrue(!compose.Contains("\"5000:8080\"", StringComparison.Ordinal), "development api should not publish the old HTTP host port.");
     AssertTrue(compose.Contains("ASPNETCORE_Kestrel__Certificates__Default__Path: /https/outfit-planner-dev.pfx", StringComparison.Ordinal), "development api should load the shared dev HTTPS certificate.");
@@ -471,6 +489,14 @@ static void TestApiUsesLocalFileStoreWithoutPostgres()
     AssertTrue(program.Contains("Storage:Local:DataPath", StringComparison.Ordinal), "local file store path should be configurable.");
 }
 
+static void TestApiFailsClosedWithoutObjectStorageSigningSecret()
+{
+    var program = File.ReadAllText(Path.Combine("outfit_planner_back", "src", "OutfitPlanner.Api", "Program.cs"));
+
+    AssertTrue(program.Contains("EnsureLocalObjectStorageSigningSecret", StringComparison.Ordinal), "API should validate the local object-storage signing secret at startup.");
+    AssertTrue(program.Contains("ObjectStorage:Local:SigningSecret must be configured outside Development", StringComparison.Ordinal), "API must fail fast outside Development when the local object-storage signing secret is missing, so signed URLs cannot be forged with the source-visible development key.");
+}
+
 static void TestPostgresSchemaContainsRepositoryTables()
 {
     var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "schema.sql"));
@@ -496,6 +522,19 @@ static void TestPostgresSchemaContainsAuthTables()
     AssertTrue(schema.Contains("unique (provider, provider_subject)", StringComparison.OrdinalIgnoreCase), "external logins should be unique per provider subject.");
 }
 
+static void TestPostgresSchemaContainsUserAccountProfileFields()
+{
+    var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "schema.sql"));
+    var schema = File.ReadAllText(schemaPath);
+
+    foreach (var field in new[] { "avatar_url", "avatar_object_key", "gender" })
+    {
+        AssertTrue(schema.Contains(field, StringComparison.OrdinalIgnoreCase), $"users table should store {field}.");
+    }
+
+    AssertTrue(schema.Contains("gender in ('Male', 'Female')", StringComparison.OrdinalIgnoreCase), "schema should constrain gender to male or female.");
+}
+
 static void TestAuthServiceRegistersEmailUsers()
 {
     var store = new InMemoryOutfitStore();
@@ -509,6 +548,24 @@ static void TestAuthServiceRegistersEmailUsers()
     AssertTrue(!string.IsNullOrWhiteSpace(result.CsrfToken), "registration should issue a CSRF token.");
     AssertTrue(store.GetUserByNormalizedEmail("ada@example.com")?.PasswordHash?.StartsWith("hashed:", StringComparison.Ordinal) == true, "passwords should be hashed before storage.");
     AssertTrue(store.GetActiveAuthSessionByTokenHash("hash:session-1", DateTimeOffset.UtcNow) is not null, "session lookup should use the token hash.");
+}
+
+static void TestAuthServiceUpdatesAccountProfile()
+{
+    var store = new InMemoryOutfitStore();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+    var result = auth.RegisterWithPassword("profile@example.com", "abc12345", "abc12345");
+
+    var profile = auth.UpdateProfile(result.User.Id, "Dmytro Bolibok", UserGender.Male);
+    var avatar = auth.UpdateAvatar(result.User.Id, "/api/storage/signed/avatars/thumbnail/avatar.png", "avatars/thumbnail/avatar.png");
+
+    AssertEqual("Dmytro Bolibok", profile.Username, "profile update should expose the changed username.");
+    AssertEqual(UserGender.Male, profile.Gender, "profile update should expose the changed gender.");
+    AssertEqual("/api/storage/signed/avatars/thumbnail/avatar.png", avatar.AvatarUrl, "avatar update should expose the current avatar URL.");
+    var stored = store.GetUserById(result.User.Id);
+    AssertEqual("Dmytro Bolibok", stored?.DisplayName, "username should be stored as the account display name.");
+    AssertEqual(UserGender.Male, stored?.Gender, "gender should be persisted on the user account.");
+    AssertEqual("avatars/thumbnail/avatar.png", stored?.AvatarObjectKey, "avatar object key should be persisted for signed URL refresh.");
 }
 
 static void TestAuthServicePasswordPolicy()
@@ -790,6 +847,40 @@ static void TestWardrobeServiceUpdatesStructuredMetadata()
     AssertTrue(service.UpdateGarment("user-b", garment.Id, new UpdateGarmentCommand(Name: "stolen")) is null, "other users must not update the garment.");
 }
 
+static void TestWardrobeServiceAutoStraightensClothingOnly()
+{
+    var store = new InMemoryOutfitStore();
+    var rotator = new RecordingGarmentImageRotator { AutoStraightenAngle = 12d };
+    var service = new WardrobeService(store, store, new SystemClock(), null, rotator);
+
+    var top = service.CreateGarment(CreateGarment("user-a", "linen shirt", GarmentCategory.Top));
+    AssertEqual(1, rotator.RotateCalls, "clothing categories should be auto-straightened on create");
+    AssertTrue(Math.Abs(top.RotationDegrees - 12d) < 0.001, "auto-straighten angle should be persisted on the garment");
+    AssertTrue(top.ImageUrl.Contains("#cutout", StringComparison.Ordinal), "auto-straighten should swap in the rotated cutout url");
+
+    var rotateCallsBeforeBag = rotator.RotateCalls;
+    var bag = service.CreateGarment(CreateGarment("user-a", "tote bag", GarmentCategory.Bag));
+    AssertEqual(rotateCallsBeforeBag, rotator.RotateCalls, "non-clothing categories should not be auto-straightened");
+    AssertEqual(0d, bag.RotationDegrees, "non-clothing garment should keep zero rotation");
+}
+
+static void TestWardrobeServiceRotatesGarmentOnUpdate()
+{
+    var store = new InMemoryOutfitStore();
+    var rotator = new RecordingGarmentImageRotator { AutoStraightenAngle = 0d };
+    var service = new WardrobeService(store, store, new SystemClock(), null, rotator);
+    var garment = service.CreateGarment(CreateGarment("user-a", "tote bag", GarmentCategory.Bag));
+
+    var rotated = service.UpdateGarment("user-a", garment.Id, new UpdateGarmentCommand(RotationDegrees: 90d));
+    AssertTrue(rotated is not null, "garment should update");
+    AssertTrue(Math.Abs(rotated!.RotationDegrees - 90d) < 0.001, "manual rotation angle should be persisted");
+    AssertTrue(rotated.ImageUrl.Contains("#cutout", StringComparison.Ordinal), "manual rotation should re-render and swap the cutout url");
+    AssertEqual(90d, rotator.LastRotateDegrees, "rotator should be asked for the requested absolute angle");
+
+    var metadataOnly = service.UpdateGarment("user-a", garment.Id, new UpdateGarmentCommand(Name: "weekender bag"));
+    AssertTrue(Math.Abs(metadataOnly!.RotationDegrees - 90d) < 0.001, "a metadata-only edit should preserve the saved rotation");
+}
+
 static void TestWardrobeServiceFiltersSortsAndPaginatesGarments()
 {
     var store = new InMemoryOutfitStore();
@@ -899,6 +990,17 @@ static void TestOutfitSlotCompatibilityRules()
         "two shoe garments should be rejected");
 }
 
+static void TestOutfitRulesPreservesGarmentRotation()
+{
+    var store = new InMemoryOutfitStore();
+    var garment = store.CreateGarment(CreateGarment("user-a", "tilted tee", GarmentCategory.Top)) with { RotationDegrees = 15d };
+
+    var items = OutfitRules.BuildItems(new[] { garment });
+
+    AssertEqual(1, items.Count, "a single garment should yield one outfit item.");
+    AssertTrue(Math.Abs(items[0].RotationDegrees - 15d) < 0.001, "BuildItems should carry the garment rotation onto the outfit item so rotation reaches responses, persistence, and the try-on cache key.");
+}
+
 static void TestScheduleServiceUnschedulesDate()
 {
     var store = new InMemoryOutfitStore();
@@ -980,6 +1082,34 @@ static void TestTryOnCostEstimatorClassifiesAndPricesModes()
     AssertTrue(composite.HasCachedResult, "estimate should carry cache hit status from the caller.");
 }
 
+static void TestTryOnCacheKeyVariesWithGarmentRotation()
+{
+    var estimator = new TryOnCostEstimator();
+    var garmentId = Guid.NewGuid();
+
+    Outfit OutfitWithRotation(double degrees) => new Outfit(
+        Guid.NewGuid(),
+        "user-a",
+        "tee outfit",
+        new[] { new OutfitItem(garmentId, "tee", GarmentCategory.Top, BodyZone.Torso, "https://app.test/tee.png", degrees) },
+        Array.Empty<string>(),
+        Array.Empty<string>(),
+        false,
+        false,
+        null,
+        null,
+        DateTimeOffset.UtcNow);
+
+    var input = new TryOnEstimateInput(TryOnMode.SingleGarmentTryOn, "FashnTryOnProvider", "body:body-1", "settings-a", hasCachedResult: false);
+
+    var upright = estimator.Estimate(OutfitWithRotation(0d), input).CacheKey;
+    var tilted = estimator.Estimate(OutfitWithRotation(90d), input).CacheKey;
+    var uprightAgain = estimator.Estimate(OutfitWithRotation(0d), input).CacheKey;
+
+    AssertTrue(upright != tilted, "rotating a garment should change the try-on cache key so stale results are not reused");
+    AssertEqual(upright, uprightAgain, "the same rotation should produce the same try-on cache key");
+}
+
 static void TestTryOnCostEstimatorMarksUnavailableModes()
 {
     var outfit = CreateOutfitWithItems(
@@ -1048,6 +1178,33 @@ static void TestTryOnConsentRequired()
         () => service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: false, TryOnMode.SingleGarmentTryOn, estimate.EstimatedCredits, estimate.CacheKey).GetAwaiter().GetResult(),
         "try-on should require consent");
     AssertEqual(0, provider.Calls, "provider must not receive photos without consent");
+}
+
+static void TestTryOnServiceBlocksAiUntilGenderIsSet()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    EnsureTestUser(store, userId, gender: null);
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id });
+    var provider = new CountingTryOnProvider();
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), new SystemClock());
+
+    var aiEstimate = service.Estimate(userId, outfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/person.jpg", null);
+    var freeEstimate = service.Estimate(userId, outfit.Id, TryOnMode.ClothesOnlyPreview, "", null);
+
+    AssertTrue(!aiEstimate.IsAvailable, "AI try-on should be unavailable until gender is set.");
+    AssertTrue(aiEstimate.Warnings.Any(warning => warning.Contains("gender", StringComparison.OrdinalIgnoreCase)), "unavailable estimate should explain the missing gender.");
+    AssertTrue(freeEstimate.IsAvailable, "clothes-only preview should remain available without gender.");
+    AssertThrows<InvalidOperationException>(
+        () => service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, aiEstimate.EstimatedCredits, aiEstimate.CacheKey).GetAwaiter().GetResult(),
+        "AI generation should not start until gender is set.");
+
+    store.UpdateUser(store.GetUserById(userId)! with { Gender = UserGender.Female });
+    var availableEstimate = service.Estimate(userId, outfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/person.jpg", null);
+
+    AssertTrue(availableEstimate.IsAvailable, "AI try-on should become available after gender is set.");
 }
 
 static void TestTryOnServiceEstimatesCost()
@@ -1201,6 +1358,37 @@ static void TestTryOnServiceDeletesActivePreviewOutputByOutfit()
     AssertTrue(deletedJob?.OutputImageUrl is null, "matching try-on job should no longer expose an output image.");
     AssertTrue(deletedJob?.IsDeleted == true, "matching try-on job should be marked deleted.");
     AssertTrue(updatedOutfit?.PersonPreviewUrl is null, "deleting by outfit should clear the outfit person preview.");
+}
+
+static void TestTryOnServiceSendsCutoutGarmentImageToProvider()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id });
+    var provider = new CountingTryOnProvider();
+    var service = new TryOnService(
+        store,
+        store,
+        store,
+        new RecordingTryOnJobQueue(),
+        provider,
+        new TryOnCostEstimator(),
+        new SystemClock(),
+        new StubGarmentUrlRefresher());
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SequentialOutfitTryOn, "https://example.com/person.jpg", null);
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SequentialOutfitTryOn, estimate.EstimatedCredits, estimate.CacheKey)
+        .GetAwaiter()
+        .GetResult();
+
+    service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
+
+    AssertEqual(1, provider.Calls, "queued AI job should call the provider once.");
+    AssertEqual(
+        "https://cdn.test/cutout.png",
+        provider.LastRequest?.BodyTryOnItems[0].ThumbnailUrl,
+        "provider should receive the high-res cutout garment image, not the 512px thumbnail.");
 }
 
 static void TestTryOnServiceCompletesClothesOnlyWithoutAi()
@@ -1410,6 +1598,26 @@ static void TestTryOnServiceForwardsSequentialFlowOption()
     AssertTrue(provider.LastRequest?.Mode == TryOnMode.SequentialOutfitTryOn, "provider should receive sequential flow option");
 }
 
+static void TestTryOnProcessorPassesGenderToProvider()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-a";
+    EnsureTestUser(store, userId, UserGender.Female);
+    var top = store.CreateGarment(CreateGarment(userId, "white tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock())
+        .CreateOutfit(userId, "casual", new[] { top.Id });
+    var provider = new CountingTryOnProvider();
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), new SystemClock());
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/person.jpg", null);
+
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, estimate.EstimatedCredits, estimate.CacheKey)
+        .GetAwaiter()
+        .GetResult();
+    service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
+
+    AssertEqual(UserGender.Female, provider.LastRequest?.UserGender, "provider request should include persisted user gender.");
+}
+
 static void TestApiRegistersRedisQueueAndProviderChoices()
 {
     var programPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "OutfitPlanner.Api", "Program.cs"));
@@ -1448,7 +1656,8 @@ static void TestApiMapsDotEnvFashnAliases()
         "(\"FASHN_SEGMENTATION_FREE\", \"Fashn:SegmentationFree\")",
         "(\"FASHN_GARMENT_PHOTO_TYPE\", \"Fashn:GarmentPhotoType\")",
         "(\"FASHN_SEED\", \"Fashn:Seed\")",
-        "(\"FASHN_PERSON_HINT\", \"Fashn:PersonHint\")"
+        "(\"FASHN_RESOLUTION\", \"Fashn:Resolution\")",
+        "(\"FASHN_GENDER_PROMPT_TEMPLATE\", \"Fashn:GenderPromptTemplate\")"
     })
     {
         AssertTrue(program.Contains(mapping, StringComparison.Ordinal), $"api startup should map {mapping}.");
@@ -1576,7 +1785,7 @@ static void TestImageProcessingPipelineContracts()
 {
     AssertTrue(typeof(IImageProcessor).IsInterface, "application should expose an image processing port.");
     var variantNames = Enum.GetNames<StoredImageVariant>();
-    foreach (var variant in new[] { "Original", "Thumbnail", "ProcessedCutout", "TryOnOutput", "PrivatePreview", "SegmentationMask" })
+    foreach (var variant in new[] { "Original", "Thumbnail", "ProcessedCutout", "TryOnOutput", "PrivatePreview", "SegmentationMask", "BaseCutout" })
     {
         AssertTrue(variantNames.Contains(variant), $"stored image variant {variant} should be modeled.");
     }
@@ -1637,6 +1846,84 @@ static void TestImageProcessorDelegatesGarmentCutout()
     AssertTrue(provider.LastRequest?.ImageBytes.Length > 0, "background remover should receive image bytes");
     AssertTrue(processed.Images.Any(image => image.Variant == StoredImageVariant.ProcessedCutout && image.ContentType == "image/png"), "garment processing should store a png cutout variant");
     AssertTrue(processed.Images.Any(image => image.Variant == StoredImageVariant.SegmentationMask && image.ContentType == "image/png"), "garment processing should store a png segmentation mask");
+}
+
+static void TestImageProcessorEmitsBaseCutoutVariant()
+{
+    var processor = new ImageProcessor(new RecordingBackgroundRemovalProvider(MinimalPngBytes()));
+    var bytes = MinimalPngBytes();
+
+    var processed = processor.ProcessGarmentPhoto(new IncomingPhoto("shirt.png", "image/png", bytes.Length, new MemoryStream(bytes)));
+
+    AssertTrue(
+        processed.Images.Any(image => image.Variant == StoredImageVariant.BaseCutout && image.ContentType == "image/png"),
+        "garment processing should emit an immutable base-cutout variant to rotate from later");
+}
+
+static void TestGarmentDeskewStraightensTiltedSilhouette()
+{
+    var processor = new ImageProcessor(new RecordingBackgroundRemovalProvider(MinimalPngBytes()));
+    var tilted = TiltedRectanglePng(420, 420, 90, 260, 15);
+
+    var correction = processor.ComputeGarmentDeskewAngle(tilted);
+    AssertTrue(
+        Math.Abs(correction) > 5d && Math.Abs(correction) <= 30d,
+        $"deskew should detect the ~15deg tilt within the cap (got {correction:0.0})");
+
+    var rendered = processor.RenderRotatedGarment(tilted, correction);
+    var residual = processor.ComputeGarmentDeskewAngle(rendered.CutoutPng);
+    AssertTrue(
+        Math.Abs(residual) < Math.Abs(correction),
+        $"applying the correction should reduce the tilt (residual {residual:0.0} vs correction {correction:0.0})");
+    AssertTrue(
+        Math.Abs(residual) < 5d,
+        $"straightened silhouette should be near upright (residual {residual:0.0})");
+}
+
+static void TestGarmentDeskewSkipsSquareAndExtremeTilt()
+{
+    var processor = new ImageProcessor(new RecordingBackgroundRemovalProvider(MinimalPngBytes()));
+
+    var square = TiltedRectanglePng(420, 420, 200, 200, 12);
+    AssertEqual(0d, processor.ComputeGarmentDeskewAngle(square), "near-square silhouette has no dominant axis, so it should not be auto-straightened");
+
+    var extreme = TiltedRectanglePng(560, 560, 90, 300, 45);
+    AssertEqual(0d, processor.ComputeGarmentDeskewAngle(extreme), "a tilt beyond the cap should be skipped rather than over-rotated");
+}
+
+static void TestImageProcessorRendersRotatedGarmentVariants()
+{
+    var processor = new ImageProcessor(new RecordingBackgroundRemovalProvider(MinimalPngBytes()));
+    var upright = TiltedRectanglePng(300, 420, 100, 300, 0);
+
+    var rendered = processor.RenderRotatedGarment(upright, 90);
+
+    using var cutout = Image.Load<Rgba32>(rendered.CutoutPng);
+    AssertTrue(cutout.Width > cutout.Height, "rotating a tall cutout by 90deg should yield a wider-than-tall image");
+    AssertTrue(rendered.ThumbnailPng.Length > 0, "rotation should render a thumbnail variant");
+    AssertTrue(rendered.SegmentationMaskPng.Length > 0, "rotation should render a segmentation mask variant");
+    AssertTrue(!string.IsNullOrEmpty(rendered.PerceptualHash), "rotation should compute a perceptual hash");
+
+    // A non-axis-aligned rotation leaves transparent corners in the (tightly cropped) bounding box.
+    var diagonal = processor.RenderRotatedGarment(upright, 30);
+    using var diagonalCutout = Image.Load<Rgba32>(diagonal.CutoutPng);
+    var hasTransparent = false;
+    diagonalCutout.ProcessPixelRows(accessor =>
+    {
+        for (var y = 0; y < accessor.Height && !hasTransparent; y++)
+        {
+            var row = accessor.GetRowSpan(y);
+            for (var x = 0; x < row.Length; x++)
+            {
+                if (row[x].A < 255)
+                {
+                    hasTransparent = true;
+                    break;
+                }
+            }
+        }
+    });
+    AssertTrue(hasTransparent, "a diagonal rotation should fill exposed corners with transparency");
 }
 
 static void TestHttpBackgroundRemovalProviderPostsMultipartImageWithApiKey()
@@ -2197,8 +2484,7 @@ static void TestFashnProviderSendsConfiguredGenerationOptions()
             ReturnBase64: true,
             SegmentationFree: false,
             GarmentPhotoType: "model",
-            Seed: 42,
-            PersonHint: "original"));
+            Seed: 42));
 
     provider.Generate(CreateProviderRequest(CreateSingleGarmentOutfit(), TryOnMode.SingleGarmentTryOn));
 
@@ -2211,7 +2497,82 @@ static void TestFashnProviderSendsConfiguredGenerationOptions()
     AssertTrue(!inputs.GetProperty("segmentation_free").GetBoolean(), "request should use configured segmentation mode.");
     AssertEqual("model", inputs.GetProperty("garment_photo_type").GetString(), "request should use configured garment photo type.");
     AssertEqual(42, inputs.GetProperty("seed").GetInt32(), "request should use configured seed.");
-    AssertEqual("original", inputs.GetProperty("person_hint").GetString(), "request should use configured person hint.");
+    AssertTrue(!inputs.TryGetProperty("person_hint", out _), "legacy FASHN requests should not send stale person hint configuration.");
+}
+
+static void TestFashnProviderSendsTryOnMaxQualityGenderPrompt()
+{
+    var handler = new RecordingFashnHandler();
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-1\",\"error\":null}");
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-1\",\"status\":\"completed\",\"output\":[\"https://cdn.fashn.ai/output.png\"],\"error\":null}");
+    var provider = new FashnTryOnProvider(
+        new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
+        new FashnTryOnSettings(
+            "test-key",
+            "tryon-max",
+            "quality",
+            2,
+            TimeSpan.Zero,
+            NumSamples: 1,
+            OutputFormat: "png",
+            ReturnBase64: false,
+            SegmentationFree: true,
+            GarmentPhotoType: "auto",
+            Seed: 42,
+            Resolution: "4k",
+            GenderPromptTemplate: "Use a {gender} model for this virtual try-on."));
+
+    var request = CreateProviderRequest(CreateSingleGarmentOutfit(), TryOnMode.SingleGarmentTryOn) with
+    {
+        UserGender = UserGender.Female
+    };
+    provider.Generate(request);
+
+    AssertEqual("tryon-max", provider.Capabilities.ModelName, "FASHN should use the best model by configuration.");
+    AssertEqual(5, provider.Capabilities.CreditsPerRun, "tryon-max quality 4k should charge the premium FASHN credit amount.");
+    using var body = JsonDocument.Parse(handler.Requests[0].Body);
+    AssertEqual("tryon-max", body.RootElement.GetProperty("model_name").GetString(), "request should send tryon-max model.");
+    var inputs = body.RootElement.GetProperty("inputs");
+    AssertEqual("https://app.test/user.jpg", inputs.GetProperty("model_image").GetString(), "tryon-max should send model image.");
+    AssertEqual("https://app.test/shirt.png", inputs.GetProperty("product_image").GetString(), "tryon-max should send product image.");
+    AssertEqual("quality", inputs.GetProperty("generation_mode").GetString(), "tryon-max should use quality generation.");
+    AssertEqual("4k", inputs.GetProperty("resolution").GetString(), "tryon-max should request 4k output.");
+    AssertEqual(1, inputs.GetProperty("num_images").GetInt32(), "tryon-max should request one image.");
+    AssertEqual("png", inputs.GetProperty("output_format").GetString(), "tryon-max should use configured output format.");
+    AssertTrue(inputs.GetProperty("prompt").GetString()?.Contains("female", StringComparison.OrdinalIgnoreCase) == true, "tryon-max prompt should include user gender.");
+}
+
+static void TestFashnProviderOmitsPromptWhenNoTemplateConfigured()
+{
+    var handler = new RecordingFashnHandler();
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-1\",\"error\":null}");
+    handler.EnqueueJson(HttpStatusCode.OK, "{\"id\":\"prediction-1\",\"status\":\"completed\",\"output\":[\"https://cdn.fashn.ai/output.png\"],\"error\":null}");
+    var provider = new FashnTryOnProvider(
+        new HttpClient(handler) { BaseAddress = new Uri("https://api.test/v1/") },
+        new FashnTryOnSettings(
+            "test-key",
+            "tryon-max",
+            "quality",
+            2,
+            TimeSpan.Zero,
+            NumSamples: 1,
+            OutputFormat: "png",
+            ReturnBase64: false,
+            SegmentationFree: true,
+            GarmentPhotoType: "auto",
+            Seed: 42,
+            Resolution: "4k",
+            GenderPromptTemplate: ""));
+
+    var request = CreateProviderRequest(CreateSingleGarmentOutfit(), TryOnMode.SingleGarmentTryOn) with
+    {
+        UserGender = UserGender.Female
+    };
+    provider.Generate(request);
+
+    using var body = JsonDocument.Parse(handler.Requests[0].Body);
+    var inputs = body.RootElement.GetProperty("inputs");
+    AssertTrue(!inputs.TryGetProperty("prompt", out _), "tryon-max must not send a prompt when no gender prompt template is configured.");
 }
 
 static void TestFashnProviderSubmitsRequestAndPollsStatus()
@@ -2310,8 +2671,7 @@ static FashnTryOnSettings CreateFashnSettings(IConfiguration configuration)
         SegmentationFree: ReadBool(section["SegmentationFree"], false),
 
         GarmentPhotoType: section["GarmentPhotoType"] ?? "auto",
-        Seed: ReadNullableInt(section["Seed"]),
-        PersonHint: section["PersonHint"]);
+        Seed: ReadNullableInt(section["Seed"]));
 }
 #pragma warning restore CS8321
 
@@ -2328,8 +2688,7 @@ static FashnTryOnSettings CreateTestFashnSettings(string apiKey, string modelNam
         ReturnBase64: false,
         SegmentationFree: true,
         GarmentPhotoType: "auto",
-        Seed: null,
-        PersonHint: null);
+        Seed: null);
 }
 
 static int ReadInt(string? value, int fallback)
@@ -2350,6 +2709,33 @@ static int? ReadNullableInt(string? value)
 static byte[] MinimalPngBytes()
 {
     return Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXY/j///9/AAn7A/0FQ0XKAAAAAElFTkSuQmCC");
+}
+
+static byte[] TiltedRectanglePng(int width, int height, int rectWidth, int rectHeight, double tiltDegrees)
+{
+    using var image = new Image<Rgba32>(width, height);
+    var startX = (width - rectWidth) / 2;
+    var startY = (height - rectHeight) / 2;
+    image.ProcessPixelRows(accessor =>
+    {
+        for (var y = startY; y < startY + rectHeight; y++)
+        {
+            var row = accessor.GetRowSpan(y);
+            for (var x = startX; x < startX + rectWidth; x++)
+            {
+                row[x] = new Rgba32(30, 30, 35, 255);
+            }
+        }
+    });
+
+    if (Math.Abs(tiltDegrees) > 0.01)
+    {
+        image.Mutate(operation => operation.Rotate((float)tiltDegrees));
+    }
+
+    using var output = new MemoryStream();
+    image.Save(output, new SixLabors.ImageSharp.Formats.Png.PngEncoder());
+    return output.ToArray();
 }
 
 static bool ImageHasTransparentPixel(string path)
@@ -2437,6 +2823,23 @@ static TryOnProviderRequest CreateProviderRequest(Outfit outfit, TryOnMode mode)
         bodyItems,
         visualItems,
         new TryOnGenerationSettings("tryon-v1.6", "balanced", "tryon-v1.6:balanced"));
+}
+
+static void EnsureTestUser(IUserAccountRepository store, string userId, UserGender? gender)
+{
+    var now = DateTimeOffset.UtcNow;
+    store.AddUser(new UserAccount(
+        userId,
+        $"{userId}@example.test",
+        $"{userId}@example.test",
+        userId,
+        null,
+        now,
+        now,
+        now)
+    {
+        Gender = gender
+    });
 }
 
 static Outfit CreateOutfitWithItems(params OutfitItem[] items)
@@ -2603,6 +3006,14 @@ sealed class CountingTryOnProvider : ITryOnProvider
     }
 }
 
+sealed class StubGarmentUrlRefresher : IStoredPhotoUrlRefresher
+{
+    public string RefreshGarmentImageUrl(string photoUrl) => "https://cdn.test/cutout.png";
+    public string RefreshGarmentThumbnailUrl(string photoUrl) => "https://cdn.test/thumb.png";
+    public string RefreshBodyReferencePhotoUrl(string photoUrl) => photoUrl;
+    public string RefreshAvatarUrl(string photoUrl) => photoUrl;
+}
+
 sealed class RecordingTryOnOutputStorage : ITryOnOutputStorage
 {
     public RecordingTryOnOutputStorage(string storedUrl)
@@ -2673,6 +3084,30 @@ sealed class RecordingBackgroundRemovalProvider : IBackgroundRemovalProvider
     }
 }
 
+sealed class RecordingGarmentImageRotator : IGarmentImageRotator
+{
+    public double AutoStraightenAngle { get; init; } = 12d;
+
+    public int ComputeCalls { get; private set; }
+
+    public int RotateCalls { get; private set; }
+
+    public double? LastRotateDegrees { get; private set; }
+
+    public double ComputeGarmentAutoStraightenAngle(string garmentImageUrl)
+    {
+        ComputeCalls++;
+        return AutoStraightenAngle;
+    }
+
+    public GarmentRotationOutcome RotateGarment(string garmentImageUrl, double degrees)
+    {
+        RotateCalls++;
+        LastRotateDegrees = degrees;
+        return new GarmentRotationOutcome($"{garmentImageUrl}#cutout{degrees:0.##}", $"{garmentImageUrl}#thumb{degrees:0.##}", "rotated-hash");
+    }
+}
+
 sealed class RecordingBackgroundRemovalHandler : HttpMessageHandler
 {
     private readonly byte[] _responseBytes;
@@ -2737,6 +3172,15 @@ sealed class CountingPhotoStorage : IPhotoStorage
     {
         Calls++;
         return new StoredPhoto("test.jpg", photo.ContentType, photo.Length, "/uploads/body-reference-photos/test.jpg");
+    }
+
+    public StoredPhoto SaveAvatarPhoto(IncomingPhoto photo)
+    {
+        Calls++;
+        return new StoredPhoto("test.jpg", photo.ContentType, photo.Length, "/api/storage/signed/avatars/thumbnail/test.jpg")
+        {
+            ThumbnailObjectKey = "avatars/thumbnail/test.jpg"
+        };
     }
 }
 

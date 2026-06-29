@@ -13,13 +13,15 @@ public sealed class WardrobeService
     private readonly IGarmentRepository _garments;
     private readonly IClock _clock;
     private readonly IStoredPhotoDeletion? _photoDeletion;
+    private readonly IGarmentImageRotator? _imageRotator;
 
-    public WardrobeService(IBodyReferencePhotoRepository bodyPhotos, IGarmentRepository garments, IClock clock, IStoredPhotoDeletion? photoDeletion = null)
+    public WardrobeService(IBodyReferencePhotoRepository bodyPhotos, IGarmentRepository garments, IClock clock, IStoredPhotoDeletion? photoDeletion = null, IGarmentImageRotator? imageRotator = null)
     {
         _bodyPhotos = bodyPhotos;
         _garments = garments;
         _clock = clock;
         _photoDeletion = photoDeletion;
+        _imageRotator = imageRotator;
     }
 
     public BodyReferencePhoto CreateBodyReferencePhoto(string userId, string imageUrl)
@@ -51,6 +53,23 @@ public sealed class WardrobeService
     {
         var userId = InputGuard.NormalizeUserId(command.UserId);
         var imageUrl = InputGuard.RequireText(command.ImageUrl, "Garment image URL");
+        var thumbnailUrl = string.IsNullOrWhiteSpace(command.ThumbnailUrl) ? imageUrl : command.ThumbnailUrl.Trim();
+        var rotationDegrees = 0d;
+
+        // Auto-straighten clothing categories from their silhouette; accessories/shoes/bags/hats
+        // are often angled on purpose and are left untouched.
+        if (_imageRotator is not null && ShouldAutoStraighten(command.Category))
+        {
+            var angle = NormalizeRotation(_imageRotator.ComputeGarmentAutoStraightenAngle(imageUrl));
+            if (Math.Abs(angle) >= 0.5d)
+            {
+                var rotated = _imageRotator.RotateGarment(imageUrl, angle);
+                imageUrl = rotated.ImageUrl;
+                thumbnailUrl = rotated.ThumbnailUrl;
+                rotationDegrees = angle;
+            }
+        }
+
         var garment = new GarmentItem(
             Guid.NewGuid(),
             userId,
@@ -58,7 +77,7 @@ public sealed class WardrobeService
             command.Category,
             GarmentRules.GetBodyZone(command.Category),
             imageUrl,
-            string.IsNullOrWhiteSpace(command.ThumbnailUrl) ? imageUrl : command.ThumbnailUrl.Trim(),
+            thumbnailUrl,
             NormalizeTags(command.Tags),
             NormalizeToken(command.PrimaryColor),
             NormalizeTokens(command.SecondaryColors ?? Array.Empty<string>()),
@@ -76,7 +95,8 @@ public sealed class WardrobeService
             command.IsArchived,
             command.LastWornAt,
             NormalizeLaundryStatus(command.LaundryStatus),
-            _clock.UtcNow);
+            _clock.UtcNow,
+            rotationDegrees);
 
         ValidateWeatherRange(garment.WeatherMinTemp, garment.WeatherMaxTemp);
         _garments.AddGarment(garment);
@@ -133,6 +153,28 @@ public sealed class WardrobeService
         };
 
         ValidateWeatherRange(updated.WeatherMinTemp, updated.WeatherMaxTemp);
+
+        // Manual rotate: re-render the displayed cutout/thumbnail/mask from the immutable base
+        // at the requested absolute angle (available for every category), and persist the angle.
+        if (command.RotationDegrees is { } requestedDegrees && _imageRotator is not null)
+        {
+            var normalized = NormalizeRotation(requestedDegrees);
+            if (Math.Abs(normalized - existing.RotationDegrees) >= 0.5d)
+            {
+                var rotated = _imageRotator.RotateGarment(existing.ImageUrl, normalized);
+                updated = updated with
+                {
+                    ImageUrl = rotated.ImageUrl,
+                    ThumbnailUrl = rotated.ThumbnailUrl,
+                    RotationDegrees = normalized
+                };
+            }
+            else
+            {
+                updated = updated with { RotationDegrees = normalized };
+            }
+        }
+
         _garments.UpdateGarment(updated);
         return updated;
     }
@@ -217,6 +259,26 @@ public sealed class WardrobeService
         {
             throw new InvalidOperationException("Weather max temperature must be greater than or equal to weather min temperature.");
         }
+    }
+
+    private static bool ShouldAutoStraighten(GarmentCategory category)
+    {
+        return category is GarmentCategory.Top or GarmentCategory.Bottom or GarmentCategory.Dress or GarmentCategory.Outerwear;
+    }
+
+    private static double NormalizeRotation(double degrees)
+    {
+        var wrapped = degrees % 360d;
+        if (wrapped > 180d)
+        {
+            wrapped -= 360d;
+        }
+        else if (wrapped <= -180d)
+        {
+            wrapped += 360d;
+        }
+
+        return wrapped;
     }
 
     private static string NormalizeLaundryStatus(string? status)

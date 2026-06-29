@@ -31,6 +31,9 @@ appsettings.*.json
 !.env.*.example
 .superpowers/
 design_references/
+.codex-memory-restore/
+.claude/
+docs/
 
 secrets.json
 *.secrets.json
@@ -72,6 +75,7 @@ compose.local.yml
 front-clay-*.png
 .DS_Store
 Thumbs.db
+
 
 outfit_planner_back/storage/
 outfit_planner_back/src/OutfitPlanner.Api/storage/

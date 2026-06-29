@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,13 +8,24 @@ import { AppShell } from './AppShell';
 function renderShell() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
     if (url.endsWith('/auth/me')) {
       return jsonResponse({
-        user: { id: 'user-1', email: 'sienna@example.test', displayName: 'Sienna Studio' },
+        user: { id: 'user-1', email: 'sienna@example.test', displayName: 'Sienna Studio', username: 'Sienna Studio', avatarUrl: null, gender: null },
         expiresAt: '2026-07-20T12:00:00Z'
       });
+    }
+
+    if (url.endsWith('/account/profile') && init?.method === 'PATCH') {
+      return jsonResponse({
+        user: { id: 'user-1', email: 'sienna@example.test', displayName: 'Dmytro Bolibok', username: 'Dmytro Bolibok', avatarUrl: null, gender: 'Male' },
+        expiresAt: '2026-07-20T12:00:00Z'
+      });
+    }
+
+    if (url.endsWith('/auth/logout') && init?.method === 'POST') {
+      return jsonResponse({ status: 'signed-out' });
     }
 
     if (url.endsWith('/auth/providers')) {
@@ -24,7 +35,7 @@ function renderShell() {
     return jsonResponse({});
   });
 
-  return render(
+  const view = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/wardrobe']}>
         <Routes>
@@ -35,6 +46,8 @@ function renderShell() {
       </MemoryRouter>
     </QueryClientProvider>
   );
+
+  return { ...view, fetchMock };
 }
 
 describe('AppShell editorial frame', () => {
@@ -67,6 +80,43 @@ describe('AppShell editorial frame', () => {
 
     expect(container.querySelector('.editorial-shell')).toHaveAttribute('data-theme', 'dark');
     expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('opens account settings and saves username with gender', async () => {
+    const { fetchMock } = renderShell();
+
+    await userEvent.click(await screen.findByRole('button', { name: /sienna studio/i }));
+    expect(screen.getByRole('dialog', { name: /account settings/i })).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText(/username/i));
+    await userEvent.type(screen.getByLabelText(/username/i), 'Dmytro Bolibok');
+    await userEvent.click(screen.getByRole('button', { name: /^male$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => {
+      const profileCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/account/profile') && init?.method === 'PATCH');
+      expect(profileCall).toBeDefined();
+      expect(JSON.parse(profileCall?.[1]?.body as string)).toMatchObject({
+        username: 'Dmytro Bolibok',
+        gender: 'Male'
+      });
+    });
+    expect(await screen.findAllByText('Dmytro Bolibok')).not.toHaveLength(0);
+  });
+
+  it('confirms sign out inside account settings before logging out', async () => {
+    const { fetchMock } = renderShell();
+
+    await userEvent.click(await screen.findByRole('button', { name: /sienna studio/i }));
+    await userEvent.click(screen.getByRole('button', { name: /sign out/i }));
+
+    expect(screen.getByRole('dialog', { name: /confirm sign out/i })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/auth/logout'))).toBe(false);
+
+    await userEvent.click(screen.getByRole('button', { name: /confirm sign out/i }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/auth/logout') && init?.method === 'POST')).toBe(true);
+    });
   });
 });
 

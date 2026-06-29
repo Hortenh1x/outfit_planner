@@ -165,6 +165,42 @@ public sealed class AuthService
         return _users.DeleteExpiredAuthSessions(_clock.UtcNow);
     }
 
+    public PublicUser UpdateProfile(string userId, string username, UserGender? gender)
+    {
+        var cleanUserId = RequireText(userId, "User id");
+        var cleanUsername = NormalizeUsername(username);
+        var user = _users.GetUserById(cleanUserId)
+            ?? throw new InvalidOperationException("Account was not found.");
+        var now = _clock.UtcNow;
+        var updated = user with
+        {
+            DisplayName = cleanUsername,
+            Gender = gender,
+            UpdatedAt = now
+        };
+
+        _users.UpdateUser(updated);
+        return ToPublicUser(updated);
+    }
+
+    public PublicUser UpdateAvatar(string userId, string avatarUrl, string? avatarObjectKey)
+    {
+        var cleanUserId = RequireText(userId, "User id");
+        var cleanAvatarUrl = RequireText(avatarUrl, "Avatar URL");
+        var user = _users.GetUserById(cleanUserId)
+            ?? throw new InvalidOperationException("Account was not found.");
+        var now = _clock.UtcNow;
+        var updated = user with
+        {
+            AvatarUrl = cleanAvatarUrl,
+            AvatarObjectKey = string.IsNullOrWhiteSpace(avatarObjectKey) ? null : avatarObjectKey.Trim(),
+            UpdatedAt = now
+        };
+
+        _users.UpdateUser(updated);
+        return ToPublicUser(updated);
+    }
+
     public string CreateEmailVerificationToken(string email)
     {
         var normalizedEmail = NormalizeEmail(email);
@@ -298,7 +334,7 @@ public sealed class AuthService
 
     private static PublicUser ToPublicUser(UserAccount user)
     {
-        return new PublicUser(user.Id, user.Email, user.DisplayName);
+        return new PublicUser(user.Id, user.Email, user.DisplayName, user.AvatarUrl, user.Gender);
     }
 
     private static string NormalizeProvider(string provider)
@@ -356,6 +392,17 @@ public sealed class AuthService
         return value.Trim();
     }
 
+    private static string NormalizeUsername(string username)
+    {
+        var clean = RequireText(username, "Username");
+        if (clean.Length > 80)
+        {
+            throw new InvalidOperationException("Username must be 80 characters or shorter.");
+        }
+
+        return clean;
+    }
+
     private static string DisplayNameFromEmail(string normalizedEmail)
     {
         var at = normalizedEmail.IndexOf('@', StringComparison.Ordinal);
@@ -375,7 +422,10 @@ public sealed record ExternalSignInCommand(
     bool EmailVerified,
     string? DisplayName);
 
-public sealed record PublicUser(string Id, string? Email, string DisplayName);
+public sealed record PublicUser(string Id, string? Email, string Username, string? AvatarUrl, UserGender? Gender)
+{
+    public string DisplayName => Username;
+}
 
 public sealed record AuthResult(PublicUser User, string SessionToken, string CsrfToken, DateTimeOffset ExpiresAt);
 

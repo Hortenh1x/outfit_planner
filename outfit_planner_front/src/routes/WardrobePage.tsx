@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listGarments, type UpdateGarmentInput } from '../api/client';
 import { GarmentCard } from '../features/wardrobe/GarmentCard';
@@ -12,6 +12,7 @@ import {
   type WardrobeFilterState
 } from '../features/wardrobe/wardrobeFilters';
 import { useWardrobeMutations, wardrobeQueryKey } from '../features/wardrobe/wardrobeMutations';
+import { useEagerGarmentUploads } from '../features/wardrobe/useEagerGarmentUploads';
 import {
   createUploadQueueItems,
   updateUploadQueueItem,
@@ -40,7 +41,14 @@ export function WardrobePage() {
     queryFn: () => listGarments(apiFilters)
   });
   const mutations = useWardrobeMutations();
+  const uploads = useEagerGarmentUploads(setUploadQueue);
   const allGarments = garmentsQuery.data ?? [];
+
+  // Kick off background removal as soon as items land in the queue, and refill
+  // concurrency slots whenever an upload settles and the queue changes.
+  useEffect(() => {
+    uploads.start(uploadQueue);
+  }, [uploadQueue, uploads]);
   const garments = filterGarmentsByLocalTags(allGarments, filters.tag);
   const existingTags = useMemo(() => {
     const tags = [...uploadDefaults.tags, ...allGarments.flatMap((garment) => garment.tags ?? [])];
@@ -66,6 +74,18 @@ export function WardrobePage() {
 
   function changeQueueItem(itemId: string, updates: UploadQueueItemUpdates) {
     setUploadQueue((current) => current.map((item) => (item.id === itemId ? updateUploadQueueItem(item, updates) : item)));
+  }
+
+  function retryQueueItem(itemId: string) {
+    // Re-queue the item; the eager-upload effect restarts processing.
+    setUploadQueue((current) =>
+      current.map((item) => (item.id === itemId ? { ...item, status: 'queued', error: null } : item))
+    );
+  }
+
+  function removeQueueItem(itemId: string) {
+    uploads.abort(itemId);
+    setUploadQueue((current) => current.filter((item) => item.id !== itemId));
   }
 
   function resetFilters() {
@@ -146,7 +166,8 @@ export function WardrobePage() {
           onAddFiles={addFiles}
           onChangeItem={changeQueueItem}
           onDefaultsChange={setUploadDefaults}
-          onRemoveItem={(itemId) => setUploadQueue((current) => current.filter((item) => item.id !== itemId))}
+          onRemoveItem={removeQueueItem}
+          onRetryItem={retryQueueItem}
           onSubmitAll={() => mutations.uploadQueueMutation.mutate(uploadQueue, { onSuccess: () => setUploadQueue([]) })}
         />
       )}

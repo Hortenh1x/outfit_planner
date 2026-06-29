@@ -206,7 +206,14 @@ describe('WardrobePage', () => {
     await userEvent.upload(fileInput, [shirt, tiny]);
 
     expect(await screen.findByLabelText(/upload queue/i)).toBeInTheDocument();
-    expect(await screen.findByRole('img', { name: /preview of cream-linen-shirt\.png/i })).toHaveAttribute('src', 'blob:preview');
+    // Background removal starts on selection: the preview swaps to the processed cutout.
+    await waitFor(() => {
+      expect(screen.getByRole('img', { name: /preview of cream-linen-shirt\.png/i })).toHaveAttribute(
+        'src',
+        '/uploads/new-garment-cutout.png'
+      );
+    });
+    expect(fetchMock).toHaveBeenCalledWith('/api/uploads/garment-photo', expect.objectContaining({ method: 'POST' }));
     expect(screen.getByDisplayValue(/cream linen shirt/i)).toBeInTheDocument();
     expect(screen.getAllByText(/needs better photo/i).length).toBeGreaterThan(0);
     expect(within(screen.getByLabelText(/tags for cream linen shirt/i)).getByText(/linen/i)).toBeInTheDocument();
@@ -220,10 +227,12 @@ describe('WardrobePage', () => {
     });
     expect(await screen.findByDisplayValue(/brown wool blazer/i)).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: /add garments/i }));
+    // Wait until eager background removal settles, then submit only creates garments.
+    const submitButton = await screen.findByRole('button', { name: /add garments/i });
+    await waitFor(() => expect(submitButton).toBeEnabled());
+    await userEvent.click(submitButton);
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/uploads/garment-photo', expect.objectContaining({ method: 'POST' }));
       expect(fetchMock).toHaveBeenCalledWith('/api/garments', expect.objectContaining({ method: 'POST', body: expect.stringContaining('Cream linen shirt') }));
       expect(fetchMock).toHaveBeenCalledWith('/api/garments', expect.objectContaining({ method: 'POST', body: expect.stringContaining('Brown wool blazer') }));
     });
@@ -272,12 +281,19 @@ describe('WardrobePage', () => {
     expect(within(rowTags).getByText('bottom')).toBeInTheDocument();
     expect(within(rowTags).queryByText('top')).not.toBeInTheDocument();
 
-    await userEvent.clear(within(uploadQueue).getByLabelText(/^tags$/i));
-    await userEvent.type(within(uploadQueue).getByLabelText(/^tags$/i), 'formal');
+    // Adding a tag through the chip editor freezes auto-suggestion (tagsEdited = true).
+    await userEvent.type(within(uploadQueue).getByLabelText('Add tag'), 'formal{enter}');
     expect(within(rowTags).getByText('formal')).toBeInTheDocument();
-    expect(within(rowTags).queryByText('plain')).not.toBeInTheDocument();
-    expect(within(rowTags).queryByText('shirt')).not.toBeInTheDocument();
-    expect(within(rowTags).queryByText('bottom')).not.toBeInTheDocument();
+
+    // Frozen tags are no longer rewritten when other row fields change.
+    await userEvent.clear(within(uploadQueue).getByLabelText(/^color$/i));
+    await userEvent.type(within(uploadQueue).getByLabelText(/^color$/i), 'cobalt');
+    expect(within(rowTags).queryByText('cobalt')).not.toBeInTheDocument();
+    expect(within(rowTags).getByText('formal')).toBeInTheDocument();
+
+    // The trash control removes just that tag.
+    await userEvent.click(within(rowTags).getByRole('button', { name: /remove tag formal/i }));
+    expect(within(rowTags).queryByText('formal')).not.toBeInTheDocument();
   });
 });
 
@@ -295,7 +311,14 @@ function mockWardrobeFetch(options: { emptyForSearch?: boolean } = {}) {
     }
 
     if (url.endsWith('/uploads/garment-photo') && method === 'POST') {
-      return jsonResponse({ fileName: 'new-garment.png', contentType: 'image/png', length: 128, url: '/uploads/new-garment.png' }, 201);
+      return jsonResponse({
+        fileName: 'new-garment.png',
+        contentType: 'image/png',
+        length: 128,
+        url: '/uploads/new-garment.png',
+        thumbnailUrl: '/uploads/new-garment-thumb.png',
+        cutoutUrl: '/uploads/new-garment-cutout.png'
+      }, 201);
     }
 
     if (url.endsWith('/garments') && method === 'POST') {

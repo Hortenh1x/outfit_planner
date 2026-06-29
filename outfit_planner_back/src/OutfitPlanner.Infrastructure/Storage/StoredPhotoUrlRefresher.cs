@@ -31,6 +31,11 @@ public sealed class StoredPhotoUrlRefresher : IStoredPhotoUrlRefresher
         return RefreshLocalSignedUrl(photoUrl, "body-reference-photos", StoredImageVariant.Original);
     }
 
+    public string RefreshAvatarUrl(string photoUrl)
+    {
+        return RefreshLocalSignedUrl(photoUrl, "avatars", StoredImageVariant.Thumbnail);
+    }
+
     private string RefreshLocalSignedUrl(string photoUrl, string collection, StoredImageVariant preferredVariant)
     {
         var objectKey = TryReadLocalSignedObjectKey(photoUrl);
@@ -84,6 +89,7 @@ public sealed class StoredPhotoUrlRefresher : IStoredPhotoUrlRefresher
         }
 
         var path = Uri.TryCreate(photoUrl, UriKind.Absolute, out var absoluteUri)
+            && absoluteUri.Scheme is "http" or "https"
             ? absoluteUri.AbsolutePath
             : photoUrl.Split('?', 2)[0];
         if (!path.StartsWith(LocalSignedRoutePrefix, StringComparison.OrdinalIgnoreCase))
@@ -99,14 +105,12 @@ public sealed class StoredPhotoUrlRefresher : IStoredPhotoUrlRefresher
 
     private string ToPublicUrl(string signedUrl)
     {
-        if (_publicOrigin is null || Uri.TryCreate(signedUrl, UriKind.Absolute, out _))
+        if (_publicOrigin is null || !signedUrl.StartsWith("/", StringComparison.Ordinal))
         {
             return signedUrl;
         }
 
-        return signedUrl.StartsWith("/", StringComparison.Ordinal)
-            ? $"{_publicOrigin}{signedUrl}"
-            : signedUrl;
+        return $"{_publicOrigin}{signedUrl}";
     }
 
     private static string? NormalizePublicOrigin(string? publicOrigin)

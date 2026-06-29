@@ -40,10 +40,15 @@ export interface AuthProvider {
   flow: 'password' | 'oauth' | 'oidc';
 }
 
+export type UserGender = 'Male' | 'Female';
+
 export interface AuthUser {
   id: string;
   email?: string | null;
   displayName: string;
+  username?: string | null;
+  avatarUrl?: string | null;
+  gender?: UserGender | null;
 }
 
 export interface AuthSession {
@@ -99,6 +104,7 @@ export interface GarmentMetadataInput {
   isArchived?: boolean;
   lastWornAt?: string | null;
   laundryStatus?: LaundryStatus;
+  rotationDegrees?: number | null;
 }
 
 export type UpdateGarmentInput = Partial<{
@@ -218,6 +224,22 @@ export function getCurrentSession(): Promise<AuthSession> {
   return request<AuthSession>('/auth/me');
 }
 
+export function updateAccountProfile(input: { username: string; gender: UserGender | null }): Promise<AuthSession> {
+  return request<AuthSession>('/account/profile', {
+    method: 'PATCH',
+    body: JSON.stringify(input)
+  });
+}
+
+export function uploadAccountAvatar(file: File): Promise<AuthSession> {
+  const formData = new FormData();
+  formData.append('file', file);
+  return request<AuthSession>('/account/avatar', {
+    method: 'POST',
+    body: formData
+  });
+}
+
 export function buildExternalAuthUrl(provider: 'google' | 'apple', returnUrl = '/builder'): string {
   return `${apiBaseUrl}/auth/external/${provider}/start?returnUrl=${encodeURIComponent(returnUrl)}`;
 }
@@ -250,15 +272,15 @@ export interface UploadedPhotoResponse {
   maskUrl?: string | null;
 }
 
-export async function uploadGarmentPhoto(file: File): Promise<UploadedPhotoResponse> {
-  return uploadPhoto('/uploads/garment-photo', file);
+export async function uploadGarmentPhoto(file: File, signal?: AbortSignal): Promise<UploadedPhotoResponse> {
+  return uploadPhoto('/uploads/garment-photo', file, signal);
 }
 
 export async function uploadBodyReferencePhoto(file: File): Promise<UploadedPhotoResponse> {
   return uploadPhoto('/uploads/body-reference-photo', file);
 }
 
-async function uploadPhoto(path: string, file: File): Promise<UploadedPhotoResponse> {
+async function uploadPhoto(path: string, file: File, signal?: AbortSignal): Promise<UploadedPhotoResponse> {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -274,7 +296,8 @@ async function uploadPhoto(path: string, file: File): Promise<UploadedPhotoRespo
     method: 'POST',
     credentials: 'include',
     headers,
-    body: formData
+    body: formData,
+    signal
   }, method, path);
 
   if (!response.ok) {

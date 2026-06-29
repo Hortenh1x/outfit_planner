@@ -37,7 +37,7 @@ services:
 
   api:
     image: mcr.microsoft.com/dotnet/sdk:10.0
-    command: dotnet watch --project src/OutfitPlanner.Api/OutfitPlanner.Api.csproj run
+    command: dotnet watch --project src/OutfitPlanner.Api/OutfitPlanner.Api.csproj run --no-launch-profile --urls https://0.0.0.0:8081
     working_dir: /src
     environment:
       ASPNETCORE_ENVIRONMENT: Development

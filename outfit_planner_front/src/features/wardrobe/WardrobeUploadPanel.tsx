@@ -5,6 +5,8 @@ import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
 import { UploadQueue } from './UploadQueue';
 import {
   cleanPhotoChecklist,
+  hasCreatableItems,
+  isQueueProcessing,
   type UploadQueueItem,
   type UploadQueueItemUpdates
 } from './wardrobeUpload';
@@ -29,6 +31,7 @@ interface WardrobeUploadPanelProps {
   onChangeItem: (itemId: string, updates: UploadQueueItemUpdates) => void;
   onDefaultsChange: (defaults: WardrobeUploadDefaults) => void;
   onRemoveItem: (itemId: string) => void;
+  onRetryItem: (itemId: string) => void;
   onSubmitAll: () => void;
 }
 
@@ -40,10 +43,12 @@ export function WardrobeUploadPanel({
   onChangeItem,
   onDefaultsChange,
   onRemoveItem,
+  onRetryItem,
   onSubmitAll
 }: WardrobeUploadPanelProps) {
-  const hasUploadableItem = queue.some((item) => item.status === 'ready' || item.status === 'failed');
-  const submitDisabled = isUploading || !hasUploadableItem;
+  const processing = isQueueProcessing(queue);
+  const submitDisabled = isUploading || processing || !hasCreatableItems(queue);
+  const submitLabel = isUploading ? 'Uploading' : processing ? 'Processing photos…' : 'Add garments';
   const [defaultsTextDraft, setDefaultsTextDraft] = useState<WardrobeUploadDefaultsTextDraft>(() => defaultsTextDraftFromDefaults(defaults));
 
   useEffect(() => {
@@ -153,10 +158,11 @@ export function WardrobeUploadPanel({
         disabled={isUploading}
         onChangeItem={onChangeItem}
         onRemove={onRemoveItem}
+        onRetry={onRetryItem}
       />
       <button type="button" className="wardrobe-primary-button" disabled={submitDisabled} onClick={onSubmitAll}>
         <Plus size={16} aria-hidden="true" />
-        {isUploading ? 'Uploading' : 'Add garments'}
+        {submitLabel}
       </button>
     </section>
   );

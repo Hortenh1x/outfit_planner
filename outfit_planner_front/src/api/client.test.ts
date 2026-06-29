@@ -21,8 +21,10 @@ import {
   revokeShare,
   startTryOn,
   unscheduleOutfit,
+  updateAccountProfile,
   updateGarment,
   updateOutfit,
+  uploadAccountAvatar,
   uploadGarmentPhoto,
   uploadBodyReferencePhoto
 } from './client';
@@ -128,6 +130,34 @@ describe('api client', () => {
     expect(JSON.parse(fetchMock.mock.calls[1][1]?.body as string)).toMatchObject({
       imageUrl: 'http://localhost:5000/api/storage/signed/body-reference-photos/original/body.png?expires=1&signature=sig'
     });
+  });
+
+  it('updates account profile fields and uploads account avatar', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        user: { id: 'usr_1', email: 'ada@example.com', displayName: 'Ada', username: 'Ada', avatarUrl: null, gender: 'Female' },
+        expiresAt: '2026-06-22T12:00:00Z'
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        user: { id: 'usr_1', email: 'ada@example.com', displayName: 'Ada', username: 'Ada', avatarUrl: '/api/storage/signed/avatars/thumbnail/avatar.png', gender: 'Female' },
+        expiresAt: '2026-06-22T12:00:00Z'
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }));
+
+    await updateAccountProfile({ username: 'Ada', gender: 'Female' });
+    await uploadAccountAvatar(new File(['avatar'], 'avatar.png', { type: 'image/png' }));
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/account/profile');
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'PATCH', credentials: 'include' });
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toMatchObject({ username: 'Ada', gender: 'Female' });
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/account/avatar');
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST', credentials: 'include' });
+    expect(fetchMock.mock.calls[1][1]?.body).toBeInstanceOf(FormData);
   });
 
   it('parses garment upload variant URLs', async () => {

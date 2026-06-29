@@ -219,6 +219,7 @@ else
     builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnectionString));
     builder.Services.AddSingleton<ITryOnJobQueue>(provider => new RedisTryOnJobQueue(provider.GetRequiredService<IConnectionMultiplexer>()));
 }
+EnsureLocalObjectStorageSigningSecret(builder.Configuration, builder.Environment);
 builder.Services.AddSingleton<IObjectStorage>(provider => CreateObjectStorage(builder.Configuration, builder.Environment, publicOrigin));
 builder.Services.AddSingleton<IStoredPhotoUrlRefresher>(provider => new StoredPhotoUrlRefresher(
     provider.GetRequiredService<IObjectStorage>(),
@@ -233,6 +234,7 @@ builder.Services.AddSingleton<LocalPhotoStorage>();
 builder.Services.AddSingleton<IPhotoStorage>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IStoredPhotoReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IStoredPhotoDeletion>(provider => provider.GetRequiredService<LocalPhotoStorage>());
+builder.Services.AddSingleton<IGarmentImageRotator>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 var postgresConnectionString = builder.Configuration.GetConnectionString("Postgres");
 var storageProvider = string.IsNullOrWhiteSpace(postgresConnectionString) ? "LocalFile" : "Postgres";
 if (storageProvider == "Postgres")
@@ -393,13 +395,13 @@ api.MapGet("/auth/providers", () => Results.Ok(new[]
     new AuthProviderResponse("apple", "Apple", appleConfigured, "oidc")
 }));
 
-api.MapPost("/auth/register", (RegisterRequest request, AuthService auth, HttpContext context) =>
+api.MapPost("/auth/register", (RegisterRequest request, AuthService auth, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     try
     {
         var result = auth.RegisterWithPassword(request.Email, request.Password, request.RepeatPassword);
         IssueAuthCookies(context, result, app.Environment);
-        return Results.Ok(ToAuthSessionResponse(result));
+        return Results.Ok(ToAuthSessionResponse(result, photoUrls, context.Request));
     }
     catch (InvalidOperationException ex)
     {
@@ -407,13 +409,13 @@ api.MapPost("/auth/register", (RegisterRequest request, AuthService auth, HttpCo
     }
 }).RequireRateLimiting("registration-rate-limit");
 
-api.MapPost("/auth/login", (LoginRequest request, AuthService auth, HttpContext context) =>
+api.MapPost("/auth/login", (LoginRequest request, AuthService auth, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     try
     {
         var result = auth.SignInWithPassword(request.Email, request.Password);
         IssueAuthCookies(context, result, app.Environment);
-        return Results.Ok(ToAuthSessionResponse(result));
+        return Results.Ok(ToAuthSessionResponse(result, photoUrls, context.Request));
     }
     catch (InvalidOperationException ex)
     {
@@ -428,10 +430,10 @@ api.MapPost("/auth/logout", (AuthService auth, HttpContext context) =>
     return Results.Ok(new { status = "signed-out" });
 });
 
-api.MapGet("/auth/me", (AuthService auth, HttpContext context) =>
+api.MapGet("/auth/me", (AuthService auth, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
 {
     var session = auth.AuthenticateSession(context.Request.Cookies[SessionCookieName], null, requireCsrf: false);
-    return session is null ? Results.Unauthorized() : Results.Ok(ToAuthSessionResponseFromSession(session));
+    return session is null ? Results.Unauthorized() : Results.Ok(ToAuthSessionResponseFromSession(session, photoUrls, context.Request));
 });
 
 api.MapPost("/auth/email-verification/request", (EmailVerificationRequest request, AuthService auth) =>
@@ -614,6 +616,52 @@ api.MapGet("/account/export", (
     });
 });
 
+api.MapPatch("/account/profile", (
+    UpdateAccountProfileRequest request,
+    AuthService auth,
+    IStoredPhotoUrlRefresher photoUrls,
+    HttpContext context) =>
+{
+    try
+    {
+        auth.UpdateProfile(CurrentUser(context), request.Username, request.Gender);
+        var session = auth.AuthenticateSession(context.Request.Cookies[SessionCookieName], null, requireCsrf: false)
+            ?? throw new InvalidOperationException("Authentication is required.");
+        return Results.Ok(ToAuthSessionResponseFromSession(session, photoUrls, context.Request));
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+})
+    .Produces<AuthSessionResponse>(StatusCodes.Status200OK);
+
+api.MapPost("/account/avatar", async (
+    HttpRequest request,
+    AuthService auth,
+    PhotoUploadService photos,
+    IStoredPhotoUrlRefresher photoUrls,
+    ILogger<Program> logger,
+    CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var stored = await StoreMultipartPhoto(request, logger, "avatar", cancellationToken, photo => photos.UploadAvatarPhoto(photo));
+        var publicUrl = PublicUploadUrl(request, stored.Url)
+            ?? throw new InvalidOperationException("Stored avatar URL is required.");
+        auth.UpdateAvatar(CurrentUser(request.HttpContext), publicUrl, stored.ThumbnailObjectKey ?? stored.ObjectKey);
+        var session = auth.AuthenticateSession(request.HttpContext.Request.Cookies[SessionCookieName], null, requireCsrf: false)
+            ?? throw new InvalidOperationException("Authentication is required.");
+        return Results.Ok(ToAuthSessionResponseFromSession(session, photoUrls, request));
+    }
+    catch (InvalidOperationException ex)
+    {
+        logger.LogWarning(ex, "Upload diagnostics: rejected avatar upload trace {TraceId}", request.HttpContext.TraceIdentifier);
+        return Results.BadRequest(new { error = ex.Message });
+    }
+})
+    .Produces<AuthSessionResponse>(StatusCodes.Status200OK);
+
 api.MapDelete("/account", (IUserAccountRepository users, HttpContext context) =>
 {
     var deleted = users.DeleteUserById(CurrentUser(context));
@@ -755,7 +803,8 @@ api.MapPatch("/garments/{garmentId:guid}", (Guid garmentId, UpdateGarmentRequest
             request.IsFavorite,
             request.IsArchived,
             request.LastWornAt,
-            request.LaundryStatus));
+            request.LaundryStatus,
+            request.RotationDegrees));
         return garment is null ? Results.NotFound() : Results.Ok(ToGarmentResponse(garment, photoUrls, context.Request));
     }
     catch (InvalidOperationException ex)
@@ -1007,49 +1056,11 @@ app.Run();
 
 static async Task<IResult> UploadPhoto(HttpRequest request, ILogger logger, string uploadKind, CancellationToken cancellationToken, Func<IncomingPhoto, StoredPhoto> store)
 {
-    logger.LogInformation(
-        "Upload diagnostics: received {Kind} upload request trace {TraceId}; contentType={ContentType}; contentLength={ContentLength}; host={Host}; origin={Origin}",
-        uploadKind,
-        request.HttpContext.TraceIdentifier,
-        request.ContentType,
-        request.ContentLength,
-        request.Host.ToString(),
-        request.Headers.Origin.ToString());
-
-    if (!request.HasFormContentType)
-    {
-        logger.LogWarning("Upload diagnostics: rejected {Kind} upload trace {TraceId}; request was not multipart form data", uploadKind, request.HttpContext.TraceIdentifier);
-        return Results.BadRequest(new { error = "Upload must use multipart form data." });
-    }
-
-    var form = await request.ReadFormAsync(cancellationToken);
-    var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
-    if (file is null)
-    {
-        logger.LogWarning("Upload diagnostics: rejected {Kind} upload trace {TraceId}; no file part was provided", uploadKind, request.HttpContext.TraceIdentifier);
-        return Results.BadRequest(new { error = "Photo file is required." });
-    }
-
     try
     {
-        logger.LogInformation(
-            "Upload diagnostics: processing {Kind} upload trace {TraceId}; fileName={FileName}; fileContentType={FileContentType}; fileLength={FileLength}",
-            uploadKind,
-            request.HttpContext.TraceIdentifier,
-            file.FileName,
-            file.ContentType,
-            file.Length);
-
-        await using var stream = file.OpenReadStream();
-        var stored = store(new IncomingPhoto(file.FileName, file.ContentType, file.Length, stream));
+        var stored = await StoreMultipartPhoto(request, logger, uploadKind, cancellationToken, store);
         var publicUrl = PublicUploadUrl(request, stored.Url)
             ?? throw new InvalidOperationException("Stored upload URL is required.");
-        logger.LogInformation(
-            "Upload diagnostics: stored {Kind} upload trace {TraceId}; storedFileName={StoredFileName}; publicUrl={PublicUrl}",
-            uploadKind,
-            request.HttpContext.TraceIdentifier,
-            stored.FileName,
-            publicUrl);
         return Results.Created(publicUrl, new UploadedPhotoResponse(
             stored.FileName,
             stored.ContentType,
@@ -1062,16 +1073,51 @@ static async Task<IResult> UploadPhoto(HttpRequest request, ILogger logger, stri
     }
     catch (InvalidOperationException ex)
     {
-        logger.LogWarning(
-            ex,
-            "Upload diagnostics: rejected {Kind} upload trace {TraceId}; fileName={FileName}; fileContentType={FileContentType}; fileLength={FileLength}",
-            uploadKind,
-            request.HttpContext.TraceIdentifier,
-            file.FileName,
-            file.ContentType,
-            file.Length);
+        logger.LogWarning(ex, "Upload diagnostics: rejected {Kind} upload trace {TraceId}", uploadKind, request.HttpContext.TraceIdentifier);
         return Results.BadRequest(new { error = ex.Message });
     }
+}
+
+static async Task<StoredPhoto> StoreMultipartPhoto(HttpRequest request, ILogger logger, string uploadKind, CancellationToken cancellationToken, Func<IncomingPhoto, StoredPhoto> store)
+{
+    logger.LogInformation(
+        "Upload diagnostics: received {Kind} upload request trace {TraceId}; contentType={ContentType}; contentLength={ContentLength}; host={Host}; origin={Origin}",
+        uploadKind,
+        request.HttpContext.TraceIdentifier,
+        request.ContentType,
+        request.ContentLength,
+        request.Host.ToString(),
+        request.Headers.Origin.ToString());
+
+    if (!request.HasFormContentType)
+    {
+        throw new InvalidOperationException("Upload must use multipart form data.");
+    }
+
+    var form = await request.ReadFormAsync(cancellationToken);
+    var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
+    if (file is null)
+    {
+        throw new InvalidOperationException("Photo file is required.");
+    }
+
+    logger.LogInformation(
+        "Upload diagnostics: processing {Kind} upload trace {TraceId}; fileName={FileName}; fileContentType={FileContentType}; fileLength={FileLength}",
+        uploadKind,
+        request.HttpContext.TraceIdentifier,
+        file.FileName,
+        file.ContentType,
+        file.Length);
+
+    await using var stream = file.OpenReadStream();
+    var stored = store(new IncomingPhoto(file.FileName, file.ContentType, file.Length, stream));
+    logger.LogInformation(
+        "Upload diagnostics: stored {Kind} upload trace {TraceId}; storedFileName={StoredFileName}; publicUrl={PublicUrl}",
+        uploadKind,
+        request.HttpContext.TraceIdentifier,
+        stored.FileName,
+        PublicUploadUrl(request, stored.Url));
+    return stored;
 }
 
 static string? PublicUploadUrl(HttpRequest request, string? storedUrl)
@@ -1134,8 +1180,8 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
             httpFactory.CreateClient("fashn"),
             new FashnTryOnSettings(
                 configuration["Fashn:ApiKey"] ?? "",
-                configuration["Fashn:ModelName"] ?? "tryon-v1.6",
-                configuration["Fashn:Mode"] ?? "balanced",
+                configuration["Fashn:ModelName"] ?? "tryon-max",
+                configuration["Fashn:Mode"] ?? "quality",
                 configuration.GetValue("Fashn:MaxPollingAttempts", 30),
                 TimeSpan.FromSeconds(configuration.GetValue("Fashn:PollIntervalSeconds", 2)),
                 configuration.GetValue("Fashn:NumSamples", 1),
@@ -1144,7 +1190,8 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
                 configuration.GetValue("Fashn:SegmentationFree", true),
                 configuration["Fashn:GarmentPhotoType"] ?? "auto",
                 configuration.GetValue<int?>("Fashn:Seed"),
-                configuration["Fashn:PersonHint"])),
+                configuration["Fashn:Resolution"] ?? "4k",
+                configuration["Fashn:GenderPromptTemplate"] ?? "")),
         "localvton" or "local-vton" or "localvtonprovider" => new LocalVtonProvider(
             httpFactory.CreateClient("local-vton"),
             HttpProviderSettings(configuration, "LocalVton", "http://localhost:7860/", "try-on", requiresApiKey: false)),
@@ -1168,6 +1215,31 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
             HttpProviderSettings(configuration, "GeneralImageEdit", "https://api.openai.com/v1/", "images/edits", requiresApiKey: true)),
         _ => new MockTryOnProvider()
     };
+}
+
+// Fail fast at startup rather than letting LocalObjectStorage silently fall back to its
+// source-visible development signing key. Without a real secret, anyone who can read the
+// repository could forge signed URLs and reach private body-reference photos.
+static void EnsureLocalObjectStorageSigningSecret(IConfiguration configuration, IWebHostEnvironment environment)
+{
+    // Build-time OpenAPI generation boots the host without deploy secrets; don't fail it.
+    if (IsOpenApiDocumentGeneration())
+    {
+        return;
+    }
+
+    var provider = (configuration["ObjectStorage:Provider"] ?? "Local").Trim().ToLowerInvariant();
+    if (provider is "s3" or "minio" || environment.IsDevelopment())
+    {
+        return;
+    }
+
+    if (string.IsNullOrWhiteSpace(configuration["ObjectStorage:Local:SigningSecret"]))
+    {
+        throw new InvalidOperationException(
+            "ObjectStorage:Local:SigningSecret must be configured outside Development. " +
+            "Without it, local object-storage signed URLs are signed with a source-visible development key and can be forged to reach private body-reference photos.");
+    }
 }
 
 static IObjectStorage CreateObjectStorage(IConfiguration configuration, IWebHostEnvironment environment, string? publicOrigin)
@@ -1466,19 +1538,29 @@ static CookieOptions CsrfCookieOptions(DateTimeOffset expiresAt, IWebHostEnviron
     };
 }
 
-static AuthSessionResponse ToAuthSessionResponse(AuthResult result)
+static AuthSessionResponse ToAuthSessionResponse(AuthResult result, IStoredPhotoUrlRefresher? photoUrls = null, HttpRequest? request = null)
 {
-    return new AuthSessionResponse(ToAuthUserResponse(result.User), result.ExpiresAt);
+    return new AuthSessionResponse(ToAuthUserResponse(result.User, photoUrls, request), result.ExpiresAt);
 }
 
-static AuthSessionResponse ToAuthSessionResponseFromSession(AuthenticatedSession session)
+static AuthSessionResponse ToAuthSessionResponseFromSession(AuthenticatedSession session, IStoredPhotoUrlRefresher? photoUrls = null, HttpRequest? request = null)
 {
-    return new AuthSessionResponse(ToAuthUserResponse(session.User), session.ExpiresAt);
+    return new AuthSessionResponse(ToAuthUserResponse(session.User, photoUrls, request), session.ExpiresAt);
 }
 
-static AuthUserResponse ToAuthUserResponse(PublicUser user)
+static AuthUserResponse ToAuthUserResponse(PublicUser user, IStoredPhotoUrlRefresher? photoUrls = null, HttpRequest? request = null)
 {
-    return new AuthUserResponse(user.Id, user.Email, user.DisplayName);
+    var avatarUrl = user.AvatarUrl;
+    if (!string.IsNullOrWhiteSpace(avatarUrl) && photoUrls is not null)
+    {
+        avatarUrl = photoUrls.RefreshAvatarUrl(avatarUrl);
+        if (request is not null)
+        {
+            avatarUrl = PublicUploadUrl(request, avatarUrl) ?? avatarUrl;
+        }
+    }
+
+    return new AuthUserResponse(user.Id, user.Email, user.DisplayName, user.Username, avatarUrl, user.Gender);
 }
 
 static bool TryNormalizeExternalProvider(string provider, out string normalizedProvider)
@@ -1577,7 +1659,8 @@ static void LoadDotEnvConfigurationAliases(ConfigurationManager configuration, s
         ("FASHN_SEGMENTATION_FREE", "Fashn:SegmentationFree"),
         ("FASHN_GARMENT_PHOTO_TYPE", "Fashn:GarmentPhotoType"),
         ("FASHN_SEED", "Fashn:Seed"),
-        ("FASHN_PERSON_HINT", "Fashn:PersonHint")
+        ("FASHN_RESOLUTION", "Fashn:Resolution"),
+        ("FASHN_GENDER_PROMPT_TEMPLATE", "Fashn:GenderPromptTemplate")
     };
 
     var mappedValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);

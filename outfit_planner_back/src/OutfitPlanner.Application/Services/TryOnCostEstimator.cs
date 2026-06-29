@@ -6,13 +6,15 @@ namespace OutfitPlanner.Application.Services;
 
 public sealed record TryOnEstimateInput
 {
-    public TryOnEstimateInput(TryOnMode mode, string providerName, string bodyReferenceIdentity, string settingsHash, bool hasCachedResult)
+    public TryOnEstimateInput(TryOnMode mode, string providerName, string bodyReferenceIdentity, string settingsHash, bool hasCachedResult, int creditsPerRun = 1, UserGender? userGender = null)
     {
         Mode = mode;
         ProviderName = providerName;
         BodyReferenceIdentity = bodyReferenceIdentity;
         SettingsHash = settingsHash;
         HasCachedResult = hasCachedResult;
+        CreditsPerRun = Math.Max(1, creditsPerRun);
+        UserGender = userGender;
     }
 
     public TryOnMode Mode { get; }
@@ -20,6 +22,8 @@ public sealed record TryOnEstimateInput
     public string BodyReferenceIdentity { get; }
     public string SettingsHash { get; }
     public bool HasCachedResult { get; }
+    public int CreditsPerRun { get; }
+    public UserGender? UserGender { get; }
 }
 
 public sealed record TryOnCostEstimate(
@@ -91,12 +95,13 @@ public sealed class TryOnCostEstimator
         var credits = input.Mode switch
         {
             TryOnMode.ClothesOnlyPreview => 0,
-            TryOnMode.SingleGarmentTryOn => 1,
-            TryOnMode.SequentialOutfitTryOn => bodyItems.Count,
-            TryOnMode.ExperimentalCompositeTryOn => 1,
+            TryOnMode.SingleGarmentTryOn => input.CreditsPerRun,
+            TryOnMode.SequentialOutfitTryOn => bodyItems.Count * input.CreditsPerRun,
+            TryOnMode.ExperimentalCompositeTryOn => input.CreditsPerRun,
             _ => throw new InvalidOperationException($"Unsupported try-on mode {input.Mode}.")
         };
-        var cacheKey = BuildCacheKey(input.BodyReferenceIdentity, included.Select(item => item.GarmentId), input.ProviderName, input.Mode, input.SettingsHash);
+        var garmentRotations = included.ToDictionary(item => item.GarmentId, item => item.RotationDegrees);
+        var cacheKey = BuildCacheKey(input.BodyReferenceIdentity, included.Select(item => item.GarmentId), input.ProviderName, input.Mode, input.SettingsHash, input.UserGender, garmentRotations);
 
         return new TryOnCostEstimate(
             input.Mode,
@@ -115,10 +120,14 @@ public sealed class TryOnCostEstimator
             warnings);
     }
 
-    public static string BuildCacheKey(string bodyReferenceIdentity, IEnumerable<Guid> garmentIds, string providerName, TryOnMode mode, string settingsHash)
+    public static string BuildCacheKey(string bodyReferenceIdentity, IEnumerable<Guid> garmentIds, string providerName, TryOnMode mode, string settingsHash, UserGender? userGender = null, IReadOnlyDictionary<Guid, double>? garmentRotations = null)
     {
-        var sortedGarments = string.Join(",", garmentIds.OrderBy(id => id).Select(id => id.ToString("N")));
-        var raw = $"tryon:v1|body={bodyReferenceIdentity}|garments={sortedGarments}|provider={providerName}|mode={mode}|settings={settingsHash}";
+        var sortedGarments = string.Join(",", garmentIds.OrderBy(id => id).Select(id =>
+        {
+            var rotation = garmentRotations is not null && garmentRotations.TryGetValue(id, out var degrees) ? degrees : 0d;
+            return $"{id:N}@{Math.Round(rotation, 2).ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        }));
+        var raw = $"tryon:v3|body={bodyReferenceIdentity}|garments={sortedGarments}|provider={providerName}|mode={mode}|settings={settingsHash}|gender={userGender?.ToString() ?? "unspecified"}";
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(raw));
         return Convert.ToHexString(hash).ToLowerInvariant();
     }

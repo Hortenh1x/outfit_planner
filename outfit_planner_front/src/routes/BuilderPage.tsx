@@ -8,6 +8,7 @@ import { BodyReferenceManager } from '../features/builder/BodyReferenceManager';
 import { garmentNameFromFile } from '../features/builder/garmentName';
 import { OutfitList } from '../features/builder/OutfitList';
 import { SlotPicker } from '../features/builder/SlotPicker';
+import { useAuthSession } from '../features/auth/authQueries';
 import { CATEGORY_SELECTION_KEYS, GARMENT_CATEGORIES, groupGarmentsByCategory, selectedGarmentIds, selectionLabel } from '../features/outfits/outfitUtils';
 import { creditsLabel, modeLabel } from '../features/tryon/tryOnText';
 import { garmentPhotoUrlsFromUpload } from '../features/uploads/uploadedPhotoUrls';
@@ -24,6 +25,7 @@ export function BuilderPage() {
   const garmentsQuery = useQuery({ queryKey: ['garments'], queryFn: listGarments });
   const outfitsQuery = useQuery({ queryKey: ['outfits'], queryFn: listOutfits });
   const bodyPhotosQuery = useQuery({ queryKey: ['body-reference-photos'], queryFn: listBodyReferencePhotos });
+  const sessionQuery = useAuthSession();
   const garments = garmentsQuery.data ?? [];
   const grouped = groupGarmentsByCategory(garments);
   const [selection, setSelection] = useState<OutfitSelection>({});
@@ -166,6 +168,7 @@ export function BuilderPage() {
     ? { bodyReferencePhotoUrl: selectedBodyPhoto.imageUrl, bodyReferencePhotoId: selectedBodyPhoto.id }
     : {};
   const requiresBodyReference = tryOnMode !== 'ClothesOnlyPreview';
+  const requiresProfileGender = tryOnMode !== 'ClothesOnlyPreview' && Boolean(sessionQuery.data?.user) && !sessionQuery.data?.user.gender;
 
   useEffect(() => {
     if (!selectedBodyPhotoId && bodyPhotos.length > 0) {
@@ -334,7 +337,7 @@ export function BuilderPage() {
           <button
             type="button"
             className="primary-action generate-action"
-            disabled={selectedIds.length === 0 || (requiresBodyReference && !selectedBodyPhoto?.imageUrl) || estimateMutation.isPending}
+            disabled={selectedIds.length === 0 || requiresProfileGender || (requiresBodyReference && !selectedBodyPhoto?.imageUrl) || estimateMutation.isPending}
             onClick={async () => {
               const outfit = await ensureOutfit();
               const estimate = await estimateMutation.mutateAsync({
@@ -348,6 +351,7 @@ export function BuilderPage() {
             <Sparkles size={16} />
             {estimateMutation.isPending ? 'Estimating' : 'Generate preview'}
           </button>
+          {requiresProfileGender ? <p className="error">Set gender in account settings before using AI try-on.</p> : null}
           {pendingEstimate ? (
             <div className="tryon-confirmation">
               <div>
@@ -368,7 +372,7 @@ export function BuilderPage() {
               <button
                 type="button"
                 className="primary-action"
-                disabled={!pendingEstimate.isAvailable || (pendingEstimate.requiresAi && !selectedBodyPhoto?.imageUrl) || tryOnMutation.isPending}
+                disabled={!pendingEstimate.isAvailable || (pendingEstimate.requiresAi && (requiresProfileGender || !selectedBodyPhoto?.imageUrl)) || tryOnMutation.isPending}
                 onClick={async () => {
                   const outfit = await ensureOutfit();
                   await tryOnMutation.mutateAsync({

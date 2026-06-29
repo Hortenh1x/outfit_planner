@@ -8,7 +8,10 @@ create table if not exists users (
     updated_at timestamptz not null default now(),
     last_login_at timestamptz,
     email_verified_at timestamptz,
-    two_factor_enabled boolean not null default false
+    two_factor_enabled boolean not null default false,
+    avatar_url text,
+    avatar_object_key text,
+    gender text check (gender is null or gender in ('Male', 'Female'))
 );
 
 alter table users add column if not exists email text;
@@ -18,6 +21,22 @@ alter table users add column if not exists updated_at timestamptz not null defau
 alter table users add column if not exists last_login_at timestamptz;
 alter table users add column if not exists email_verified_at timestamptz;
 alter table users add column if not exists two_factor_enabled boolean not null default false;
+alter table users add column if not exists avatar_url text;
+alter table users add column if not exists avatar_object_key text;
+alter table users add column if not exists gender text;
+
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_constraint
+        where conname = 'ck_users_gender'
+    ) then
+        alter table users
+            add constraint ck_users_gender
+            check (gender is null or gender in ('Male', 'Female'));
+    end if;
+end $$;
 
 create unique index if not exists ux_users_normalized_email
 on users (normalized_email)
@@ -116,6 +135,7 @@ create table if not exists garment_items (
     is_archived boolean not null default false,
     last_worn_at timestamptz,
     laundry_status text not null default 'clean' check (laundry_status in ('clean', 'worn', 'washing')),
+    rotation_degrees double precision not null default 0,
     created_at timestamptz not null default now()
 );
 
@@ -140,6 +160,7 @@ alter table garment_items add column if not exists is_favorite boolean not null 
 alter table garment_items add column if not exists is_archived boolean not null default false;
 alter table garment_items add column if not exists last_worn_at timestamptz;
 alter table garment_items add column if not exists laundry_status text not null default 'clean';
+alter table garment_items add column if not exists rotation_degrees double precision not null default 0;
 
 create table if not exists outfits (
     id uuid primary key,

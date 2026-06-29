@@ -56,6 +56,7 @@ public sealed class ImageProcessor : IImageProcessor
                 new ProcessedImage(StoredImageVariant.Original, photo.ContentType, extension, original),
                 new ProcessedImage(StoredImageVariant.Thumbnail, "image/png", ".png", thumbnail),
                 new ProcessedImage(StoredImageVariant.ProcessedCutout, "image/png", ".png", cutout),
+                new ProcessedImage(StoredImageVariant.BaseCutout, "image/png", ".png", cutout),
                 new ProcessedImage(StoredImageVariant.SegmentationMask, "image/png", ".png", mask)
             });
     }
@@ -85,6 +86,110 @@ public sealed class ImageProcessor : IImageProcessor
                 new ProcessedImage(StoredImageVariant.Thumbnail, photo.ContentType, extension, thumbnail),
                 new ProcessedImage(StoredImageVariant.PrivatePreview, photo.ContentType, extension, privatePreview)
             });
+    }
+
+    public ProcessedPhotoSet ProcessAvatarPhoto(IncomingPhoto photo)
+    {
+        var bytes = ReadAllBytes(photo.Content);
+        using var image = Image.Load<Rgba32>(bytes);
+        NormalizeMetadataAndSize(image, ThumbnailSide);
+        image.Mutate(operation => operation.Resize(new ResizeOptions
+        {
+            Mode = ResizeMode.Crop,
+            Size = new Size(ThumbnailSide, ThumbnailSide)
+        }));
+
+        var extension = ExtensionFor(photo.ContentType);
+        var fileName = $"{Guid.NewGuid():N}{extension}";
+        var original = Encode(image, photo.ContentType);
+        var thumbnail = Encode(ResizeClone(image, ThumbnailSide), photo.ContentType);
+
+        return new ProcessedPhotoSet(
+            fileName,
+            photo.ContentType,
+            original.LongLength,
+            AverageHash(image),
+            new[]
+            {
+                new ProcessedImage(StoredImageVariant.Original, photo.ContentType, extension, original),
+                new ProcessedImage(StoredImageVariant.Thumbnail, photo.ContentType, extension, thumbnail)
+            });
+    }
+
+    public double ComputeGarmentDeskewAngle(byte[] cutoutPngBytes)
+    {
+        using var image = Image.Load<Rgba32>(cutoutPngBytes);
+        return GarmentDeskew.ComputeCorrectionDegrees(image);
+    }
+
+    public GarmentRotationRender RenderRotatedGarment(byte[] baseCutoutPngBytes, double degrees)
+    {
+        using var baseImage = Image.Load<Rgba32>(baseCutoutPngBytes);
+        using var rotated = RotateAndTrim(baseImage, degrees);
+        using var thumbnailImage = ResizeClone(rotated, ThumbnailSide);
+        var cutout = EncodePng(rotated);
+        var thumbnail = EncodePng(thumbnailImage);
+        var mask = CreateSegmentationMask(rotated);
+        var hash = AverageHash(rotated);
+        return new GarmentRotationRender(cutout, thumbnail, mask, hash);
+    }
+
+    private static Image<Rgba32> RotateAndTrim(Image<Rgba32> source, double degrees)
+    {
+        var normalized = NormalizeDegrees(degrees);
+        if (Math.Abs(normalized) < 0.01)
+        {
+            return source.Clone();
+        }
+
+        var rotated = source.Clone(operation => operation.Rotate((float)normalized));
+        if (OpaqueBounds(rotated) is { } bounds
+            && bounds.Width > 0
+            && bounds.Height > 0
+            && (bounds.Width != rotated.Width || bounds.Height != rotated.Height))
+        {
+            rotated.Mutate(operation => operation.Crop(bounds));
+        }
+
+        return rotated;
+    }
+
+    private static double NormalizeDegrees(double degrees)
+    {
+        var wrapped = degrees % 360d;
+        if (wrapped < 0)
+        {
+            wrapped += 360d;
+        }
+
+        return wrapped > 180d ? wrapped - 360d : wrapped;
+    }
+
+    private static Rectangle? OpaqueBounds(Image<Rgba32> image)
+    {
+        var minX = int.MaxValue;
+        var minY = int.MaxValue;
+        var maxX = -1;
+        var maxY = -1;
+        image.ProcessPixelRows(accessor =>
+        {
+            for (var y = 0; y < accessor.Height; y++)
+            {
+                var row = accessor.GetRowSpan(y);
+                for (var x = 0; x < row.Length; x++)
+                {
+                    if (row[x].A >= 16)
+                    {
+                        if (x < minX) minX = x;
+                        if (y < minY) minY = y;
+                        if (x > maxX) maxX = x;
+                        if (y > maxY) maxY = y;
+                    }
+                }
+            }
+        });
+
+        return maxX < 0 ? null : new Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);
     }
 
     private static void NormalizeMetadataAndSize(Image image, int maxSide)

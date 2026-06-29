@@ -43,11 +43,13 @@ export function useWardrobeMutations() {
 
   const uploadQueueMutation = useMutation({
     mutationFn: async (items: UploadQueueItem[]) => {
-      const validItems = items.filter((item) => !item.validationError && (item.status === 'ready' || item.status === 'failed'));
+      const creatableItems = items.filter((item) => item.status === 'processed' || item.status === 'failed');
       const created: GarmentItem[] = [];
 
-      for (const item of validItems) {
-        const uploadedPhoto = await uploadGarmentPhoto(item.file);
+      for (const item of creatableItems) {
+        // Processed items already ran background removal on selection; only failed
+        // items (uploadedPhoto === null) need a final upload attempt here.
+        const uploadedPhoto = item.uploadedPhoto ?? (await uploadGarmentPhoto(item.file));
         const photoUrls = garmentPhotoUrlsFromUpload(uploadedPhoto);
         created.push(await createGarment({
           name: item.name,

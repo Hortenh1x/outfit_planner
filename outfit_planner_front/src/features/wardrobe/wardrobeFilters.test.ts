@@ -32,6 +32,7 @@ const baseGarment: GarmentItem = {
   isArchived: false,
   lastWornAt: '2026-06-01T12:00:00Z',
   laundryStatus: 'clean',
+  rotationDegrees: 0,
   createdAt: '2026-06-01T12:00:00Z'
 };
 

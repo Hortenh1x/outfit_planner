@@ -31,14 +31,16 @@ public sealed record GarmentItem(
     bool IsArchived,
     DateTimeOffset? LastWornAt,
     string LaundryStatus,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    double RotationDegrees = 0);
 
 public sealed record OutfitItem(
     Guid GarmentId,
     string Name,
     GarmentCategory Category,
     BodyZone BodyZone,
-    string ThumbnailUrl);
+    string ThumbnailUrl,
+    double RotationDegrees = 0);
 
 public sealed record Outfit(
     Guid Id,
@@ -106,6 +108,9 @@ public sealed record UserAccount(
 {
     public DateTimeOffset? EmailVerifiedAt { get; init; }
     public bool TwoFactorEnabled { get; init; }
+    public string? AvatarUrl { get; init; }
+    public string? AvatarObjectKey { get; init; }
+    public UserGender? Gender { get; init; }
 }
 
 public sealed record AuthEmailVerificationToken(

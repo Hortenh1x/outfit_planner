@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
+import { Loader2, RotateCcw } from 'lucide-react';
 import type { GarmentCategory } from '../../types';
 import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
 import { isSupportedImageFile } from '../uploads/imageFile';
-import type { UploadQueueItem, UploadQueueItemUpdates } from './wardrobeUpload';
+import { TagChipsEditor } from './TagChipsEditor';
+import { parseTokenText, type UploadQueueItem, type UploadQueueItemUpdates } from './wardrobeUpload';
 
 interface UploadQueueTextDraft {
   seasonText: string;
-  tagsText: string;
 }
 
 interface UploadQueueProps {
@@ -14,9 +15,10 @@ interface UploadQueueProps {
   disabled?: boolean;
   onChangeItem: (itemId: string, updates: UploadQueueItemUpdates) => void;
   onRemove: (itemId: string) => void;
+  onRetry: (itemId: string) => void;
 }
 
-export function UploadQueue({ items, disabled = false, onChangeItem, onRemove }: UploadQueueProps) {
+export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, onRetry }: UploadQueueProps) {
   const [textDrafts, setTextDrafts] = useState<Record<string, UploadQueueTextDraft>>(() => createTextDrafts(items));
 
   useEffect(() => {
@@ -75,16 +77,15 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove }:
                 onChange={(event) => changeTextDraft(item, { seasonText: event.target.value })}
               />
             </label>
-            <label>
-              <span>Tags</span>
-              <input
-                value={textDraft.tagsText}
+            <div className="upload-queue-field">
+              <span className="upload-queue-field-label">Tags</span>
+              <TagChipsEditor
+                tags={item.tags}
+                existingTags={item.existingTags}
                 disabled={disabled}
-                onChange={(event) => changeTextDraft(item, { tagsText: event.target.value })}
+                ariaLabel={`Tags for ${item.name}`}
+                onChange={(tags) => onChangeItem(item.id, { tags, tagsEdited: true })}
               />
-            </label>
-            <div className="suggested-tags upload-tag-chips" aria-label={`Tags for ${item.name}`}>
-              {item.tags.map((tag) => <span key={tag}>{tag}</span>)}
             </div>
             {item.validationError ? <p className="wardrobe-error" role="alert">{item.validationError}</p> : null}
             {item.warnings.length > 0 ? (
@@ -95,7 +96,15 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove }:
                 </ul>
               </div>
             ) : null}
-            {item.error ? <p className="wardrobe-error" role="alert">{item.error}</p> : null}
+            {item.error ? (
+              <div className="wardrobe-error upload-queue-error" role="alert">
+                <span>{item.error}</span>
+                <button type="button" className="upload-queue-retry" disabled={disabled} onClick={() => onRetry(item.id)}>
+                  <RotateCcw size={13} aria-hidden="true" />
+                  Retry
+                </button>
+              </div>
+            ) : null}
           </article>
         );
       })}
@@ -105,39 +114,67 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove }:
   function changeTextDraft(item: UploadQueueItem, updates: Partial<UploadQueueTextDraft>) {
     const nextDraft = { ...(textDrafts[item.id] ?? textDraftFromItem(item)), ...updates };
     setTextDrafts((current) => ({ ...current, [item.id]: nextDraft }));
-    onChangeItem(item.id, {
-      ...(updates.seasonText !== undefined ? { season: parseTokenText(nextDraft.seasonText) } : {}),
-      ...(updates.tagsText !== undefined ? { tags: parseTokenText(nextDraft.tagsText), tagsEdited: true } : {})
-    });
+    if (updates.seasonText !== undefined) {
+      onChangeItem(item.id, { season: parseTokenText(nextDraft.seasonText) });
+    }
   }
 }
 
 function UploadQueuePreview({ item }: { item: UploadQueueItem }) {
-  const [previewUrl, setPreviewUrl] = useState(item.previewUrl ?? '');
+  const [localPreviewUrl, setLocalPreviewUrl] = useState(item.previewUrl ?? '');
+  const [cutoutFailed, setCutoutFailed] = useState(false);
 
   useEffect(() => {
     if (item.previewUrl) {
-      setPreviewUrl(item.previewUrl);
+      setLocalPreviewUrl(item.previewUrl);
       return undefined;
     }
 
     if (!isSupportedImageFile(item.file) || typeof URL.createObjectURL !== 'function') {
-      setPreviewUrl('');
+      setLocalPreviewUrl('');
       return undefined;
     }
 
     const objectUrl = URL.createObjectURL(item.file);
-    setPreviewUrl(objectUrl);
+    setLocalPreviewUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [item.file, item.previewUrl]);
 
-  if (!previewUrl) {
-    return null;
+  const isProcessing = item.status === 'queued' || item.status === 'processing';
+  const cutoutUrl = !cutoutFailed && item.status === 'processed'
+    ? item.uploadedPhoto?.cutoutUrl || item.uploadedPhoto?.thumbnailUrl || item.uploadedPhoto?.url || ''
+    : '';
+  const displayUrl = cutoutUrl || localPreviewUrl;
+
+  if (!displayUrl) {
+    return isProcessing ? (
+      <div className="upload-queue-preview is-empty">
+        <ProcessingOverlay />
+      </div>
+    ) : null;
   }
 
   return (
-    <div className="upload-queue-preview">
-      <img src={previewUrl} alt={`Preview of ${item.file.name}`} />
+    <div className={cutoutUrl ? 'upload-queue-preview is-cutout' : 'upload-queue-preview'}>
+      <img
+        src={displayUrl}
+        alt={`Preview of ${item.file.name}`}
+        onError={() => {
+          if (cutoutUrl) {
+            setCutoutFailed(true);
+          }
+        }}
+      />
+      {isProcessing ? <ProcessingOverlay /> : null}
+    </div>
+  );
+}
+
+function ProcessingOverlay() {
+  return (
+    <div className="upload-queue-preview-overlay" role="status">
+      <Loader2 size={18} aria-hidden="true" className="upload-queue-spinner" />
+      <span>Removing background…</span>
     </div>
   );
 }
@@ -164,15 +201,12 @@ function syncTextDrafts(
       return;
     }
 
-    const tagsText = tokenListSignature(parseTokenText(existing.tagsText)) === tokenListSignature(item.tags)
-      ? existing.tagsText
-      : item.tags.join(', ');
     const seasonText = tokenListSignature(parseTokenText(existing.seasonText)) === tokenListSignature(item.season)
       ? existing.seasonText
       : item.season.join(', ');
 
-    next[item.id] = { seasonText, tagsText };
-    changed = changed || tagsText !== existing.tagsText || seasonText !== existing.seasonText;
+    next[item.id] = { seasonText };
+    changed = changed || seasonText !== existing.seasonText;
   });
 
   changed = changed || Object.keys(current).length !== items.length;
@@ -181,13 +215,8 @@ function syncTextDrafts(
 
 function textDraftFromItem(item: UploadQueueItem): UploadQueueTextDraft {
   return {
-    seasonText: item.season.join(', '),
-    tagsText: item.tags.join(', ')
+    seasonText: item.season.join(', ')
   };
-}
-
-function parseTokenText(value: string): string[] {
-  return value.split(',').map((token) => token.trim()).filter(Boolean);
 }
 
 function tokenListSignature(tokens: string[]): string {

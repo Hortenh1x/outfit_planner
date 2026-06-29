@@ -28,6 +28,7 @@ const garments: GarmentItem[] = [
     isArchived: false,
     lastWornAt: null,
     laundryStatus: 'clean',
+    rotationDegrees: 0,
     createdAt: '2026-05-21T12:00:00Z'
   },
   {
@@ -55,6 +56,7 @@ const garments: GarmentItem[] = [
     isArchived: false,
     lastWornAt: null,
     laundryStatus: 'clean',
+    rotationDegrees: 0,
     createdAt: '2026-05-21T12:00:00Z'
   }
 ];

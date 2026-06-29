@@ -20,7 +20,7 @@ The app is intentionally small, but it has a real backend/frontend split, signed
 - Privacy endpoints for account export/delete, body photo deletion, and AI output purging.
 - Configurable garment background removal for uploaded item cutouts, with simple local fallback, `rembg`, and HTTP/API provider adapters.
 - Background AI try-on jobs with a Redis-backed queue in Docker and an in-memory queue fallback for local development.
-- Mock AI try-on by default, optional FASHN `tryon-v1.6`, local VTON/CatVTON, Replicate, and Fal provider adapters.
+- Mock AI try-on by default, optional FASHN `tryon-max`, local VTON/CatVTON, Replicate, and Fal provider adapters.
 - Installable PWA shell with manifest metadata, static shell caching, offline fallback, and responsive mobile bottom navigation.
 
 ## Tech Stack
@@ -88,7 +88,7 @@ Photo uploads are private by default:
 - Uploads are validated server-side by image magic bytes, then decoded, auto-oriented, stripped of metadata, resized/compressed, and stored as object variants.
 - Garment uploads store original, thumbnail, processed cutout, optional segmentation mask, and perceptual hash. The upload response exposes variant URLs, and new wardrobe items use the processed cutout as their primary image.
 - Garment cutouts use `BackgroundRemoval__Provider`; the default `Auto` provider uses local `rembg` when the executable is available and otherwise falls back to the dependency-free `Simple` provider. `Rembg` can be selected explicitly for one CLI process per upload, `RembgServer` targets a long-running local `rembg s` server, and `Http`/provider aliases call an API that returns a transparent image. Garment extraction currently assumes one clothing item per upload through a single-item provider boundary; multi-item detection/separation is intentionally not active yet.
-- Body reference uploads store original, thumbnail, blurred private preview, and perceptual hash. Public `/uploads/body-reference-photos/{fileName}` access is disabled; clients receive signed object URLs.
+- Body reference uploads store original, thumbnail, blurred private preview, and perceptual hash. Account avatars store private original and thumbnail variants. Public `/uploads/body-reference-photos/{fileName}` access is disabled; clients receive signed object URLs.
 - Local signed object URLs are refreshed when wardrobe, body-reference, outfit, share, and try-on flows read saved records, so persisted local uploads keep rendering after URL expiry or API restarts.
 
 Try-on jobs are queued at request time:
@@ -108,6 +108,7 @@ Authentication is cookie-backed:
 - Email/password registration and sign-in create an opaque server-side session.
 - Session cookie `outfit_session` is HttpOnly, SameSite=Lax, and Secure outside development.
 - CSRF cookie `outfit_csrf` is readable by the frontend and must be echoed as `X-CSRF-Token` on mutating authenticated API requests.
+- Account settings persist `username`, optional signed avatar URL, and `gender` (`Male` or `Female`) on the backend. AI try-on modes are unavailable until the authenticated user has selected a gender; clothes-only preview remains available.
 - Google and Apple sign-in start from backend challenge endpoints and complete through backend callbacks. If the external account is new, the API creates it automatically. If the provider returns a verified email that already exists, the external login is linked to that user.
 - All private `/api` routes require a valid session. `/api/health`, `/api/system/status`, `/api/auth/*`, `/api/storage/signed/*`, and `/api/share/{token}` remain public; signed storage access is protected by URL signature and expiry.
 
@@ -117,6 +118,7 @@ The frontend uses an editorial fashion/product visual system across authenticate
 - The authenticated shell and Wardrobe slice use scoped editorial CSS with warm paper and dark ink themes, serif display headings, crimson emphasis, hairline borders, flat panels, restrained shadows, compact controls, and tactile crimson primary buttons.
 - The canonical light palette and typography come from `design_references/light_theme` Crimson Plinth tokens; `design_references/dark_theme` is the dark orientation, with the same pink primary actions preserved in dark mode.
 - Wardrobe filtering should use category tabs as the single category control, keep search in the compact top control row, and expose existing tags through a writable tag combobox. On mobile, creation/planning rails come before browsing content, while the authenticated account shell sits below page content.
+- The Wardrobe upload queue removes backgrounds as soon as photos are selected (not on submit): each row processes in the background with a limited concurrency, shows the transparent cutout when ready, and submit only creates garments from the already-processed result. Upload-queue tags are edited as interactive chips — click a chip to rename it, hover/focus to reveal a trash delete, and add tags from the trailing input — replacing the old comma-separated tags field.
 - Builder controls prioritize body references and try-on generation before the save-outfit block. Selected saved outfits can be edited, deleted, or regenerated, and the latest generated try-on preview can be removed from the active outfit.
 - Calendar mobile layout puts Plan day before the calendar grid, selected current-day numbers must stay high-contrast, and planned outfits can be reassigned or removed from a date.
 - Do not extend the removed claymorphism system; lavender canvases, animated blobs, oversized rounded panels, recessed controls, convex purple gradients, and multi-layer neumorphic shadows are no longer part of the active frontend language.
@@ -269,7 +271,7 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `ConnectionStrings__Redis` | empty | Enables the Redis try-on job queue when non-empty. Empty uses an in-memory queue. |
 | `ObjectStorage__Provider` | `Local` | Use `Local`, `S3`, or `Minio` for uploaded image object storage. |
 | `ObjectStorage__Local__Root` | `storage/objects` under API content root | Local object storage root. |
-| `ObjectStorage__Local__SigningSecret` | development fallback | HMAC secret for local signed object URLs. Set a strong value outside dev. |
+| `ObjectStorage__Local__SigningSecret` | development fallback (Development only) | HMAC secret for local signed object URLs. **Required outside Development**: the API fails to start with the `Local` provider when unset, preventing signed-URL forgery with the source-visible dev key. |
 | `ObjectStorage__S3__Endpoint` / `Minio__Endpoint` | empty | S3-compatible endpoint for MinIO/S3 storage. |
 | `ObjectStorage__S3__AccessKey` / `Minio__AccessKey` | empty | S3-compatible access key. |
 | `ObjectStorage__S3__SecretKey` / `Minio__SecretKey` | empty | S3-compatible secret key. |
@@ -292,8 +294,8 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `TryOn__Provider` | `Mock` | Use `Mock`, `Fashn`, `CompositeFashn`, `LocalVton`, `LocalCatVton`, `SelfHostedCatVton`, `GeneralImageEdit`, `Replicate`, or `Fal`. Unknown values use the mock provider. |
 | `Fashn__ApiKey` | empty | Required before the FASHN provider makes network calls. |
 | `Fashn__BaseUrl` | `https://api.fashn.ai/v1/` | FASHN API base URL. |
-| `Fashn__ModelName` | `tryon-v1.6` | FASHN model name. |
-| `Fashn__Mode` | `balanced` | FASHN generation mode. |
+| `Fashn__ModelName` | `tryon-max` | FASHN model name used by the API for paid try-on. |
+| `Fashn__Mode` | `quality` | FASHN generation mode. `quality` is used with `tryon-max` for the highest quality path. |
 | `Fashn__MaxPollingAttempts` | `30` | Status polling limit. |
 | `Fashn__PollIntervalSeconds` | `2` | Delay between status polls. |
 | `Fashn__TimeoutSeconds` | `180` | HTTP client timeout. |
@@ -303,8 +305,9 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `Fashn__SegmentationFree` | `true` | Whether FASHN should use segmentation-free garment processing. |
 | `Fashn__GarmentPhotoType` | `auto` | FASHN garment photo type hint. |
 | `Fashn__Seed` | empty | Optional FASHN generation seed. |
-| `Fashn__PersonHint` | empty | Optional FASHN person hint, sent as `person_hint`. |
-| `FASHN_*` `.env` aliases | empty | Repository `.env` keys such as `FASHN_API_KEY`, `FASHN_BASE_URL`, `FASHN_MODEL_NAME`, `FASHN_MODE`, `FASHN_NUM_SAMPLES`, `FASHN_OUTPUT_FORMAT`, `FASHN_RETURN_BASE64`, `FASHN_SEGMENTATION_FREE`, `FASHN_GARMENT_PHOTO_TYPE`, `FASHN_SEED`, and `FASHN_PERSON_HINT` are mapped to the matching `Fashn__*` settings at API startup. |
+| `Fashn__Resolution` | `4k` | FASHN `tryon-max` output resolution; controls credits per run (`1k` = 2 credits, `4k` = 5). |
+| `Fashn__GenderPromptTemplate` | empty | Optional opt-in prompt for `tryon-max`. Empty by default, so no prompt is sent and the model preserves the person's identity and gender from the body photo. When set, `{gender}` is replaced with `male`/`female`; intended for garment-styling experiments only. |
+| `FASHN_*` `.env` aliases | empty | Repository `.env` keys such as `FASHN_API_KEY`, `FASHN_BASE_URL`, `FASHN_MODEL_NAME`, `FASHN_MODE`, `FASHN_NUM_SAMPLES`, `FASHN_OUTPUT_FORMAT`, `FASHN_RETURN_BASE64`, `FASHN_SEGMENTATION_FREE`, `FASHN_GARMENT_PHOTO_TYPE`, `FASHN_SEED`, `FASHN_RESOLUTION`, and `FASHN_GENDER_PROMPT_TEMPLATE` are mapped to the matching `Fashn__*` settings at API startup. |
 | `TryOn__CompositeFashn__ApiKey` | empty | Required when `TryOn__Provider=CompositeFashn`. |
 | `TryOn__LocalVton__BaseUrl` | `http://localhost:7860/` | Local/dev VTON endpoint base URL. |
 | `TryOn__LocalVton__Endpoint` | `/try-on` | Local/dev VTON generation endpoint. |
@@ -396,13 +399,13 @@ $env:Fashn__ApiKey = "YOUR_FASHN_API_KEY"
 dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
 ```
 
-The Builder asks the API for a try-on cost estimate before generation. The API classifies `Top`, `Bottom`, `Dress`, and `Outerwear` as body try-on items; `Shoes`, `Bag`, `Accessory`, and `Hat` are visual-only and are excluded from normal AI modes.
+The Builder asks the API for a try-on cost estimate before generation. The API classifies `Top`, `Bottom`, `Dress`, and `Outerwear` as body try-on items; `Shoes`, `Bag`, `Accessory`, and `Hat` are visual-only and are excluded from normal AI modes. AI try-on estimates and starts are blocked until the current account has `gender` set.
 
 Try-on modes:
 
 - `ClothesOnlyPreview`: free, no body reference required, no AI provider call.
-- `SingleGarmentTryOn`: FASHN `tryon-v1.6`, 1 credit, exactly one body try-on item.
-- `SequentialOutfitTryOn`: FASHN `tryon-v1.6` once per body try-on item, one credit per run.
+- `SingleGarmentTryOn`: FASHN `tryon-max`, quality, one provider run, exactly one body try-on item. Credits per run follow `FASHN_RESOLUTION` (`1k` = 2, `4k` = 5). The full-resolution garment cutout is sent to FASHN.
+- `SequentialOutfitTryOn`: FASHN `tryon-max`, quality, one provider run per body try-on item. Credits per run follow `FASHN_RESOLUTION` (`1k` = 2, `4k` = 5).
 - `ExperimentalCompositeTryOn`: one composed garment reference image, 1 credit, explicitly premium and allowed to include visual-only items.
 
 Generation requests must echo the server-estimated mode, credits, and cache key. The backend recomputes the estimate and rejects stale or mismatched confirmations. Successful generated jobs are cached by body reference, included garment IDs, provider, mode, and provider settings, so repeat requests can reuse existing outputs without calling AI.
@@ -442,6 +445,8 @@ Private routes require the `outfit_session` cookie. Mutating private routes also
 | `GET` | `/auth/external/{provider}/callback` | OAuth/OIDC provider callback path registered with Google/Apple. |
 | `GET` | `/auth/external/{provider}/complete` | Complete external auth after the provider callback and issue app cookies. |
 | `GET` | `/account/export` | Export the current user's account, wardrobe, body photos, outfits, and try-on jobs. |
+| `PATCH` | `/account/profile` | Update account `username` and `gender`. |
+| `POST` | `/account/avatar` | Upload and persist the current account avatar through private signed object storage. |
 | `DELETE` | `/account` | Delete the current account and clear auth cookies. |
 | `GET` | `/body-reference-photos` | List body reference photos for the current user. |
 | `POST` | `/body-reference-photos` | Register an already uploaded body reference photo URL. |
