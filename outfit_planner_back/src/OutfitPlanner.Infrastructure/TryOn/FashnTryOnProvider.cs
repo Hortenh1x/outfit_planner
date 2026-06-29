@@ -19,7 +19,21 @@ public sealed record FashnTryOnSettings(
     bool SegmentationFree,
     string GarmentPhotoType,
     int? Seed,
-    string? PersonHint);
+    string Resolution = "4k",
+    string? GenderPromptTemplate = null)
+{
+    public bool UsesTryOnMax => string.Equals(ModelName, "tryon-max", StringComparison.OrdinalIgnoreCase);
+
+    public int CreditsPerRun => UsesTryOnMax && string.Equals(Mode, "quality", StringComparison.OrdinalIgnoreCase) && string.Equals(Resolution, "4k", StringComparison.OrdinalIgnoreCase)
+        ? 5
+        : UsesTryOnMax
+            ? 2
+            : 1;
+
+    public string SettingsHash => UsesTryOnMax
+        ? $"{ModelName}:{Mode}:{Resolution}:{OutputFormat}:{GenderPromptTemplate}"
+        : $"{ModelName}:{Mode}";
+}
 
 public sealed class FashnTryOnProvider : ITryOnProvider
 {
@@ -37,12 +51,15 @@ public sealed class FashnTryOnProvider : ITryOnProvider
         Name,
         _settings.ModelName,
         _settings.Mode,
-        $"{_settings.ModelName}:{_settings.Mode}",
+        _settings.SettingsHash,
         new HashSet<TryOnMode>
         {
             TryOnMode.SingleGarmentTryOn,
             TryOnMode.SequentialOutfitTryOn
-        });
+        })
+    {
+        CreditsPerRun = _settings.CreditsPerRun
+    };
 
     public FashnTryOnProvider(HttpClient http, FashnTryOnSettings settings)
     {
@@ -72,17 +89,17 @@ public sealed class FashnTryOnProvider : ITryOnProvider
             throw new InvalidOperationException("Enable sequential flow before sending a multi-garment outfit to FASHN.");
         }
 
-        return GenerateSequentially(request.BodyReferencePhotoUrl, request.BodyTryOnItems);
+        return GenerateSequentially(request.BodyReferencePhotoUrl, request.BodyTryOnItems, request.UserGender);
     }
 
-    private TryOnGeneration GenerateSequentially(string bodyReferencePhotoUrl, IReadOnlyList<OutfitItem> items)
+    private TryOnGeneration GenerateSequentially(string bodyReferencePhotoUrl, IReadOnlyList<OutfitItem> items, UserGender? userGender)
     {
         var modelImage = bodyReferencePhotoUrl;
         TryOnGeneration? latest = null;
 
         foreach (var item in items)
         {
-            var predictionId = SubmitPrediction(modelImage, item);
+            var predictionId = SubmitPrediction(modelImage, item, userGender);
             latest = PollUntilCompleted(predictionId);
             modelImage = latest.OutputImageUrl;
         }
@@ -90,11 +107,22 @@ public sealed class FashnTryOnProvider : ITryOnProvider
         return latest ?? throw new InvalidOperationException("FASHN generation did not produce an output.");
     }
 
-    private string SubmitPrediction(string bodyReferencePhotoUrl, OutfitItem item)
+    private string SubmitPrediction(string bodyReferencePhotoUrl, OutfitItem item, UserGender? userGender)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, "run")
-        {
-            Content = JsonContent(new FashnRunRequest(
+        var content = _settings.UsesTryOnMax
+            ? JsonContent(new FashnTryOnMaxRunRequest(
+                _settings.ModelName,
+                new FashnTryOnMaxInputs(
+                    bodyReferencePhotoUrl,
+                    item.ThumbnailUrl,
+                    GenderPrompt(userGender),
+                    _settings.Resolution,
+                    _settings.Mode,
+                    _settings.NumSamples,
+                    _settings.OutputFormat,
+                    _settings.ReturnBase64,
+                    _settings.Seed)))
+            : JsonContent(new FashnRunRequest(
                 _settings.ModelName,
                 new FashnTryOnInputs(
                     bodyReferencePhotoUrl,
@@ -106,8 +134,11 @@ public sealed class FashnTryOnProvider : ITryOnProvider
                     _settings.ReturnBase64,
                     _settings.SegmentationFree,
                     _settings.GarmentPhotoType,
-                    _settings.Seed,
-                    _settings.PersonHint)))
+                    _settings.Seed)));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "run")
+        {
+            Content = content
         };
         AddAuth(request);
 
@@ -188,6 +219,25 @@ public sealed class FashnTryOnProvider : ITryOnProvider
         };
     }
 
+    private string? GenderPrompt(UserGender? userGender)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.GenderPromptTemplate))
+        {
+            return null;
+        }
+
+        if (userGender is null)
+        {
+            return null;
+        }
+
+        var gender = userGender == UserGender.Male ? "male" : "female";
+        var template = _settings.GenderPromptTemplate.Trim();
+        return template
+            .Replace("{gender}", gender, StringComparison.OrdinalIgnoreCase)
+            .Replace("{Gender}", char.ToUpperInvariant(gender[0]) + gender[1..], StringComparison.Ordinal);
+    }
+
     private static string ExtractError(string body)
     {
         if (string.IsNullOrWhiteSpace(body))
@@ -221,6 +271,10 @@ file sealed record FashnRunRequest(
     [property: JsonPropertyName("model_name")] string ModelName,
     [property: JsonPropertyName("inputs")] FashnTryOnInputs Inputs);
 
+file sealed record FashnTryOnMaxRunRequest(
+    [property: JsonPropertyName("model_name")] string ModelName,
+    [property: JsonPropertyName("inputs")] FashnTryOnMaxInputs Inputs);
+
 file sealed record FashnTryOnInputs(
     [property: JsonPropertyName("model_image")] string ModelImage,
     [property: JsonPropertyName("garment_image")] string GarmentImage,
@@ -231,8 +285,18 @@ file sealed record FashnTryOnInputs(
     [property: JsonPropertyName("return_base64")] bool ReturnBase64,
     [property: JsonPropertyName("segmentation_free")] bool SegmentationFree,
     [property: JsonPropertyName("garment_photo_type")] string GarmentPhotoType,
-    [property: JsonPropertyName("seed")] int? Seed,
-    [property: JsonPropertyName("person_hint")] string? PersonHint);
+    [property: JsonPropertyName("seed")] int? Seed);
+
+file sealed record FashnTryOnMaxInputs(
+    [property: JsonPropertyName("model_image")] string ModelImage,
+    [property: JsonPropertyName("product_image")] string ProductImage,
+    [property: JsonPropertyName("prompt")] string? Prompt,
+    [property: JsonPropertyName("resolution")] string Resolution,
+    [property: JsonPropertyName("generation_mode")] string GenerationMode,
+    [property: JsonPropertyName("num_images")] int NumImages,
+    [property: JsonPropertyName("output_format")] string OutputFormat,
+    [property: JsonPropertyName("return_base64")] bool ReturnBase64,
+    [property: JsonPropertyName("seed")] int? Seed);
 
 file sealed record FashnRunResponse(
     [property: JsonPropertyName("id")] string? Id,

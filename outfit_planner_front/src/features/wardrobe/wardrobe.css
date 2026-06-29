@@ -844,6 +844,206 @@
   }
 }
 
+/* Interactive tag chips (upload queue) */
+.upload-queue-field {
+  display: grid;
+  gap: 6px;
+}
+
+.upload-queue-field-label {
+  color: var(--editorial-muted);
+  font-size: 0.7rem;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tag-chips-editor {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.tag-chip {
+  align-items: center;
+  background: var(--wardrobe-panel-subtle);
+  border: 1px solid var(--editorial-hairline);
+  border-radius: 999px;
+  color: var(--editorial-muted);
+  display: inline-flex;
+  gap: 2px;
+  min-height: 28px;
+  padding: 0 4px 0 9px;
+}
+
+.tag-chip-label {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: text;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 850;
+  line-height: 1;
+  overflow-wrap: anywhere;
+  padding: 0;
+  text-align: left;
+}
+
+.tag-chip-label:hover {
+  color: var(--editorial-ink);
+}
+
+.tag-chip-remove {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  color: var(--editorial-muted);
+  cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
+  padding: 3px;
+}
+
+.tag-chip-remove:hover {
+  color: var(--editorial-accent-strong);
+}
+
+.tag-chip-input {
+  background: var(--editorial-panel);
+  border: 1px solid var(--editorial-accent);
+  border-radius: 999px;
+  color: var(--editorial-ink);
+  font-size: 0.74rem;
+  font-weight: 850;
+  min-height: 28px;
+  padding: 0 9px;
+  width: 8.5ch;
+}
+
+.tag-chip-add {
+  background: none;
+  border: 1px dashed var(--editorial-hairline-strong);
+  border-radius: 999px;
+  color: var(--editorial-muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+  min-height: 28px;
+  padding: 0 10px;
+  width: 7ch;
+}
+
+.tag-chip-add:focus {
+  border-color: var(--editorial-accent);
+  border-style: solid;
+  color: var(--editorial-ink);
+  outline: none;
+  width: 11ch;
+}
+
+/* Reveal the trash control on hover/focus where a hover pointer exists; keep it
+   always visible on touch devices. */
+@media (hover: hover) {
+  .tag-chip-remove {
+    margin-left: -2px;
+    max-width: 0;
+    opacity: 0;
+    overflow: hidden;
+    padding-left: 0;
+    padding-right: 0;
+    transition: opacity 120ms var(--ease-out), max-width 120ms var(--ease-out);
+  }
+
+  .tag-chip:hover .tag-chip-remove,
+  .tag-chip:focus-within .tag-chip-remove,
+  .tag-chip-remove:focus-visible {
+    max-width: 22px;
+    opacity: 1;
+    padding-left: 3px;
+    padding-right: 3px;
+  }
+}
+
+/* Background-removal feedback in the queue preview */
+.upload-queue-preview {
+  position: relative;
+}
+
+.upload-queue-preview.is-cutout {
+  background-image:
+    linear-gradient(45deg, var(--editorial-panel-muted) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--editorial-panel-muted) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--editorial-panel-muted) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--editorial-panel-muted) 75%);
+  background-position: 0 0, 0 9px, 9px -9px, -9px 0;
+  background-size: 18px 18px;
+}
+
+.upload-queue-preview.is-empty {
+  aspect-ratio: 4 / 3;
+  max-height: 220px;
+}
+
+.upload-queue-preview-overlay {
+  align-items: center;
+  backdrop-filter: blur(1px);
+  background: color-mix(in srgb, var(--editorial-panel) 62%, transparent);
+  color: var(--editorial-ink);
+  display: flex;
+  font-size: 0.76rem;
+  font-weight: 850;
+  gap: 7px;
+  inset: 0;
+  justify-content: center;
+  position: absolute;
+}
+
+.upload-queue-spinner {
+  color: var(--editorial-accent);
+}
+
+.upload-queue-error {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.upload-queue-retry {
+  align-items: center;
+  background: none;
+  border: 1px solid var(--editorial-hairline-strong);
+  border-radius: 999px;
+  color: var(--editorial-ink);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  font-weight: 850;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 10px;
+}
+
+.upload-queue-retry:hover {
+  border-color: var(--editorial-accent);
+  color: var(--editorial-accent-strong);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .upload-queue-spinner {
+    animation: upload-queue-spin 0.9s linear infinite;
+  }
+}
+
+@keyframes upload-queue-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 1180px) {
   .wardrobe-editorial-page {
     grid-template-columns: minmax(0, 1fr);

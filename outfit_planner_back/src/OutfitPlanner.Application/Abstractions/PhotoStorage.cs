@@ -13,6 +13,8 @@ public sealed record StoredPhoto(string FileName, string ContentType, long Lengt
     public string? ProcessedCutoutObjectKey { get; init; }
     public string? PrivatePreviewObjectKey { get; init; }
     public string? PerceptualHash { get; init; }
+    public string? BaseCutoutUrl { get; init; }
+    public string? BaseCutoutObjectKey { get; init; }
 }
 
 public sealed record StoredPhotoFile(string FullPath, string ContentType);
@@ -24,7 +26,8 @@ public enum StoredImageVariant
     ProcessedCutout,
     TryOnOutput,
     PrivatePreview,
-    SegmentationMask
+    SegmentationMask,
+    BaseCutout
 }
 
 public sealed record ProcessedImage(
@@ -60,7 +63,31 @@ public interface IImageProcessor
     ProcessedPhotoSet ProcessGarmentPhoto(IncomingPhoto photo);
 
     ProcessedPhotoSet ProcessBodyReferencePhoto(IncomingPhoto photo);
+
+    ProcessedPhotoSet ProcessAvatarPhoto(IncomingPhoto photo);
+
+    double ComputeGarmentDeskewAngle(byte[] cutoutPngBytes);
+
+    GarmentRotationRender RenderRotatedGarment(byte[] baseCutoutPngBytes, double degrees);
 }
+
+public sealed record GarmentRotationRender(
+    byte[] CutoutPng,
+    byte[] ThumbnailPng,
+    byte[] SegmentationMaskPng,
+    string PerceptualHash);
+
+public interface IGarmentImageRotator
+{
+    // Conservative auto-straighten angle for the garment's base cutout (0 when none/uncertain).
+    double ComputeGarmentAutoStraightenAngle(string garmentImageUrl);
+
+    // Renders the immutable base cutout at the absolute angle, overwrites the displayed
+    // cutout/thumbnail/mask in place, and returns freshly signed display URLs.
+    GarmentRotationOutcome RotateGarment(string garmentImageUrl, double degrees);
+}
+
+public sealed record GarmentRotationOutcome(string ImageUrl, string ThumbnailUrl, string? PerceptualHash);
 
 public interface IObjectStorage
 {
@@ -80,6 +107,8 @@ public interface IPhotoStorage
     StoredPhoto SaveGarmentPhoto(IncomingPhoto photo);
 
     StoredPhoto SaveBodyReferencePhoto(IncomingPhoto photo);
+
+    StoredPhoto SaveAvatarPhoto(IncomingPhoto photo);
 }
 
 public interface IStoredPhotoReader
@@ -110,4 +139,6 @@ public interface IStoredPhotoUrlRefresher
     string RefreshGarmentThumbnailUrl(string photoUrl);
 
     string RefreshBodyReferencePhotoUrl(string photoUrl);
+
+    string RefreshAvatarUrl(string photoUrl);
 }

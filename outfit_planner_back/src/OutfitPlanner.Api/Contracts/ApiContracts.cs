@@ -46,7 +46,8 @@ public sealed record UpdateGarmentRequest(
     bool? IsFavorite,
     bool? IsArchived,
     DateTimeOffset? LastWornAt,
-    string? LaundryStatus);
+    string? LaundryStatus,
+    double? RotationDegrees = null);
 
 public sealed record CreateOutfitRequest(string Name, IReadOnlyList<Guid> GarmentIds);
 
@@ -132,7 +133,15 @@ public sealed record PasswordResetRequest(string Email);
 
 public sealed record PasswordResetConfirmRequest(string Token, string Password, string RepeatPassword);
 
-public sealed record AuthUserResponse(string Id, string? Email, string DisplayName);
+public sealed record UpdateAccountProfileRequest(string Username, UserGender? Gender);
+
+public sealed record AuthUserResponse(
+    string Id,
+    string? Email,
+    string DisplayName,
+    string Username,
+    string? AvatarUrl,
+    UserGender? Gender);
 
 public sealed record AuthSessionResponse(AuthUserResponse User, DateTimeOffset ExpiresAt);
 

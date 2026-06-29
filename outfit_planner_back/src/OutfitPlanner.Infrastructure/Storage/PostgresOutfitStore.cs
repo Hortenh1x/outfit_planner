@@ -118,12 +118,14 @@ public sealed class PostgresOutfitStore :
                 id, user_id, name, category, body_zone, image_url, thumbnail_url, tags,
                 primary_color, secondary_colors, material, brand, size, season,
                 weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
-                comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at)
+                comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at,
+                rotation_degrees)
             values (
                 @id, @user_id, @name, @category, @body_zone, @image_url, @thumbnail_url, @tags,
                 @primary_color, @secondary_colors, @material, @brand, @size, @season,
                 @weather_min_temp, @weather_max_temp, @occasion, @formality_score, @warmth_score,
-                @comfort_score, @is_favorite, @is_archived, @last_worn_at, @laundry_status, @created_at)
+                @comfort_score, @is_favorite, @is_archived, @last_worn_at, @laundry_status, @created_at,
+                @rotation_degrees)
             """, connection, transaction);
         AddGarmentParameters(command, garment);
         command.ExecuteNonQuery();
@@ -136,7 +138,8 @@ public sealed class PostgresOutfitStore :
             select id, user_id, name, category, body_zone, image_url, thumbnail_url, tags,
                 primary_color, secondary_colors, material, brand, size, season,
                 weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
-                comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at
+                comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at,
+                rotation_degrees
             from garment_items
             where user_id = @user_id and id = @id
             """);
@@ -163,7 +166,8 @@ public sealed class PostgresOutfitStore :
             select id, user_id, name, category, body_zone, image_url, thumbnail_url, tags,
                 primary_color, secondary_colors, material, brand, size, season,
                 weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
-                comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at
+                comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at,
+                rotation_degrees
             from garment_items
             where {string.Join(" and ", where)}
             {GarmentOrderBy(query.Sort)}
@@ -199,6 +203,8 @@ public sealed class PostgresOutfitStore :
             set name = @name,
                 category = @category,
                 body_zone = @body_zone,
+                image_url = @image_url,
+                thumbnail_url = @thumbnail_url,
                 tags = @tags,
                 primary_color = @primary_color,
                 secondary_colors = @secondary_colors,
@@ -215,7 +221,8 @@ public sealed class PostgresOutfitStore :
                 is_favorite = @is_favorite,
                 is_archived = @is_archived,
                 last_worn_at = @last_worn_at,
-                laundry_status = @laundry_status
+                laundry_status = @laundry_status,
+                rotation_degrees = @rotation_degrees
             where id = @id and user_id = @user_id
             """);
         AddGarmentParameters(command, garment);
@@ -611,8 +618,8 @@ public sealed class PostgresOutfitStore :
     public void AddUser(UserAccount user)
     {
         using var command = _dataSource.CreateCommand("""
-            insert into users (id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled)
-            values (@id, @email, @normalized_email, @display_name, @password_hash, @created_at, @updated_at, @last_login_at, @email_verified_at, @two_factor_enabled)
+            insert into users (id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender)
+            values (@id, @email, @normalized_email, @display_name, @password_hash, @created_at, @updated_at, @last_login_at, @email_verified_at, @two_factor_enabled, @avatar_url, @avatar_object_key, @gender)
             """);
         AddUserParameters(command, user);
         command.ExecuteNonQuery();
@@ -629,7 +636,10 @@ public sealed class PostgresOutfitStore :
                 updated_at = @updated_at,
                 last_login_at = @last_login_at,
                 email_verified_at = @email_verified_at,
-                two_factor_enabled = @two_factor_enabled
+                two_factor_enabled = @two_factor_enabled,
+                avatar_url = @avatar_url,
+                avatar_object_key = @avatar_object_key,
+                gender = @gender
             where id = @id
             """);
         AddUserParameters(command, user);
@@ -639,7 +649,7 @@ public sealed class PostgresOutfitStore :
     public UserAccount? GetUserById(string userId)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled
+            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender
             from users
             where id = @id
             """);
@@ -652,7 +662,7 @@ public sealed class PostgresOutfitStore :
     public UserAccount? GetUserByNormalizedEmail(string normalizedEmail)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled
+            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender
             from users
             where normalized_email = @normalized_email
             """);
@@ -1066,7 +1076,7 @@ public sealed class PostgresOutfitStore :
     private IReadOnlyList<OutfitItem> ListOutfitItems(Guid outfitId)
     {
         using var command = _dataSource.CreateCommand("""
-            select g.id, g.name, g.category, g.body_zone, g.thumbnail_url
+            select g.id, g.name, g.category, g.body_zone, g.thumbnail_url, g.rotation_degrees
             from outfit_items oi
             join garment_items g on g.id = oi.garment_id
             where oi.outfit_id = @outfit_id
@@ -1083,7 +1093,8 @@ public sealed class PostgresOutfitStore :
                 reader.GetString(1),
                 Enum.Parse<GarmentCategory>(reader.GetString(2)),
                 Enum.Parse<BodyZone>(reader.GetString(3)),
-                reader.GetString(4)));
+                reader.GetString(4),
+                reader.GetDouble(5)));
         }
 
         return items;
@@ -1101,6 +1112,9 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("last_login_at", DbValue(user.LastLoginAt));
         command.Parameters.AddWithValue("email_verified_at", DbValue(user.EmailVerifiedAt));
         command.Parameters.AddWithValue("two_factor_enabled", user.TwoFactorEnabled);
+        command.Parameters.AddWithValue("avatar_url", DbValue(user.AvatarUrl));
+        command.Parameters.AddWithValue("avatar_object_key", DbValue(user.AvatarObjectKey));
+        command.Parameters.AddWithValue("gender", DbValue(user.Gender?.ToString()));
     }
 
     private static void AddExternalLoginParameters(NpgsqlCommand command, ExternalAuthLogin login)
@@ -1126,7 +1140,10 @@ public sealed class PostgresOutfitStore :
             reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7))
         {
             EmailVerifiedAt = reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8),
-            TwoFactorEnabled = reader.GetBoolean(9)
+            TwoFactorEnabled = reader.GetBoolean(9),
+            AvatarUrl = reader.IsDBNull(10) ? null : reader.GetString(10),
+            AvatarObjectKey = reader.IsDBNull(11) ? null : reader.GetString(11),
+            Gender = reader.IsDBNull(12) ? null : Enum.Parse<UserGender>(reader.GetString(12))
         };
     }
 
@@ -1191,6 +1208,7 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("is_archived", garment.IsArchived);
         command.Parameters.AddWithValue("last_worn_at", DbValue(garment.LastWornAt));
         command.Parameters.AddWithValue("laundry_status", garment.LaundryStatus);
+        command.Parameters.AddWithValue("rotation_degrees", garment.RotationDegrees);
         command.Parameters.AddWithValue("created_at", garment.CreatedAt);
     }
 
@@ -1262,7 +1280,8 @@ public sealed class PostgresOutfitStore :
             reader.GetBoolean(21),
             reader.IsDBNull(22) ? null : reader.GetFieldValue<DateTimeOffset>(22),
             reader.GetString(23),
-            reader.GetFieldValue<DateTimeOffset>(24));
+            reader.GetFieldValue<DateTimeOffset>(24),
+            reader.GetDouble(25));
     }
 
     private static Outfit ReadOutfitShell(NpgsqlDataReader reader)

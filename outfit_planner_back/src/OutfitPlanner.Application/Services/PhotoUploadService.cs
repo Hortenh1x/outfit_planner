@@ -30,6 +30,11 @@ public sealed class PhotoUploadService
         return _storage.SaveBodyReferencePhoto(ValidateAndBufferPhoto(photo));
     }
 
+    public StoredPhoto UploadAvatarPhoto(IncomingPhoto photo)
+    {
+        return _storage.SaveAvatarPhoto(ValidateAndBufferPhoto(photo));
+    }
+
     private static IncomingPhoto ValidateAndBufferPhoto(IncomingPhoto photo)
     {
         if (photo.Length <= 0)

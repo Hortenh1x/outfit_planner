@@ -143,6 +143,54 @@ describe('BuilderPage', () => {
     expect(bodyReferences.compareDocumentPosition(outfitName) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
   });
 
+  it('disables AI try-on until account gender is set', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/auth/me')) {
+        return jsonResponse({
+          user: { id: 'user-a', email: 'ada@example.com', displayName: 'Ada', username: 'Ada', avatarUrl: null, gender: null },
+          expiresAt: '2026-07-20T12:00:00Z'
+        });
+      }
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            userId: 'user-a',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: '/top.png',
+            thumbnailUrl: '/top.png',
+            tags: [],
+            secondaryColors: [],
+            season: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            laundryStatus: 'clean',
+            createdAt: '2026-06-21T12:00:00Z'
+          }
+        ]);
+      }
+
+      if (url.endsWith('/body-reference-photos')) {
+        return jsonResponse([{ id: 'body-1', imageUrl: 'https://example.com/body.jpg', createdAt: '2026-06-21T12:00:00Z' }]);
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderBuilder();
+
+    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    expect(await screen.findByText(/set gender in account settings/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /generate preview/i })).toBeDisabled();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/try-on/estimate'))).toBe(false);
+  });
+
   it('shows server-estimated cost and confirms before starting generation', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);

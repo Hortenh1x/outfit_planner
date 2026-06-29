@@ -57,7 +57,7 @@ services:
       BackgroundRemoval__Provider: RembgServer
       BackgroundRemoval__RembgServer__Endpoint: http://rembg:7000/api/remove
       BackgroundRemoval__RembgServer__ImageFieldName: file
-      BackgroundRemoval__RembgServer__ModelName: u2netp
+      BackgroundRemoval__RembgServer__ModelName: birefnet-general-lite
       BackgroundRemoval__RembgServer__TimeoutSeconds: "60"
 
     depends_on:

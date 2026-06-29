@@ -15,6 +15,7 @@ public sealed class TryOnService
     private readonly IClock _clock;
     private readonly IStoredPhotoUrlRefresher? _photoUrls;
     private readonly ITryOnOutputStorage? _tryOnOutputStorage;
+    private readonly IUserAccountRepository? _users;
     private readonly TimeSpan _outputRetention = TimeSpan.FromDays(30);
     private const string NoBodyReferenceIdentity = "body:none";
 
@@ -27,7 +28,8 @@ public sealed class TryOnService
         TryOnCostEstimator estimator,
         IClock clock,
         IStoredPhotoUrlRefresher? photoUrls = null,
-        ITryOnOutputStorage? tryOnOutputStorage = null)
+        ITryOnOutputStorage? tryOnOutputStorage = null,
+        IUserAccountRepository? users = null)
     {
         _bodyPhotos = bodyPhotos;
         _outfits = outfits;
@@ -38,6 +40,7 @@ public sealed class TryOnService
         _clock = clock;
         _photoUrls = photoUrls;
         _tryOnOutputStorage = tryOnOutputStorage;
+        _users = users ?? bodyPhotos as IUserAccountRepository;
     }
 
     public TryOnCostEstimate Estimate(string userId, Guid outfitId, TryOnMode mode, string? bodyReferencePhotoUrl, Guid? sourceBodyPhotoId)
@@ -47,12 +50,15 @@ public sealed class TryOnService
         var outfit = RefreshOutfitPhotoUrls(_outfits.GetOutfitByUser(normalizedUserId, outfitId)
             ?? throw new InvalidOperationException("Outfit was not found."));
         var bodyIdentity = BodyReferenceIdentity(normalizedUserId, sourceBodyPhotoId, normalizedBodyPhotoUrl);
+        var userGender = UserGenderFor(normalizedUserId);
         var cacheProbe = _estimator.Estimate(outfit, new TryOnEstimateInput(
             mode,
             _provider.Name,
             bodyIdentity,
             _provider.Capabilities.SettingsHash,
-            hasCachedResult: false));
+            hasCachedResult: false,
+            creditsPerRun: _provider.Capabilities.CreditsPerRun,
+            userGender: userGender));
         var cached = _jobs.FindSucceededTryOnJobByCacheKey(normalizedUserId, cacheProbe.CacheKey);
 
         var estimate = _estimator.Estimate(outfit, new TryOnEstimateInput(
@@ -60,8 +66,10 @@ public sealed class TryOnService
             _provider.Name,
             bodyIdentity,
             _provider.Capabilities.SettingsHash,
-            cached is not null));
-        return ApplyProviderAvailability(estimate);
+            hasCachedResult: cached is not null,
+            creditsPerRun: _provider.Capabilities.CreditsPerRun,
+            userGender: userGender));
+        return ApplyUserProfileAvailability(ApplyProviderAvailability(estimate), normalizedUserId);
     }
 
     public async Task<TryOnJob> StartAsync(
@@ -211,21 +219,37 @@ public sealed class TryOnService
                 queued.ProviderName ?? _provider.Name,
                 BodyReferenceIdentity(queued.UserId, queued.SourceBodyPhotoId, bodyReferencePhotoUrl),
                 queued.ProviderSettingsHash ?? _provider.Capabilities.SettingsHash,
-                hasCachedResult: false));
+                hasCachedResult: false,
+                creditsPerRun: _provider.Capabilities.CreditsPerRun,
+                userGender: UserGenderFor(queued.UserId)));
+            if (estimate.RequiresAi && _users?.GetUserById(queued.UserId) is { Gender: null })
+            {
+                throw new InvalidOperationException("Set gender in account settings before using AI try-on.");
+            }
+
             var visualOnlyItems = queued.TryOnMode == TryOnMode.ExperimentalCompositeTryOn
                 ? estimate.VisualOnlyItems
                 : Array.Empty<OutfitItem>();
+            var bodyTryOnItems = _photoUrls is null
+                ? estimate.BodyTryOnItems
+                : estimate.BodyTryOnItems
+                    .Select(item => item with { ThumbnailUrl = _photoUrls.RefreshGarmentImageUrl(item.ThumbnailUrl) })
+                    .ToList();
+
             var generation = _provider.Generate(new TryOnProviderRequest(
                 queued.UserId,
                 outfit.Id,
                 queued.TryOnMode,
                 bodyReferencePhotoUrl,
-                estimate.BodyTryOnItems,
+                bodyTryOnItems,
                 visualOnlyItems,
                 new TryOnGenerationSettings(
                     _provider.Capabilities.ModelName,
                     _provider.Capabilities.ProviderMode,
-                    _provider.Capabilities.SettingsHash)));
+                    _provider.Capabilities.SettingsHash))
+            {
+                UserGender = UserGenderFor(queued.UserId)
+            });
             var outputImageUrl = await StoreTryOnOutputAsync(processing, generation.OutputImageUrl, cancellationToken);
             var completed = processing with
             {
@@ -327,6 +351,33 @@ public sealed class TryOnService
         }
 
         return InputGuard.RequireText(bodyReferencePhotoUrl ?? string.Empty, "Body reference photo URL");
+    }
+
+    private UserGender? UserGenderFor(string userId)
+    {
+        return _users?.GetUserById(userId)?.Gender;
+    }
+
+    private TryOnCostEstimate ApplyUserProfileAvailability(TryOnCostEstimate estimate, string userId)
+    {
+        if (!estimate.RequiresAi)
+        {
+            return estimate;
+        }
+
+        var user = _users?.GetUserById(userId);
+        if (user is null || user.Gender is not null)
+        {
+            return estimate;
+        }
+
+        const string message = "Set gender in account settings before using AI try-on.";
+        return estimate with
+        {
+            IsAvailable = false,
+            Summary = message,
+            Warnings = estimate.Warnings.Concat(new[] { message }).ToArray()
+        };
     }
 
     private TryOnCostEstimate ApplyProviderAvailability(TryOnCostEstimate estimate)

@@ -13,14 +13,20 @@ public sealed record TryOnProviderRequest(
     string BodyReferencePhotoUrl,
     IReadOnlyList<OutfitItem> BodyTryOnItems,
     IReadOnlyList<OutfitItem> VisualOnlyItems,
-    TryOnGenerationSettings Settings);
+    TryOnGenerationSettings Settings)
+{
+    public UserGender? UserGender { get; init; }
+}
 
 public sealed record TryOnProviderCapabilities(
     string ProviderName,
     string ModelName,
     string ProviderMode,
     string SettingsHash,
-    IReadOnlySet<TryOnMode> SupportedModes);
+    IReadOnlySet<TryOnMode> SupportedModes)
+{
+    public int CreditsPerRun { get; init; } = 1;
+}
 
 public sealed record TryOnOptions(bool SequentialFlowEnabled);
 

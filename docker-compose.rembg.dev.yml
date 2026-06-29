@@ -1,0 +1,43 @@
+# Dev-only override that adds local AI background removal (rembg) to the
+# docker-compose.dev.yml stack.
+#
+# Without this, the API has no rembg available and BackgroundRemoval__Provider
+# defaults to "Auto", which falls back to the crude "Simple" color-key remover
+# (the active provider then reports "auto:simple" and barely removes anything).
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml -f docker-compose.rembg.dev.yml up -d
+#
+# This mirrors the rembg wiring already used in docker-compose.selfhost.override.yml.
+services:
+  rembg:
+    image: danielgatis/rembg:latest
+    command:
+      - s
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7000"
+      - --log_level
+      - info
+      - --no-ui
+    volumes:
+      - rembg_models:/root/.u2net
+    ports:
+      # Dev convenience: lets you curl http://localhost:7000/api/remove directly.
+      - "7000:7000"
+    restart: unless-stopped
+
+  api:
+    environment:
+      BackgroundRemoval__Provider: RembgServer
+      BackgroundRemoval__RembgServer__Endpoint: http://rembg:7000/api/remove
+      BackgroundRemoval__RembgServer__ImageFieldName: file
+      BackgroundRemoval__RembgServer__ModelName: birefnet-general-lite
+      BackgroundRemoval__RembgServer__TimeoutSeconds: "60"
+    depends_on:
+      rembg:
+        condition: service_started
+
+volumes:
+  rembg_models:

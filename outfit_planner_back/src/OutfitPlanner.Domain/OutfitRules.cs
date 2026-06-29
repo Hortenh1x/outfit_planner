@@ -40,7 +40,7 @@ public static class OutfitRules
             .OrderBy(item => Array.IndexOf(PresentationOrder, item.BodyZone))
             .ThenBy(item => item.Category)
             .ThenBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(item => new OutfitItem(item.Id, item.Name, item.Category, item.BodyZone, item.ThumbnailUrl))
+            .Select(item => new OutfitItem(item.Id, item.Name, item.Category, item.BodyZone, item.ThumbnailUrl, item.RotationDegrees))
             .ToList();
     }
 

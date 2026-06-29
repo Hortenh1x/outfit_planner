@@ -3,9 +3,25 @@ import {
   cleanPhotoChecklist,
   createUploadQueueItems,
   getPhotoQualityWarnings,
+  hasCreatableItems,
+  isQueueProcessing,
+  normalizeTagToken,
+  parseTokenText,
+  selectQueueItemsToStart,
   suggestTagsForUpload,
-  updateUploadQueueItem
+  uniqueTokens,
+  updateUploadQueueItem,
+  type UploadQueueItem,
+  type UploadQueueStatus
 } from './wardrobeUpload';
+
+function queueItem(id: string, status: UploadQueueStatus): UploadQueueItem {
+  const [item] = createUploadQueueItems(
+    [new File(['x'], `${id}.png`, { type: 'image/png' })],
+    { category: 'Top', color: '', season: [], existingTags: [] }
+  );
+  return { ...item, id, status };
+}
 
 describe('wardrobeUpload', () => {
   it('exposes the clean photo checklist copy required before upload', () => {
@@ -37,7 +53,7 @@ describe('wardrobeUpload', () => {
       tags: ['black', 'silk', 'cami', 'top', 'summer', 'favorite'],
       primaryColor: 'black',
       season: ['summer'],
-      status: 'ready',
+      status: 'queued',
       validationError: null
     });
     expect(rows[1].name).toBe('Wool blazer');
@@ -154,5 +170,44 @@ describe('wardrobeUpload', () => {
     } finally {
       Date.now = originalDateNow;
     }
+  });
+
+  it('selects queued items up to the remaining concurrency slots', () => {
+    const items = [
+      queueItem('a', 'queued'),
+      queueItem('b', 'processing'),
+      queueItem('c', 'queued'),
+      queueItem('d', 'queued'),
+      queueItem('e', 'processed')
+    ];
+
+    const started = selectQueueItemsToStart(items, 3, new Set(['b']));
+
+    expect(started.map((item) => item.id)).toEqual(['a', 'c']);
+  });
+
+  it('skips items already in flight and returns nothing when the limit is reached', () => {
+    const items = [queueItem('a', 'queued'), queueItem('b', 'queued')];
+
+    expect(selectQueueItemsToStart(items, 2, new Set(['a'])).map((item) => item.id)).toEqual(['b']);
+    expect(selectQueueItemsToStart(items, 1, new Set(['x']))).toHaveLength(0);
+  });
+
+  it('reports whether the queue is still processing photos', () => {
+    expect(isQueueProcessing([queueItem('a', 'processed'), queueItem('b', 'failed')])).toBe(false);
+    expect(isQueueProcessing([queueItem('a', 'processed'), queueItem('b', 'queued')])).toBe(true);
+    expect(isQueueProcessing([queueItem('a', 'processing')])).toBe(true);
+  });
+
+  it('reports whether any item can be turned into a garment', () => {
+    expect(hasCreatableItems([queueItem('a', 'invalid'), queueItem('b', 'processing')])).toBe(false);
+    expect(hasCreatableItems([queueItem('a', 'processed')])).toBe(true);
+    expect(hasCreatableItems([queueItem('a', 'failed')])).toBe(true);
+  });
+
+  it('normalizes and parses tag tokens consistently', () => {
+    expect(normalizeTagToken('  Linen ')).toBe('linen');
+    expect(parseTokenText('a, B , ,c')).toEqual(['a', 'B', 'c']);
+    expect(uniqueTokens(['A', 'a', ' b ', 'b'])).toEqual(['a', 'b']);
   });
 });

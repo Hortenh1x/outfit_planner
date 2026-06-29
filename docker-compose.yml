@@ -35,6 +35,8 @@ services:
       ASPNETCORE_URLS: http://+:8080
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=outfit_planner;Username=outfit;Password=outfit;GSS Encryption Mode=Disable
       ConnectionStrings__Redis: redis:6379
+      # Required outside Development: signs private object URLs. Never commit the value.
+      ObjectStorage__Local__SigningSecret: ${OBJECT_STORAGE_SIGNING_SECRET:?set OBJECT_STORAGE_SIGNING_SECRET to a strong random secret for signed object URLs}
     depends_on:
       postgres:
         condition: service_healthy

@@ -185,7 +185,12 @@ public abstract class JsonTryOnProvider : ITryOnProvider
     private static string NormalizeEndpoint(string endpoint)
     {
         var trimmed = endpoint.Trim();
-        return Uri.TryCreate(trimmed, UriKind.Absolute, out _)
+        // Treat the endpoint as absolute only when it carries a real http(s) scheme. On
+        // .NET/Linux a leading-slash relative endpoint ("/v1/try-on") parses as an absolute
+        // file: URI, so it would otherwise resolve against the authority root and drop the
+        // configured base path.
+        return Uri.TryCreate(trimmed, UriKind.Absolute, out var absolute)
+            && absolute.Scheme is "http" or "https"
             ? trimmed
             : trimmed.TrimStart('/');
     }

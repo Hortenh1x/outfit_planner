@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { GarmentMetadataInput } from '../../api/client';
 import type { GarmentCategory, GarmentItem } from '../../types';
 import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
+import { RotateControl } from '../../shared/ui/RotateControl';
 
 export type GarmentEditorSaveInput = {
   name: string;
@@ -26,6 +27,7 @@ interface GarmentEditorFormState {
   primaryColor: string;
   season: string;
   tags: string;
+  rotationDegrees: number;
 }
 
 export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEditorProps) {
@@ -69,7 +71,8 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
           thumbnailUrl: form.thumbnailUrl.trim() || undefined,
           tags: splitTokens(form.tags),
           primaryColor: form.primaryColor.trim() || null,
-          season: splitTokens(form.season)
+          season: splitTokens(form.season),
+          rotationDegrees: form.rotationDegrees
         });
       }}
     >
@@ -97,9 +100,20 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
         </select>
       </label>
       <div className="wardrobe-editor-photo" aria-label={`Current photo for ${garment.name}`}>
-        <img src={form.thumbnailUrl || form.imageUrl} alt={`${garment.name} current photo`} />
-        <p>Current photo is preserved.</p>
-        <p>Photo replacement will use the upload or re-add flow later.</p>
+        <img
+          src={form.thumbnailUrl || form.imageUrl}
+          alt={`${garment.name} current photo`}
+          style={{
+            transform: `rotate(${form.rotationDegrees - Number(garment.rotationDegrees ?? 0)}deg)`,
+            transition: 'transform 120ms ease'
+          }}
+        />
+        <p>Drag to straighten or rotate; the new angle is saved with the garment.</p>
+        <RotateControl
+          value={form.rotationDegrees}
+          onChange={(degrees) => updateForm({ rotationDegrees: degrees })}
+          disabled={isSaving}
+        />
       </div>
       <label>
         <span>Color</span>
@@ -143,7 +157,8 @@ function formFromGarment(garment: GarmentItem): GarmentEditorFormState {
     thumbnailUrl: garment.thumbnailUrl ?? '',
     primaryColor: garment.primaryColor ?? '',
     season: (garment.season ?? []).join(', '),
-    tags: garment.tags.join(', ')
+    tags: garment.tags.join(', '),
+    rotationDegrees: Number(garment.rotationDegrees ?? 0)
   };
 }
 

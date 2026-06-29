@@ -2,7 +2,7 @@ using OutfitPlanner.Application.Abstractions;
 
 namespace OutfitPlanner.Infrastructure.Storage;
 
-public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStoredPhotoDeletion
+public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStoredPhotoDeletion, IGarmentImageRotator
 {
     private static readonly TimeSpan DefaultSignedUrlLifetime = TimeSpan.FromMinutes(15);
 
@@ -32,6 +32,12 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
         return SaveProcessedPhoto("body-reference-photos", processed, StoredImageVariant.Original);
     }
 
+    public StoredPhoto SaveAvatarPhoto(IncomingPhoto photo)
+    {
+        var processed = _images.ProcessAvatarPhoto(photo);
+        return SaveProcessedPhoto("avatars", processed, StoredImageVariant.Thumbnail);
+    }
+
     public StoredPhotoFile? GetGarmentPhoto(string fileName)
     {
         return GetPhoto("garments", StoredImageVariant.Original, fileName);
@@ -50,6 +56,51 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
     public bool DeleteBodyReferencePhoto(string photoUrl)
     {
         return DeletePhoto("body-reference-photos", photoUrl);
+    }
+
+    public double ComputeGarmentAutoStraightenAngle(string garmentImageUrl)
+    {
+        var baseBytes = LoadGarmentBaseCutout(garmentImageUrl);
+        return baseBytes is null ? 0d : _images.ComputeGarmentDeskewAngle(baseBytes);
+    }
+
+    public GarmentRotationOutcome RotateGarment(string garmentImageUrl, double degrees)
+    {
+        var fileName = FileNameFromPhotoUrl(garmentImageUrl)
+            ?? throw new InvalidOperationException("Cannot resolve the garment image to rotate.");
+        var baseBytes = LoadGarmentBaseCutout(garmentImageUrl)
+            ?? throw new InvalidOperationException("The garment has no base cutout to rotate from.");
+
+        var rendered = _images.RenderRotatedGarment(baseBytes, degrees);
+        var cutout = OverwriteGarmentVariant(StoredImageVariant.ProcessedCutout, fileName, rendered.CutoutPng);
+        var thumbnail = OverwriteGarmentVariant(StoredImageVariant.Thumbnail, fileName, rendered.ThumbnailPng);
+        OverwriteGarmentVariant(StoredImageVariant.SegmentationMask, fileName, rendered.SegmentationMaskPng);
+
+        return new GarmentRotationOutcome(SignedUrl(cutout), SignedUrl(thumbnail), rendered.PerceptualHash);
+    }
+
+    private byte[]? LoadGarmentBaseCutout(string garmentImageUrl)
+    {
+        var fileName = FileNameFromPhotoUrl(garmentImageUrl);
+        if (fileName is null)
+        {
+            return null;
+        }
+
+        // Prefer the immutable base; fall back to the current cutout for legacy garments.
+        var baseObject = _objects.GetObject(ObjectKey("garments", StoredImageVariant.BaseCutout, fileName))
+            ?? _objects.GetObject(ObjectKey("garments", StoredImageVariant.ProcessedCutout, fileName));
+        return baseObject is null ? null : File.ReadAllBytes(baseObject.FullPath);
+    }
+
+    private StoredObject OverwriteGarmentVariant(StoredImageVariant variant, string fileName, byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        return _objects.PutObject(new ObjectStoragePutRequest(
+            ObjectKey("garments", variant, fileName),
+            "image/png",
+            stream,
+            Private: true));
     }
 
     private StoredPhoto SaveProcessedPhoto(string collection, ProcessedPhotoSet processed, StoredImageVariant primaryVariant)
@@ -82,7 +133,9 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
             ThumbnailObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.Thumbnail)?.ObjectKey,
             ProcessedCutoutObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.ProcessedCutout)?.ObjectKey,
             PrivatePreviewObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.PrivatePreview)?.ObjectKey,
-            PerceptualHash = processed.PerceptualHash
+            PerceptualHash = processed.PerceptualHash,
+            BaseCutoutUrl = OptionalSignedUrl(storedByVariant.GetValueOrDefault(StoredImageVariant.BaseCutout)),
+            BaseCutoutObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.BaseCutout)?.ObjectKey
         };
     }
 
@@ -142,6 +195,7 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
             StoredImageVariant.TryOnOutput => "try-on-output",
             StoredImageVariant.PrivatePreview => "private-preview",
             StoredImageVariant.SegmentationMask => "segmentation-mask",
+            StoredImageVariant.BaseCutout => "base-cutout",
             _ => throw new ArgumentOutOfRangeException(nameof(variant), variant, "Unsupported image variant.")
         };
     }
@@ -153,7 +207,11 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
             return null;
         }
 
+        // Only treat genuine http(s) URLs as absolute. On .NET/Linux a leading-slash
+        // relative signed URL ("/api/storage/signed/...") parses as an absolute file: URI,
+        // which folds the "?query" into the path as "%3F..." and corrupts the file name.
         var path = Uri.TryCreate(photoUrl, UriKind.Absolute, out var absoluteUri)
+            && absoluteUri.Scheme is "http" or "https"
             ? absoluteUri.AbsolutePath
             : photoUrl.Split('?', 2)[0];
 

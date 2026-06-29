@@ -21,4 +21,5 @@ public sealed record UpdateGarmentCommand(
     bool? IsFavorite = null,
     bool? IsArchived = null,
     DateTimeOffset? LastWornAt = null,
-    string? LaundryStatus = null);
+    string? LaundryStatus = null,
+    double? RotationDegrees = null);
