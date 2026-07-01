@@ -98,7 +98,7 @@ describe('WardrobePage', () => {
     expect(screen.getByRole('combobox', { name: /^tags$/i })).toBeInTheDocument();
     expect(within(screen.getByLabelText(/garment categories/i)).getByRole('button', { name: /outerwear/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/clean photo checklist/i)).toHaveTextContent(/front view/i);
-    expect(await screen.findByText(/black silk cami/i)).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: /black silk cami/i })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/garments?archived=false&sort=recent', expect.any(Object));
   });
 
@@ -108,7 +108,7 @@ describe('WardrobePage', () => {
     renderWardrobe();
 
     const filters = await screen.findByLabelText(/wardrobe filters/i);
-    await screen.findByText(/black silk cami/i);
+    await screen.findByRole('img', { name: /black silk cami/i });
     await userEvent.type(within(filters).getByLabelText(/search wardrobe/i), 'silk');
     await userEvent.click(within(screen.getByLabelText(/garment categories/i)).getByRole('button', { name: /^top$/i }));
     await userEvent.selectOptions(within(filters).getByLabelText(/^color$/i), 'black');
@@ -128,7 +128,7 @@ describe('WardrobePage', () => {
     renderWardrobe();
 
     const filters = await screen.findByLabelText(/wardrobe filters/i);
-    await screen.findByText(/black silk cami/i);
+    await screen.findByRole('img', { name: /black silk cami/i });
     const tagsCombobox = within(filters).getByRole('combobox', { name: /^tags$/i });
     await userEvent.click(tagsCombobox);
 
@@ -141,11 +141,11 @@ describe('WardrobePage', () => {
     expect(within(suggestions).queryByRole('option', { name: 'silk' })).not.toBeInTheDocument();
     await userEvent.click(within(suggestions).getByRole('option', { name: 'work' }));
 
-    expect(screen.queryByText(/black silk cami/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/wool blazer/i)).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: /black silk cami/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: /wool blazer/i })).toBeInTheDocument();
 
     await userEvent.click(within(filters).getByRole('button', { name: /reset/i }));
-    expect(await screen.findByText(/black silk cami/i)).toBeInTheDocument();
+    expect(await screen.findByRole('img', { name: /black silk cami/i })).toBeInTheDocument();
   });
 
   it('shows empty examples and reset for filtered empty states', async () => {
@@ -200,7 +200,7 @@ describe('WardrobePage', () => {
 
     renderWardrobe();
 
-    await screen.findByText(/black silk cami/i);
+    await screen.findByRole('img', { name: /black silk cami/i });
     const fileInput = screen.getByLabelText(/garment photos/i);
     const cameraInput = screen.getByLabelText(/camera garment photo/i);
     expect(cameraInput).toHaveAttribute('capture', 'environment');
@@ -247,7 +247,7 @@ describe('WardrobePage', () => {
 
     renderWardrobe();
 
-    await screen.findByText(/black silk cami/i);
+    await screen.findByRole('img', { name: /black silk cami/i });
     // The Type/Color/Season/Tags defaults block and the empty hint are gone.
     expect(screen.queryByLabelText(/upload defaults/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/build an upload queue/i)).not.toBeInTheDocument();
@@ -293,7 +293,7 @@ describe('WardrobePage', () => {
 
     renderWardrobe();
 
-    await screen.findByText(/black silk cami/i);
+    await screen.findByRole('img', { name: /black silk cami/i });
     await userEvent.upload(
       screen.getByLabelText(/garment photos/i),
       new File(['dup'], 'dup.png', { type: 'image/png' })
@@ -309,7 +309,7 @@ describe('WardrobePage', () => {
 
     renderWardrobe();
 
-    await screen.findByText(/black silk cami/i);
+    await screen.findByRole('img', { name: /black silk cami/i });
     await userEvent.upload(
       screen.getByLabelText(/garment photos/i),
       new File(['shirt'], 'plain-shirt.png', { type: 'image/png' })
