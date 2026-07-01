@@ -1,0 +1,20 @@
+# Cloudflare Tunnel sidecar. Layer on top of the base (and optional self-host) compose:
+#   docker compose -f docker-compose.yml -f docker-compose.cloudflared.yml up -d --build
+#
+# The tunnel opens an OUTBOUND connection from this machine to Cloudflare, so there is no need
+# for a static IP, port forwarding, or DNS-to-IP records. If your home IP changes, cloudflared
+# simply reconnects and the site stays up — nothing to update.
+#
+# Routing (which public hostname -> which internal service) is configured in the Cloudflare
+# Zero Trust dashboard for this token-based tunnel. Point the public hostname at:
+#   Service: HTTPS   URL: frontend:443   (enable "No TLS Verify")
+# cloudflared reaches the nginx `frontend` container over the shared compose network.
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env using the token from the Cloudflare dashboard}
+    depends_on:
+      - frontend

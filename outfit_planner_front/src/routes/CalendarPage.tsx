@@ -56,6 +56,22 @@ export function CalendarPage() {
             </button>
           </div>
         </div>
+        {outfitsQuery.isError || scheduleQuery.isError ? (
+          <div className="status" role="alert">
+            <p>We couldn’t load your calendar. Please try again.</p>
+            <button
+              type="button"
+              onClick={() => {
+                void outfitsQuery.refetch();
+                void scheduleQuery.refetch();
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        ) : outfitsQuery.isPending || scheduleQuery.isPending ? (
+          <p className="status">Loading your calendar…</p>
+        ) : null}
         <div className="month-calendar" aria-label="Monthly outfit calendar">
           {weekDayLabels.map((dayLabel) => (
             <div className="weekday-cell" key={dayLabel}>

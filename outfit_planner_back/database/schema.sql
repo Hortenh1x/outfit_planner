@@ -136,6 +136,8 @@ create table if not exists garment_items (
     last_worn_at timestamptz,
     laundry_status text not null default 'clean' check (laundry_status in ('clean', 'worn', 'washing')),
     rotation_degrees double precision not null default 0,
+    background_removal_status text not null default 'Succeeded',
+    background_removal_error text,
     created_at timestamptz not null default now()
 );
 
@@ -161,6 +163,8 @@ alter table garment_items add column if not exists is_archived boolean not null 
 alter table garment_items add column if not exists last_worn_at timestamptz;
 alter table garment_items add column if not exists laundry_status text not null default 'clean';
 alter table garment_items add column if not exists rotation_degrees double precision not null default 0;
+alter table garment_items add column if not exists background_removal_status text not null default 'Succeeded';
+alter table garment_items add column if not exists background_removal_error text;
 
 create table if not exists outfits (
     id uuid primary key,
@@ -277,3 +281,42 @@ on outfits using gin (tags);
 
 create index if not exists ix_outfits_occasion_gin
 on outfits using gin (occasion);
+
+create index if not exists ix_try_on_jobs_user_created_at
+on try_on_jobs (user_id, created_at desc);
+
+create index if not exists ix_auth_sessions_expires_at
+on auth_sessions (expires_at);
+
+create index if not exists ix_outfit_items_outfit_id
+on outfit_items (outfit_id);
+
+create index if not exists ix_outfit_items_garment_id
+on outfit_items (garment_id);
+
+create index if not exists ix_scheduled_outfits_outfit_id
+on scheduled_outfits (outfit_id);
+
+create index if not exists ix_try_on_jobs_outfit_id
+on try_on_jobs (outfit_id);
+
+create index if not exists ix_try_on_jobs_source_body_photo_id
+on try_on_jobs (source_body_photo_id);
+
+create index if not exists ix_try_on_jobs_source_cached_job_id
+on try_on_jobs (source_cached_job_id);
+
+create index if not exists ix_share_links_user_id
+on share_links (user_id);
+
+create index if not exists ix_share_links_outfit_id
+on share_links (outfit_id);
+
+create index if not exists ix_body_reference_photos_user_id
+on body_reference_photos (user_id);
+
+create index if not exists ix_auth_email_verification_tokens_user_id
+on auth_email_verification_tokens (user_id);
+
+create index if not exists ix_auth_password_reset_tokens_user_id
+on auth_password_reset_tokens (user_id);

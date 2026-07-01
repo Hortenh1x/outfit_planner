@@ -98,7 +98,7 @@ public sealed class TryOnCostEstimator
             TryOnMode.SingleGarmentTryOn => input.CreditsPerRun,
             TryOnMode.SequentialOutfitTryOn => bodyItems.Count * input.CreditsPerRun,
             TryOnMode.ExperimentalCompositeTryOn => input.CreditsPerRun,
-            _ => throw new InvalidOperationException($"Unsupported try-on mode {input.Mode}.")
+            _ => throw new ValidationException($"Unsupported try-on mode {input.Mode}.")
         };
         var garmentRotations = included.ToDictionary(item => item.GarmentId, item => item.RotationDegrees);
         var cacheKey = BuildCacheKey(input.BodyReferenceIdentity, included.Select(item => item.GarmentId), input.ProviderName, input.Mode, input.SettingsHash, input.UserGender, garmentRotations);
@@ -140,7 +140,7 @@ public sealed class TryOnCostEstimator
             TryOnMode.SingleGarmentTryOn => bodyItems.Count == 1 ? bodyItems : Array.Empty<OutfitItem>(),
             TryOnMode.SequentialOutfitTryOn => bodyItems,
             TryOnMode.ExperimentalCompositeTryOn => bodyItems.Concat(visualItems).ToList(),
-            _ => throw new InvalidOperationException($"Unsupported try-on mode {mode}.")
+            _ => throw new ValidationException($"Unsupported try-on mode {mode}.")
         };
     }
 }

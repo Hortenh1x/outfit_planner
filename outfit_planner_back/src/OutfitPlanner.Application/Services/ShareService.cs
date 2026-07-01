@@ -28,7 +28,7 @@ public sealed class ShareService
         var normalizedUserId = InputGuard.NormalizeUserId(userId);
         if (_outfits.GetOutfitByUser(normalizedUserId, outfitId) is null)
         {
-            throw new InvalidOperationException("Outfit was not found.");
+            throw new ValidationException("Outfit was not found.");
         }
 
         var link = new ShareLink(_tokens.CreateToken(), normalizedUserId, outfitId, _clock.UtcNow, null);

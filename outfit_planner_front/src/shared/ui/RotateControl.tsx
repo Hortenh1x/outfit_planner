@@ -1,23 +1,39 @@
-import { useRef } from 'react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import { useRef, useState } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { RotateCw } from 'lucide-react';
 
 interface RotateControlProps {
   /** Absolute rotation in degrees, normalized to (-180, 180]. */
   value: number;
   onChange: (degrees: number) => void;
+  /**
+   * Fires as a pointer scrub begins and ends, so the parent can drop its preview transition
+   * while the drag is live (a tween fighting the drag reads as lag).
+   */
+  onScrubbingChange?: (scrubbing: boolean) => void;
   disabled?: boolean;
 }
 
 const DEGREES_PER_PIXEL = 0.75;
+const FINE_STEP = 1;
+const COARSE_STEP = 10;
+const MIN_DEGREES = -180;
+const MAX_DEGREES = 180;
 
 /**
- * Press-and-hold the handle, then drag horizontally to spin the garment preview to any angle.
+ * Press-and-hold the handle, then drag horizontally to spin the garment preview to any angle;
+ * keyboard users focus the handle and nudge with the arrow keys (Shift for 10 degree steps).
  * The parent applies `value` as the live preview transform; on save the absolute angle is sent
  * to the backend, which re-renders the cutout from its immutable base.
  */
-export function RotateControl({ value, onChange, disabled = false }: RotateControlProps) {
+export function RotateControl({ value, onChange, onScrubbingChange, disabled = false }: RotateControlProps) {
   const drag = useRef<{ startX: number; startValue: number } | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
+
+  function setScrub(active: boolean) {
+    setScrubbing(active);
+    onScrubbingChange?.(active);
+  }
 
   function beginDrag(event: ReactPointerEvent<HTMLButtonElement>) {
     if (disabled) {
@@ -26,6 +42,7 @@ export function RotateControl({ value, onChange, disabled = false }: RotateContr
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { startX: event.clientX, startValue: value };
+    setScrub(true);
   }
 
   function moveDrag(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -37,22 +54,56 @@ export function RotateControl({ value, onChange, disabled = false }: RotateContr
   }
 
   function endDrag(event: ReactPointerEvent<HTMLButtonElement>) {
-    if (drag.current && event.currentTarget.hasPointerCapture(event.pointerId)) {
+    if (!drag.current) {
+      return;
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     drag.current = null;
+    setScrub(false);
   }
 
+  function nudge(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    if (disabled) {
+      return;
+    }
+    const step = event.shiftKey ? COARSE_STEP : FINE_STEP;
+    let next: number;
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowUp':
+        next = value + step;
+        break;
+      case 'ArrowLeft':
+      case 'ArrowDown':
+        next = value - step;
+        break;
+      case 'Home':
+        next = 0;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    onChange(normalizeDegrees(next));
+  }
+
+  const rounded = Math.round(value);
+
   return (
-    <div
-      className="rotate-control"
-      style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}
-    >
+    <div className="rotate-control">
       <button
         type="button"
         className="wardrobe-secondary-button rotate-control-handle"
-        style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', cursor: 'ew-resize', touchAction: 'none' }}
-        aria-label="Hold and drag to rotate the garment"
+        role="slider"
+        aria-label="Rotate garment"
+        aria-valuenow={rounded}
+        aria-valuemin={MIN_DEGREES}
+        aria-valuemax={MAX_DEGREES}
+        aria-valuetext={`${rounded} degrees`}
+        aria-orientation="horizontal"
+        data-scrubbing={scrubbing ? 'true' : undefined}
         disabled={disabled}
         onPointerDown={beginDrag}
         onPointerMove={moveDrag}
@@ -60,17 +111,17 @@ export function RotateControl({ value, onChange, disabled = false }: RotateContr
         onPointerCancel={endDrag}
         onLostPointerCapture={() => {
           drag.current = null;
+          setScrub(false);
         }}
+        onKeyDown={nudge}
       >
         <RotateCw aria-hidden size={15} />
-        <span>Hold &amp; drag to rotate</span>
+        <span>Rotate</span>
       </button>
-      <output className="rotate-control-value" style={{ fontVariantNumeric: 'tabular-nums', minWidth: '3.5ch' }}>
-        {Math.round(value)}&deg;
-      </output>
+      <output className="rotate-control-value">{rounded}&deg;</output>
       <button
         type="button"
-        className="wardrobe-secondary-button"
+        className="wardrobe-secondary-button rotate-control-reset"
         onClick={() => onChange(0)}
         disabled={disabled || Math.abs(value) < 0.5}
       >

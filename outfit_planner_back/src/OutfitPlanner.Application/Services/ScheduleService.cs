@@ -22,7 +22,7 @@ public sealed class ScheduleService
         var normalizedUserId = InputGuard.NormalizeUserId(userId);
         if (_outfits.GetOutfitByUser(normalizedUserId, outfitId) is null)
         {
-            throw new InvalidOperationException("Outfit was not found.");
+            throw new ValidationException("Outfit was not found.");
         }
 
         var scheduled = new ScheduledOutfit(Guid.NewGuid(), normalizedUserId, date, outfitId, _clock.UtcNow);
@@ -34,7 +34,7 @@ public sealed class ScheduleService
     {
         if (to < from)
         {
-            throw new InvalidOperationException("Schedule range end must be on or after range start.");
+            throw new ValidationException("Schedule range end must be on or after range start.");
         }
 
         return _schedule.ListScheduleByUser(InputGuard.NormalizeUserId(userId), from, to);

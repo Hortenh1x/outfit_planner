@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
-import { getSharedOutfit } from '../api/client';
+import { ApiError, getSharedOutfit } from '../api/client';
 import { EmptyPreview } from '../shared/ui/EmptyPreview';
 import { PageHeader } from '../shared/ui/PageHeader';
 
@@ -9,10 +9,28 @@ export function SharePage() {
   const query = useQuery({
     queryKey: ['share', token],
     queryFn: () => getSharedOutfit(token ?? ''),
-    enabled: Boolean(token)
+    enabled: Boolean(token),
+    retry: false
   });
 
-  if (query.isLoading) {
+  const isNotFound = !token || (query.error instanceof ApiError && query.error.status === 404);
+
+  if (isNotFound) {
+    return <p className="status">Shared outfit not found.</p>;
+  }
+
+  if (query.isError) {
+    return (
+      <div className="status" role="alert">
+        <p>We couldn’t load this shared outfit. Please try again.</p>
+        <button type="button" onClick={() => void query.refetch()}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (query.isPending || query.isLoading) {
     return <p className="status">Loading shared outfit...</p>;
   }
 

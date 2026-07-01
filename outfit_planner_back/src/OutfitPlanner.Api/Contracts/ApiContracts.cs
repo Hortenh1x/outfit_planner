@@ -25,7 +25,9 @@ public sealed record CreateGarmentRequest(
     bool? IsFavorite,
     bool? IsArchived,
     DateTimeOffset? LastWornAt,
-    string? LaundryStatus);
+    string? LaundryStatus,
+    string? PerceptualHash = null,
+    bool? BackgroundRemovalPending = null);
 
 public sealed record UpdateGarmentRequest(
     string? Name,
@@ -119,7 +121,8 @@ public sealed record UploadedPhotoResponse(
     string? OriginalUrl,
     string? ThumbnailUrl,
     string? CutoutUrl,
-    string? MaskUrl);
+    string? MaskUrl,
+    string? PerceptualHash);
 
 public sealed record RegisterRequest(string Email, string Password, string RepeatPassword);
 

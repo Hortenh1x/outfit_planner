@@ -185,10 +185,23 @@ describe('WardrobePage', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/garments/garment-1', expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('Black silk camisole') }));
     });
 
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     await userEvent.click(await screen.findByRole('button', { name: /delete black silk cami/i }));
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/garments/garment-1', expect.objectContaining({ method: 'DELETE' }));
     });
+  });
+
+  it('does not delete a garment when the confirmation is dismissed', async () => {
+    const fetchMock = mockWardrobeFetch();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    renderWardrobe();
+
+    await userEvent.click(await screen.findByRole('button', { name: /delete black silk cami/i }));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/garments/garment-1', expect.objectContaining({ method: 'DELETE' }));
   });
 
   it('supports bulk upload file input camera input drag drop suggestions warnings and submit all', async () => {
@@ -213,7 +226,7 @@ describe('WardrobePage', () => {
         '/uploads/new-garment-cutout.png'
       );
     });
-    expect(fetchMock).toHaveBeenCalledWith('/api/uploads/garment-photo', expect.objectContaining({ method: 'POST' }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/uploads/garment-original', expect.objectContaining({ method: 'POST' }));
     expect(screen.getByDisplayValue(/cream linen shirt/i)).toBeInTheDocument();
     expect(screen.getAllByText(/needs better photo/i).length).toBeGreaterThan(0);
     expect(within(screen.getByLabelText(/tags for cream linen shirt/i)).getByText(/linen/i)).toBeInTheDocument();
@@ -236,6 +249,68 @@ describe('WardrobePage', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/garments', expect.objectContaining({ method: 'POST', body: expect.stringContaining('Cream linen shirt') }));
       expect(fetchMock).toHaveBeenCalledWith('/api/garments', expect.objectContaining({ method: 'POST', body: expect.stringContaining('Brown wool blazer') }));
     });
+  });
+
+  it('never shows the shared upload defaults block and hides the empty-queue note', async () => {
+    mockWardrobeFetch();
+
+    renderWardrobe();
+
+    await screen.findByText(/black silk cami/i);
+    // The Type/Color/Season/Tags defaults block and the empty hint are gone.
+    expect(screen.queryByLabelText(/upload defaults/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/build an upload queue/i)).not.toBeInTheDocument();
+    // The drop zone and camera input are still available to start a queue.
+    expect(screen.getByLabelText(/garment photos/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/camera garment photo/i)).toBeInTheDocument();
+
+    await userEvent.upload(
+      screen.getByLabelText(/garment photos/i),
+      new File(['shirt'], 'plain-shirt.png', { type: 'image/png' })
+    );
+
+    // The per-upload queue row appears, but the shared defaults block still does not.
+    expect(await screen.findByLabelText(/upload queue/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/upload defaults/i)).not.toBeInTheDocument();
+  });
+
+  it('flags a photo that duplicates an existing wardrobe garment and blocks submit', async () => {
+    const hash = 'ffffffffffffffff';
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+
+      if (url.startsWith('/api/garments') && method === 'GET') {
+        return jsonResponse([{ ...garmentsResponse[0], perceptualHash: hash }]);
+      }
+
+      if ((url.endsWith('/uploads/garment-photo') || url.endsWith('/uploads/garment-original')) && method === 'POST') {
+        return jsonResponse({
+          fileName: 'dup.png',
+          contentType: 'image/png',
+          length: 128,
+          url: '/uploads/dup.png',
+          thumbnailUrl: '/uploads/dup-thumb.png',
+          cutoutUrl: '/uploads/dup-cutout.png',
+          perceptualHash: hash
+        }, 201);
+      }
+
+      return jsonResponse([]);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWardrobe();
+
+    await screen.findByText(/black silk cami/i);
+    await userEvent.upload(
+      screen.getByLabelText(/garment photos/i),
+      new File(['dup'], 'dup.png', { type: 'image/png' })
+    );
+
+    // Its pre-removal hash matches an existing garment, so the row is flagged and excluded.
+    expect(await screen.findByText(/already in your wardrobe/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /add garments/i })).toBeDisabled());
   });
 
   it('updates upload queue tag chips while editing row fields', async () => {
@@ -310,7 +385,7 @@ function mockWardrobeFetch(options: { emptyForSearch?: boolean } = {}) {
       return jsonResponse(garmentsResponse);
     }
 
-    if (url.endsWith('/uploads/garment-photo') && method === 'POST') {
+    if ((url.endsWith('/uploads/garment-photo') || url.endsWith('/uploads/garment-original')) && method === 'POST') {
       return jsonResponse({
         fileName: 'new-garment.png',
         contentType: 'image/png',

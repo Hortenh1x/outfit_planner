@@ -73,6 +73,8 @@ services:
       VITE_DEV_HTTPS_PFX: /https/outfit-planner-dev.pfx
       VITE_DEV_HTTPS_PFX_PASSPHRASE: outfit-dev-cert
       VITE_DEV_API_TARGET: https://api:8081
+      # Hosts allowed when the dev server is exposed on a public domain via the tunnel.
+      VITE_ALLOWED_HOSTS: ${VITE_ALLOWED_HOSTS:-outfitplanner.net}
     ports:
       - "5173:5173"
     volumes:

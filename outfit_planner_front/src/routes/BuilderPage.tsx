@@ -219,19 +219,21 @@ export function BuilderPage() {
 
   function updateSelection(selectionKey: keyof OutfitSelection, id: string) {
     setSelection((current) => {
-      if (current[selectionKey] === id) {
-        return current;
+      if (current[selectionKey] !== id) {
+        return { ...current, [selectionKey]: id };
       }
 
-      return { ...current, [selectionKey]: id };
+      // Clicking the already-selected piece again clears the slot (toggle off).
+      const next = { ...current };
+      delete next[selectionKey];
+      return next;
     });
 
-    if (selection[selectionKey] !== id) {
-      setPendingEstimate(null);
-      estimateMutation.reset();
-      tryOnMutation.reset();
-      shareMutation.reset();
-    }
+    // Any change — select, switch, or clear — invalidates a pending estimate/preview.
+    setPendingEstimate(null);
+    estimateMutation.reset();
+    tryOnMutation.reset();
+    shareMutation.reset();
   }
 
   function handlePickOutfit(outfit: Outfit) {
@@ -296,7 +298,18 @@ export function BuilderPage() {
             </div>
           ) : (
             <div className="person-preview">
-              {previewUrl ? <img src={previewUrl} alt="Generated try-on preview" /> : <EmptyPreview />}
+              {previewUrl ? (
+                <img src={previewUrl} alt="Generated try-on preview" />
+              ) : latestTryOnJob?.status === 'Failed' ? (
+                <div className="status" role="alert">
+                  <p>Try-on failed{latestTryOnJob.error ? `: ${latestTryOnJob.error}` : '.'}</p>
+                  <p>Adjust the outfit or body reference and generate again.</p>
+                </div>
+              ) : latestTryOnJob?.status === 'Queued' || latestTryOnJob?.status === 'Processing' ? (
+                <p className="status" role="status">Generating your try-on…</p>
+              ) : (
+                <EmptyPreview />
+              )}
             </div>
           )}
         </div>

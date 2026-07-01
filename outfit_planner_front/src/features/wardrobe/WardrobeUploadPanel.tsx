@@ -1,7 +1,6 @@
-import { useEffect, useState, type DragEvent } from 'react';
+import { type DragEvent } from 'react';
 import { Camera, CloudUpload, Plus } from 'lucide-react';
 import type { GarmentCategory } from '../../types';
-import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
 import { UploadQueue } from './UploadQueue';
 import {
   cleanPhotoChecklist,
@@ -18,18 +17,11 @@ export interface WardrobeUploadDefaults {
   tags: string[];
 }
 
-interface WardrobeUploadDefaultsTextDraft {
-  seasonText: string;
-  tagsText: string;
-}
-
 interface WardrobeUploadPanelProps {
   queue: UploadQueueItem[];
   isUploading: boolean;
-  defaults: WardrobeUploadDefaults;
   onAddFiles: (files: File[]) => void;
   onChangeItem: (itemId: string, updates: UploadQueueItemUpdates) => void;
-  onDefaultsChange: (defaults: WardrobeUploadDefaults) => void;
   onRemoveItem: (itemId: string) => void;
   onRetryItem: (itemId: string) => void;
   onSubmitAll: () => void;
@@ -38,22 +30,17 @@ interface WardrobeUploadPanelProps {
 export function WardrobeUploadPanel({
   queue,
   isUploading,
-  defaults,
   onAddFiles,
   onChangeItem,
-  onDefaultsChange,
   onRemoveItem,
   onRetryItem,
   onSubmitAll
 }: WardrobeUploadPanelProps) {
   const processing = isQueueProcessing(queue);
-  const submitDisabled = isUploading || processing || !hasCreatableItems(queue);
-  const submitLabel = isUploading ? 'Uploading' : processing ? 'Processing photos…' : 'Add garments';
-  const [defaultsTextDraft, setDefaultsTextDraft] = useState<WardrobeUploadDefaultsTextDraft>(() => defaultsTextDraftFromDefaults(defaults));
-
-  useEffect(() => {
-    setDefaultsTextDraft((current) => syncDefaultsTextDraft(current, defaults));
-  }, [defaults]);
+  // Non-blocking: you can add the ready photos even while others are still uploading; background
+  // removal then runs asynchronously on the server and the cutout appears in the wardrobe later.
+  const submitDisabled = isUploading || !hasCreatableItems(queue);
+  const submitLabel = isUploading ? 'Uploading' : processing ? 'Add ready garments' : 'Add garments';
 
   function addInputFiles(fileList: FileList | null): boolean {
     if (isUploading) {
@@ -85,42 +72,6 @@ export function WardrobeUploadPanel({
       </div>
       <div className="clean-checklist" aria-label="Clean photo checklist">
         {cleanPhotoChecklist.map((item) => <span key={item}>{item}</span>)}
-      </div>
-      <div className="wardrobe-upload-defaults" aria-label="Upload defaults">
-        <label>
-          <span>Type</span>
-          <select
-            value={defaults.category}
-            disabled={isUploading}
-            onChange={(event) => onDefaultsChange({ ...defaults, category: event.target.value as GarmentCategory })}
-          >
-            {GARMENT_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>Color</span>
-          <input
-            value={defaults.color}
-            disabled={isUploading}
-            onChange={(event) => onDefaultsChange({ ...defaults, color: event.target.value })}
-          />
-        </label>
-        <label>
-          <span>Season</span>
-          <input
-            value={defaultsTextDraft.seasonText}
-            disabled={isUploading}
-            onChange={(event) => changeDefaultsTextDraft({ seasonText: event.target.value })}
-          />
-        </label>
-        <label>
-          <span>Tags</span>
-          <input
-            value={defaultsTextDraft.tagsText}
-            disabled={isUploading}
-            onChange={(event) => changeDefaultsTextDraft({ tagsText: event.target.value })}
-          />
-        </label>
       </div>
       <label className="wardrobe-drop-zone" aria-disabled={isUploading} onDragOver={handleDragOver} onDrop={handleDrop}>
         <CloudUpload size={24} aria-hidden="true" />
@@ -166,43 +117,4 @@ export function WardrobeUploadPanel({
       </button>
     </section>
   );
-
-  function changeDefaultsTextDraft(updates: Partial<WardrobeUploadDefaultsTextDraft>) {
-    const nextDraft = { ...defaultsTextDraft, ...updates };
-    setDefaultsTextDraft(nextDraft);
-    onDefaultsChange({
-      ...defaults,
-      ...(updates.seasonText !== undefined ? { season: parseTokenText(nextDraft.seasonText) } : {}),
-      ...(updates.tagsText !== undefined ? { tags: parseTokenText(nextDraft.tagsText) } : {})
-    });
-  }
-}
-
-function defaultsTextDraftFromDefaults(defaults: WardrobeUploadDefaults): WardrobeUploadDefaultsTextDraft {
-  return {
-    seasonText: defaults.season.join(', '),
-    tagsText: defaults.tags.join(', ')
-  };
-}
-
-function syncDefaultsTextDraft(
-  current: WardrobeUploadDefaultsTextDraft,
-  defaults: WardrobeUploadDefaults
-): WardrobeUploadDefaultsTextDraft {
-  const seasonText = tokenListSignature(parseTokenText(current.seasonText)) === tokenListSignature(defaults.season)
-    ? current.seasonText
-    : defaults.season.join(', ');
-  const tagsText = tokenListSignature(parseTokenText(current.tagsText)) === tokenListSignature(defaults.tags)
-    ? current.tagsText
-    : defaults.tags.join(', ');
-
-  return seasonText === current.seasonText && tagsText === current.tagsText ? current : { seasonText, tagsText };
-}
-
-function parseTokenText(value: string): string[] {
-  return value.split(',').map((token) => token.trim()).filter(Boolean);
-}
-
-function tokenListSignature(tokens: string[]): string {
-  return JSON.stringify(tokens);
 }

@@ -47,7 +47,8 @@ services:
       Fashn__SegmentationFree: ${FASHN_SEGMENTATION_FREE}
       Fashn__GarmentPhotoType: ${FASHN_GARMENT_PHOTO_TYPE}
       Fashn__Seed: ${FASHN_SEED}
-      Fashn__PersonHint: ${FASHN_PERSON_HINT}
+      Fashn__Resolution: ${FASHN_RESOLUTION}
+      Fashn__GenderPromptTemplate: ${FASHN_GENDER_PROMPT_TEMPLATE}
 
       Authentication__Google__ClientId: ${GOOGLE_CLIENT_ID}
       Authentication__Google__ClientSecret: ${GOOGLE_CLIENT_SECRET}

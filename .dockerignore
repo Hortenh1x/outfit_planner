@@ -6,7 +6,15 @@
 **/.aspnet
 **/.secrets
 **/storage
-**/uploads
+# Backend runtime uploads only — must NOT match the frontend source dir
+# outfit_planner_front/src/features/uploads (that broke the frontend build).
+outfit_planner_back/**/uploads
 **/*.log
 .git
 .superpowers
+# Never bake local dev appsettings (dev PublicOrigin + real OAuth/FASHN secrets) into the image.
+# Production config comes from environment variables / compose only.
+**/appsettings.json
+**/appsettings.*.json
+**/.env
+**/.env.*

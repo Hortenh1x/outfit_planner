@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { GarmentMetadataInput } from '../../api/client';
 import type { GarmentCategory, GarmentItem } from '../../types';
 import { GARMENT_CATEGORIES } from '../outfits/outfitUtils';
 import { RotateControl } from '../../shared/ui/RotateControl';
+import { fitScaleForRotation } from '../../shared/ui/rotationFit';
+import type { Size } from '../../shared/ui/rotationFit';
 
 export type GarmentEditorSaveInput = {
   name: string;
@@ -33,7 +35,26 @@ interface GarmentEditorFormState {
 export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEditorProps) {
   const [form, setForm] = useState<GarmentEditorFormState>(() => formFromGarment(garment));
   const [isDirty, setIsDirty] = useState(false);
+  const [isScrubbing, setIsScrubbing] = useState(false);
   const [source, setSource] = useState(() => sourceFromGarment(garment));
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [imageNatural, setImageNatural] = useState<Size | null>(null);
+  const [frameSize, setFrameSize] = useState<Size | null>(null);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    const observer = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect) {
+        setFrameSize({ width: rect.width, height: rect.height });
+      }
+    });
+    observer.observe(frame);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const nextSource = sourceFromGarment(garment);
@@ -42,6 +63,7 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
       setForm(nextSource.form);
       setSource(nextSource);
       setIsDirty(false);
+      setImageNatural(null);
       return;
     }
 
@@ -57,6 +79,13 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
     setIsDirty(true);
     setForm((current) => ({ ...current, ...updates }));
   }
+
+  // The stored cutout is already rendered at the garment's saved angle, so the live preview only
+  // needs to rotate by the delta between the desired angle and the one already baked in.
+  const previewAngle = form.rotationDegrees - Number(garment.rotationDegrees ?? 0);
+  // Shrink the preview just enough that the rotated photo stays whole inside the frame instead of
+  // having its corners clipped.
+  const previewScale = fitScaleForRotation(previewAngle, imageNatural, frameSize);
 
   return (
     <form
@@ -100,18 +129,24 @@ export function GarmentEditor({ garment, isSaving, onCancel, onSave }: GarmentEd
         </select>
       </label>
       <div className="wardrobe-editor-photo" aria-label={`Current photo for ${garment.name}`}>
-        <img
-          src={form.thumbnailUrl || form.imageUrl}
-          alt={`${garment.name} current photo`}
-          style={{
-            transform: `rotate(${form.rotationDegrees - Number(garment.rotationDegrees ?? 0)}deg)`,
-            transition: 'transform 120ms ease'
-          }}
-        />
+        <div className="wardrobe-editor-photo-frame" ref={frameRef}>
+          <img
+            className="wardrobe-editor-photo-preview"
+            data-scrubbing={isScrubbing ? 'true' : undefined}
+            src={form.thumbnailUrl || form.imageUrl}
+            alt={`${garment.name} current photo`}
+            style={{ transform: `rotate(${previewAngle}deg) scale(${previewScale})` }}
+            onLoad={(event) => {
+              const image = event.currentTarget;
+              setImageNatural({ width: image.naturalWidth, height: image.naturalHeight });
+            }}
+          />
+        </div>
         <p>Drag to straighten or rotate; the new angle is saved with the garment.</p>
         <RotateControl
           value={form.rotationDegrees}
           onChange={(degrees) => updateForm({ rotationDegrees: degrees })}
+          onScrubbingChange={setIsScrubbing}
           disabled={isSaving}
         />
       </div>

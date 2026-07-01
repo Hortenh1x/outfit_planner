@@ -62,6 +62,9 @@ public interface IImageProcessor
 {
     ProcessedPhotoSet ProcessGarmentPhoto(IncomingPhoto photo);
 
+    // Original + thumbnail only (no rembg) — the fast path for the non-blocking add flow.
+    ProcessedPhotoSet ProcessGarmentOriginal(IncomingPhoto photo);
+
     ProcessedPhotoSet ProcessBodyReferencePhoto(IncomingPhoto photo);
 
     ProcessedPhotoSet ProcessAvatarPhoto(IncomingPhoto photo);
@@ -69,6 +72,10 @@ public interface IImageProcessor
     double ComputeGarmentDeskewAngle(byte[] cutoutPngBytes);
 
     GarmentRotationRender RenderRotatedGarment(byte[] baseCutoutPngBytes, double degrees);
+
+    // Average hash of an image's content, used to detect duplicate garment uploads by the
+    // original photo (before background removal). Returns null for empty/invalid input.
+    string? ComputePerceptualHash(byte[] imageBytes);
 }
 
 public sealed record GarmentRotationRender(
@@ -89,11 +96,32 @@ public interface IGarmentImageRotator
 
 public sealed record GarmentRotationOutcome(string ImageUrl, string ThumbnailUrl, string? PerceptualHash);
 
+public interface IGarmentOriginalImageReader
+{
+    // Reads the stored ORIGINAL (pre-background-removal) image bytes for a garment given its
+    // display image URL, or null when the original is unavailable (e.g. a legacy garment).
+    byte[]? ReadGarmentOriginalImageBytes(string garmentImageUrl);
+}
+
+public interface IGarmentBackgroundRemover
+{
+    // Runs background removal on a garment's stored ORIGINAL, overwrites the displayed
+    // cutout/thumbnail/base-cutout/mask variants in place, and returns fresh cutout URLs + hash.
+    GarmentRemovalOutcome RemoveGarmentBackground(string garmentImageUrl);
+}
+
+public sealed record GarmentRemovalOutcome(string CutoutUrl, string ThumbnailUrl, string? PerceptualHash);
+
 public interface IObjectStorage
 {
     StoredObject PutObject(ObjectStoragePutRequest request);
 
     StoredObjectFile? GetObject(string objectKey);
+
+    // Reads an object's bytes through the storage abstraction (not a local file path), so
+    // server-side reads (e.g. garment rotation/auto-straighten) work under S3/MinIO as well as
+    // local storage. Returns null when the object does not exist. The caller owns the stream.
+    Stream? OpenReadObject(string objectKey);
 
     bool DeleteObject(string objectKey);
 
@@ -105,6 +133,8 @@ public interface IObjectStorage
 public interface IPhotoStorage
 {
     StoredPhoto SaveGarmentPhoto(IncomingPhoto photo);
+
+    StoredPhoto SaveGarmentOriginal(IncomingPhoto photo);
 
     StoredPhoto SaveBodyReferencePhoto(IncomingPhoto photo);
 
@@ -123,6 +153,8 @@ public interface IStoredPhotoDeletion
     bool DeleteGarmentPhoto(string photoUrl);
 
     bool DeleteBodyReferencePhoto(string photoUrl);
+
+    bool DeleteAvatarPhoto(string photoUrl);
 }
 
 public interface ITryOnOutputStorage
