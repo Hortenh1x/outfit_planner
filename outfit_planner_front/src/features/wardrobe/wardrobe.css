@@ -317,7 +317,6 @@
 .wardrobe-view-buttons button,
 .wardrobe-ghost-button,
 .wardrobe-secondary-button,
-.wardrobe-card-actions button,
 .upload-queue-heading button {
   background: transparent;
   border: 1px solid var(--editorial-hairline);
@@ -335,7 +334,6 @@
 .wardrobe-view-buttons button:hover,
 .wardrobe-ghost-button:hover,
 .wardrobe-secondary-button:hover,
-.wardrobe-card-actions button:hover,
 .upload-queue-heading button:hover {
   background: var(--editorial-panel-muted);
   border-color: var(--editorial-hairline-strong);
@@ -386,7 +384,6 @@
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--editorial-panel-muted) 82%, transparent), transparent),
     var(--wardrobe-panel-subtle);
-  border-bottom: 1px solid var(--editorial-hairline);
   position: relative;
 }
 
@@ -397,50 +394,66 @@
   width: 100%;
 }
 
-.wardrobe-icon-button {
-  background: var(--editorial-panel);
-  border: 1px solid var(--editorial-hairline);
-  color: var(--editorial-muted);
-  min-height: 30px;
-  padding: 0;
+.wardrobe-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  inset: 8px 8px auto;
+  pointer-events: none;
   position: absolute;
-  left: 8px;
-  top: 8px;
-  width: 30px;
 }
 
-.wardrobe-icon-button:hover,
-.wardrobe-icon-button.active {
+.wardrobe-card-badges .wardrobe-photo-warning {
+  background: var(--editorial-panel);
+  border: 1px solid var(--editorial-hairline);
+  border-radius: 999px;
+  padding: 4px 8px;
+}
+
+/* Edit/delete stay hidden until the card is hovered, focused, or long-pressed (data-revealed). */
+.wardrobe-card-overlay {
+  align-items: flex-end;
+  background: linear-gradient(to top, color-mix(in srgb, var(--editorial-ink) 26%, transparent), transparent 62%);
+  display: flex;
+  gap: 6px;
+  inset: auto 0 0;
+  justify-content: flex-end;
+  opacity: 0;
+  padding: 8px;
+  pointer-events: none;
+  position: absolute;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.wardrobe-card[data-revealed='true'] .wardrobe-card-overlay,
+.wardrobe-card:focus-within .wardrobe-card-overlay {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.wardrobe-card-overlay button {
+  align-items: center;
+  background: var(--editorial-panel);
+  border: 1px solid var(--editorial-hairline-strong);
+  color: var(--editorial-ink);
+  display: inline-flex;
+  height: 34px;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0;
+  width: 34px;
+}
+
+.wardrobe-card-overlay button:hover {
+  background: var(--editorial-panel-muted);
+}
+
+.wardrobe-card-overlay .wardrobe-card-delete:hover {
   background: var(--editorial-accent-soft);
-  border-color: var(--editorial-hairline-strong);
+  border-color: var(--editorial-accent);
   color: var(--editorial-accent-strong);
 }
 
-.wardrobe-card-body {
-  display: grid;
-  gap: 8px;
-  padding: 11px;
-}
-
-.wardrobe-card h3 {
-  color: var(--editorial-ink);
-  font-size: 0.92rem;
-  font-weight: 900;
-  letter-spacing: 0;
-  line-height: 1.2;
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.wardrobe-card p {
-  color: var(--editorial-muted);
-  font-size: 0.75rem;
-  font-weight: 800;
-  line-height: 1.2;
-  margin: 3px 0 0;
-}
-
-.wardrobe-card-tags,
 .suggested-tags {
   display: flex;
   flex-wrap: wrap;
@@ -450,7 +463,6 @@
   padding: 0;
 }
 
-.wardrobe-card-tags li,
 .suggested-tags button,
 .suggested-tags span,
 .clean-checklist span {
@@ -462,11 +474,6 @@
   line-height: 1;
 }
 
-.wardrobe-card-tags li {
-  background: var(--wardrobe-panel-subtle);
-  padding: 6px 8px;
-}
-
 .wardrobe-photo-warning {
   align-items: center;
   color: var(--wardrobe-warning);
@@ -476,28 +483,8 @@
   gap: 6px;
 }
 
-.wardrobe-card-actions {
-  align-items: center;
-  display: flex;
-  gap: 5px;
-  justify-content: flex-end;
-}
-
-.wardrobe-card-actions button {
-  color: var(--editorial-muted);
-  min-height: 30px;
-  padding: 0;
-  width: 30px;
-}
-
-.wardrobe-catalog.list .wardrobe-card {
-  display: grid;
-  grid-template-columns: 148px minmax(0, 1fr);
-}
-
 .wardrobe-catalog.list .wardrobe-card-image {
-  aspect-ratio: auto;
-  min-height: 148px;
+  aspect-ratio: 16 / 9;
 }
 
 .wardrobe-rail,

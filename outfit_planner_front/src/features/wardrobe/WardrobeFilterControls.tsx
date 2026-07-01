@@ -138,14 +138,6 @@ export function WardrobeFilters({
             </div>
           ) : null}
         </label>
-        <label className="wardrobe-check">
-          <input
-            type="checkbox"
-            checked={filters.favorite}
-            onChange={(event) => onChange({ ...filters, favorite: event.target.checked })}
-          />
-          Favorites
-        </label>
         <label>
           <span>Sort</span>
           <select value={filters.sort} onChange={(event) => onChange({ ...filters, sort: event.target.value as WardrobeFilterState['sort'] })}>

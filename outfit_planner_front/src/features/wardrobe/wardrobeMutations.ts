@@ -8,7 +8,6 @@ import {
 } from '../../api/client';
 import { garmentPhotoUrlsFromUpload } from '../uploads/uploadedPhotoUrls';
 import type { GarmentItem } from '../../types';
-import { duplicateGarmentInput } from './wardrobeFilters';
 import { isCreatableItem, type UploadQueueItem } from './wardrobeUpload';
 
 export { garmentPhotoUrlsFromUpload } from '../uploads/uploadedPhotoUrls';
@@ -21,18 +20,8 @@ export function useWardrobeMutations() {
     void queryClient.invalidateQueries({ queryKey: wardrobeQueryKey });
   };
 
-  const favoriteMutation = useMutation({
-    mutationFn: (garment: GarmentItem) => updateGarment(garment.id, { isFavorite: !garment.isFavorite }),
-    onSuccess: invalidateWardrobe
-  });
-
   const editMutation = useMutation({
     mutationFn: ({ garmentId, input }: { garmentId: string; input: UpdateGarmentInput }) => updateGarment(garmentId, input),
-    onSuccess: invalidateWardrobe
-  });
-
-  const duplicateMutation = useMutation({
-    mutationFn: (garment: GarmentItem) => createGarment(duplicateGarmentInput(garment)),
     onSuccess: invalidateWardrobe
   });
 
@@ -71,9 +60,7 @@ export function useWardrobeMutations() {
   });
 
   return {
-    favoriteMutation,
     editMutation,
-    duplicateMutation,
     deleteMutation,
     uploadQueueMutation
   };
