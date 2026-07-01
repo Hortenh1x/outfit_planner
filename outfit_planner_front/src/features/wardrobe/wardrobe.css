@@ -464,8 +464,7 @@
 }
 
 .suggested-tags button,
-.suggested-tags span,
-.clean-checklist span {
+.suggested-tags span {
   border: 1px solid var(--editorial-hairline);
   border-radius: 999px;
   color: var(--editorial-muted);
@@ -526,23 +525,6 @@
 .wardrobe-upload-defaults {
   display: grid;
   gap: 10px;
-}
-
-.clean-checklist {
-  align-content: flex-start;
-  align-items: flex-start;
-  align-self: start;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.clean-checklist span {
-  align-items: center;
-  background: var(--wardrobe-panel-subtle);
-  display: inline-flex;
-  min-height: 0;
-  padding: 6px 10px;
 }
 
 .wardrobe-drop-zone {

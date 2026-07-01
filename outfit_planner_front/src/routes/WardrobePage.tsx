@@ -138,8 +138,7 @@ export function WardrobePage() {
     <section className="wardrobe-editorial-page">
       <div className="wardrobe-main">
         <header className="wardrobe-hero">
-          <span>My wardrobe</span>
-          <h1>Every piece has <em>a purpose.</em></h1>
+          <h1>My wardrobe</h1>
         </header>
         <WardrobeFilters
           filters={filters}

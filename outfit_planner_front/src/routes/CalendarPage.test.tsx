@@ -57,7 +57,7 @@ describe('CalendarPage', () => {
 
     const { container } = renderCalendar();
 
-    expect(await screen.findByRole('heading', { name: /plan your looks, every day/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /^calendar$/i })).toBeInTheDocument();
     expect(container.querySelector('.calendar-editorial-page')).toBeInTheDocument();
     expect(container.querySelector('.clay-button, .tool-panel, .page-grid, .clay-date-picker')).not.toBeInTheDocument();
   });

@@ -2,7 +2,7 @@ import { type ChangeEvent, type PointerEvent, type RefObject, useEffect, useRef,
 import { createPortal } from 'react-dom';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarDays, Camera, Check, LogOut, Shirt, Sparkles, Upload, UserRound, Wand2, X } from 'lucide-react';
+import { CalendarDays, Camera, Check, LogOut, Shirt, Upload, UserRound, Wand2, X } from 'lucide-react';
 import { getAuthProviders, logout, updateAccountProfile, uploadAccountAvatar, type AuthUser, type UserGender } from '../api/client';
 import { ThemeToggle, type ThemeMode } from '../components/ThemeToggle';
 import { authSessionQueryKey, useAuthSession } from '../features/auth/authQueries';
@@ -140,10 +140,6 @@ function AccountPanel({
 
     return (
       <section className="editorial-account" aria-label="Account">
-        <div className="editorial-account-kicker">
-          <Sparkles size={15} />
-          <span>Studio session</span>
-        </div>
         <button type="button" className="editorial-account-user" onClick={() => setIsOpen(true)}>
           {avatar}
           <span className="editorial-account-copy">
@@ -273,10 +269,6 @@ function AccountPanel({
 
   return (
     <section className="editorial-account" aria-label="Authentication">
-      <div className="editorial-account-kicker">
-        <Sparkles size={15} />
-        <span>Studio access</span>
-      </div>
       <NavLink to="/signin" className={navButtonClass}>
         <span>Sign in</span>
       </NavLink>

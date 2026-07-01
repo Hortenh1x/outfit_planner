@@ -127,7 +127,7 @@ describe('BuilderPage', () => {
 
     const builder = renderBuilder();
 
-    expect(await screen.findByRole('heading', { name: /build looks with intention/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /^builder$/i })).toBeInTheDocument();
     expect(builder.container.querySelector('.builder-editorial-page')).toBeInTheDocument();
     expect(builder.container.querySelector('.clay-button, .inventory-panel, .tool-panel, .builder-layout')).not.toBeInTheDocument();
   });
