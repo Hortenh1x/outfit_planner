@@ -24,7 +24,7 @@ public sealed class OutfitService
         var normalizedUserId = InputGuard.NormalizeUserId(userId);
         var selectedIds = garmentIds.Distinct().ToList();
         var selectedGarments = selectedIds
-            .Select(id => _garments.GetGarmentByUser(normalizedUserId, id) ?? throw new InvalidOperationException($"Garment {id} was not found."))
+            .Select(id => _garments.GetGarmentByUser(normalizedUserId, id) ?? throw new ValidationException($"Garment {id} was not found."))
             .ToList();
 
         var outfitItems = OutfitRules.BuildItems(selectedGarments);
@@ -76,7 +76,7 @@ public sealed class OutfitService
         {
             var selectedIds = command.GarmentIds.Distinct().ToList();
             var selectedGarments = selectedIds
-                .Select(id => _garments.GetGarmentByUser(normalizedUserId, id) ?? throw new InvalidOperationException($"Garment {id} was not found."))
+                .Select(id => _garments.GetGarmentByUser(normalizedUserId, id) ?? throw new ValidationException($"Garment {id} was not found."))
                 .ToList();
 
             items = OutfitRules.BuildItems(selectedGarments);

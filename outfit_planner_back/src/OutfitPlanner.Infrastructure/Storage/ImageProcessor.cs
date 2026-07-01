@@ -61,6 +61,41 @@ public sealed class ImageProcessor : IImageProcessor
             });
     }
 
+    public string? ComputePerceptualHash(byte[] imageBytes)
+    {
+        if (imageBytes is null || imageBytes.Length == 0)
+        {
+            return null;
+        }
+
+        using var image = Image.Load<Rgba32>(imageBytes);
+        NormalizeMetadataAndSize(image, MaxImageSide);
+        return AverageHash(image);
+    }
+
+    public ProcessedPhotoSet ProcessGarmentOriginal(IncomingPhoto photo)
+    {
+        var bytes = ReadAllBytes(photo.Content);
+        using var image = Image.Load<Rgba32>(bytes);
+        NormalizeMetadataAndSize(image, MaxImageSide);
+
+        var extension = ExtensionFor(photo.ContentType);
+        var fileName = $"{Guid.NewGuid():N}{extension}";
+        var original = Encode(image, photo.ContentType);
+        var thumbnail = Encode(ResizeClone(image, ThumbnailSide), photo.ContentType);
+
+        return new ProcessedPhotoSet(
+            fileName,
+            photo.ContentType,
+            original.LongLength,
+            AverageHash(image),
+            new[]
+            {
+                new ProcessedImage(StoredImageVariant.Original, photo.ContentType, extension, original),
+                new ProcessedImage(StoredImageVariant.Thumbnail, photo.ContentType, extension, thumbnail)
+            });
+    }
+
     public ProcessedPhotoSet ProcessBodyReferencePhoto(IncomingPhoto photo)
     {
         var bytes = ReadAllBytes(photo.Content);

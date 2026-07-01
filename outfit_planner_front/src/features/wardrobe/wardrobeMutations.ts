@@ -3,13 +3,13 @@ import {
   createGarment,
   deleteGarment,
   updateGarment,
-  uploadGarmentPhoto,
+  uploadGarmentOriginal,
   type UpdateGarmentInput
 } from '../../api/client';
 import { garmentPhotoUrlsFromUpload } from '../uploads/uploadedPhotoUrls';
 import type { GarmentItem } from '../../types';
 import { duplicateGarmentInput } from './wardrobeFilters';
-import type { UploadQueueItem } from './wardrobeUpload';
+import { isCreatableItem, type UploadQueueItem } from './wardrobeUpload';
 
 export { garmentPhotoUrlsFromUpload } from '../uploads/uploadedPhotoUrls';
 
@@ -43,13 +43,14 @@ export function useWardrobeMutations() {
 
   const uploadQueueMutation = useMutation({
     mutationFn: async (items: UploadQueueItem[]) => {
-      const creatableItems = items.filter((item) => item.status === 'processed' || item.status === 'failed');
+      const creatableItems = items.filter(isCreatableItem);
       const created: GarmentItem[] = [];
 
       for (const item of creatableItems) {
-        // Processed items already ran background removal on selection; only failed
-        // items (uploadedPhoto === null) need a final upload attempt here.
-        const uploadedPhoto = item.uploadedPhoto ?? (await uploadGarmentPhoto(item.file));
+        // The original was uploaded fast on selection (no rembg). Failed items get a final
+        // upload attempt here. Background removal then runs asynchronously on the server, so the
+        // garment is created immediately from the original with backgroundRemovalPending.
+        const uploadedPhoto = item.uploadedPhoto ?? (await uploadGarmentOriginal(item.file));
         const photoUrls = garmentPhotoUrlsFromUpload(uploadedPhoto);
         created.push(await createGarment({
           name: item.name,
@@ -58,7 +59,9 @@ export function useWardrobeMutations() {
           thumbnailUrl: photoUrls.thumbnailUrl,
           tags: item.tags,
           primaryColor: item.primaryColor.trim() || null,
-          season: item.season
+          season: item.season,
+          perceptualHash: uploadedPhoto.perceptualHash ?? null,
+          backgroundRemovalPending: true
         }));
       }
 

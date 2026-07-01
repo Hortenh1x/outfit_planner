@@ -21,6 +21,22 @@ interface ApiErrorBody {
   traceId?: string;
 }
 
+// Typed error so callers can branch on the HTTP status and surface the trace id, instead of
+// matching substrings of the message (e.g. `message.includes('HTTP 401')`).
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: string;
+  readonly traceId?: string;
+
+  constructor(message: string, status: number, detail: string, traceId?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.detail = detail;
+    this.traceId = traceId;
+  }
+}
+
 export interface HealthStatus {
   status: string;
   service: string;
@@ -270,10 +286,17 @@ export interface UploadedPhotoResponse {
   thumbnailUrl?: string | null;
   cutoutUrl?: string | null;
   maskUrl?: string | null;
+  perceptualHash?: string | null;
 }
 
 export async function uploadGarmentPhoto(file: File, signal?: AbortSignal): Promise<UploadedPhotoResponse> {
   return uploadPhoto('/uploads/garment-photo', file, signal);
+}
+
+// Fast path: stores the original + thumbnail only (no background removal). Removal then runs
+// asynchronously on the server once the garment is created.
+export async function uploadGarmentOriginal(file: File, signal?: AbortSignal): Promise<UploadedPhotoResponse> {
+  return uploadPhoto('/uploads/garment-original', file, signal);
 }
 
 export async function uploadBodyReferencePhoto(file: File): Promise<UploadedPhotoResponse> {
@@ -362,14 +385,19 @@ function readCookie(name: string): string | null {
   return cookie ? decodeURIComponent(cookie.slice(prefix.length)) : null;
 }
 
-async function createApiError(response: Response, method: string, path: string): Promise<Error> {
+async function createApiError(response: Response, method: string, path: string): Promise<ApiError> {
   const body = await readErrorBody(response);
-  const traceId = response.headers.get('X-Trace-Id') ?? body.traceId;
+  const traceId = response.headers.get('X-Trace-Id') ?? body.traceId ?? undefined;
   const detail = body.error ?? body.detail ?? 'No error body returned.';
   const statusText = response.statusText ? ` ${response.statusText}` : '';
   const traceSuffix = traceId ? ` Trace id: ${traceId}.` : '';
 
-  return new Error(`${method} ${apiBaseUrl}${path} failed with HTTP ${response.status}${statusText}: ${detail}.${traceSuffix}`);
+  return new ApiError(
+    `${method} ${apiBaseUrl}${path} failed with HTTP ${response.status}${statusText}: ${detail}.${traceSuffix}`,
+    response.status,
+    detail,
+    traceId
+  );
 }
 
 async function readErrorBody(response: Response): Promise<ApiErrorBody> {
@@ -386,6 +414,8 @@ export function createGarment(input: {
   imageUrl: string;
   thumbnailUrl?: string;
   tags: string[];
+  perceptualHash?: string | null;
+  backgroundRemovalPending?: boolean;
 } & GarmentMetadataInput): Promise<GarmentItem> {
   return request<GarmentItem>('/garments', {
     method: 'POST',

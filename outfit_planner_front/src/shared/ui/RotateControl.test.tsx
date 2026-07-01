@@ -33,4 +33,26 @@ describe('RotateControl', () => {
     const reset = screen.getByRole('button', { name: 'Reset' }) as HTMLButtonElement;
     expect(reset.disabled).toBe(true);
   });
+
+  it('exposes slider semantics with the current angle', () => {
+    render(<RotateControl value={42} onChange={() => undefined} />);
+    const slider = screen.getByRole('slider', { name: 'Rotate garment' });
+    expect(slider.getAttribute('aria-valuenow')).toBe('42');
+    expect(slider.getAttribute('aria-valuetext')).toBe('42 degrees');
+  });
+
+  it('nudges the angle with the arrow keys, coarser with Shift', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<RotateControl value={0} onChange={onChange} />);
+    const slider = screen.getByRole('slider', { name: 'Rotate garment' });
+    slider.focus();
+
+    await user.keyboard('{ArrowRight}');
+    expect(onChange).toHaveBeenLastCalledWith(1);
+    await user.keyboard('{ArrowLeft}');
+    expect(onChange).toHaveBeenLastCalledWith(-1);
+    await user.keyboard('{Shift>}{ArrowRight}{/Shift}');
+    expect(onChange).toHaveBeenLastCalledWith(10);
+  });
 });

@@ -16,6 +16,8 @@ public interface IGarmentRepository
     GarmentItem? GetGarmentByUser(string userId, Guid garmentId);
     IReadOnlyList<GarmentItem> ListGarmentsByUser(string userId);
     IReadOnlyList<GarmentItem> ListGarmentsByUser(string userId, GarmentQuery query);
+    // Garments (across all users) that have no stored perceptual hash yet, capped at `limit`.
+    IReadOnlyList<GarmentItem> ListGarmentsMissingPerceptualHash(int limit);
     void UpdateGarment(GarmentItem garment);
     bool DeleteGarmentByUser(string userId, Guid garmentId);
 }

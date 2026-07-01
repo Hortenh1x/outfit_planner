@@ -81,6 +81,11 @@ public sealed class FileBackedOutfitStore :
         return _inner.ListGarmentsByUser(userId, query);
     }
 
+    public IReadOnlyList<GarmentItem> ListGarmentsMissingPerceptualHash(int limit)
+    {
+        return _inner.ListGarmentsMissingPerceptualHash(limit);
+    }
+
     public void UpdateGarment(GarmentItem garment)
     {
         Mutate(() => _inner.UpdateGarment(garment));

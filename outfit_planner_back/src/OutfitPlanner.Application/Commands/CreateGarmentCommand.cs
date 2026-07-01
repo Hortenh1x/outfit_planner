@@ -24,4 +24,6 @@ public sealed record CreateGarmentCommand(
     bool IsFavorite = false,
     bool IsArchived = false,
     DateTimeOffset? LastWornAt = null,
-    string? LaundryStatus = null);
+    string? LaundryStatus = null,
+    string? PerceptualHash = null,
+    bool BackgroundRemovalPending = false);

@@ -12,7 +12,10 @@ type ArrayItem<T> = T extends readonly (infer Item)[] ? Item : never;
 type Override<T, R> = Omit<T, keyof R> & R;
 
 export type BodyReferencePhoto = ArrayItem<JsonResponse<paths['/api/body-reference-photos']['get'], 200>>;
-export type GarmentItem = JsonResponse<paths['/api/garments/{garmentId}']['get'], 200>;
+export type GarmentItem = Override<
+  JsonResponse<paths['/api/garments/{garmentId}']['get'], 200>,
+  { perceptualHash?: string | null }
+>;
 export type Outfit = JsonResponse<paths['/api/outfits/{outfitId}']['get'], 200>;
 export type ScheduledOutfit = ArrayItem<JsonResponse<paths['/api/schedule']['get'], 200>>;
 export type TryOnJob = JsonResponse<paths['/api/try-on-jobs/{jobId}']['get'], 200>;

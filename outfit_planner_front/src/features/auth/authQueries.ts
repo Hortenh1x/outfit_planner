@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { getCurrentSession, type AuthSession } from '../../api/client';
+import { ApiError, getCurrentSession, type AuthSession } from '../../api/client';
 
 export const authSessionQueryKey = ['auth-session'] as const;
 
@@ -10,7 +10,7 @@ export function useAuthSession() {
       try {
         return await getCurrentSession();
       } catch (error) {
-        if (error instanceof Error && error.message.includes('HTTP 401')) {
+        if (error instanceof ApiError && error.status === 401) {
           return null;
         }
 

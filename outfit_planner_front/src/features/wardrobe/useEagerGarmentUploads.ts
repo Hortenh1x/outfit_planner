@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef } from 'react';
-import { uploadGarmentPhoto } from '../../api/client';
+import { uploadGarmentOriginal } from '../../api/client';
 import { selectQueueItemsToStart, type UploadQueueItem } from './wardrobeUpload';
 
 /**
@@ -43,7 +43,7 @@ export function useEagerGarmentUploads(setQueue: QueueUpdater): EagerGarmentUplo
         const controller = new AbortController();
         controllersRef.current.set(item.id, controller);
 
-        uploadGarmentPhoto(item.file, controller.signal)
+        uploadGarmentOriginal(item.file, controller.signal)
           .then((uploadedPhoto) => {
             controllersRef.current.delete(item.id);
             setQueue((current) =>

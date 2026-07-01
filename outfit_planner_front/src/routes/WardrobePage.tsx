@@ -14,6 +14,7 @@ import {
 import { useWardrobeMutations, wardrobeQueryKey } from '../features/wardrobe/wardrobeMutations';
 import { useEagerGarmentUploads } from '../features/wardrobe/useEagerGarmentUploads';
 import {
+  computeDuplicateFlags,
   createUploadQueueItems,
   updateUploadQueueItem,
   type UploadQueueItem,
@@ -33,12 +34,20 @@ export function WardrobePage() {
   const [filters, setFilters] = useState<WardrobeFilterState>(defaultWardrobeFilters);
   const [viewMode, setViewMode] = useState<WardrobeViewMode>('grid');
   const [editingGarment, setEditingGarment] = useState<GarmentItem | null>(null);
-  const [uploadDefaults, setUploadDefaults] = useState<WardrobeUploadDefaults>(defaultUploadDefaults);
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const apiFilters = useMemo(() => toGarmentFilters(filters), [filters]);
   const garmentsQuery = useQuery({
     queryKey: [...wardrobeQueryKey, apiFilters],
-    queryFn: () => listGarments(apiFilters)
+    queryFn: () => listGarments(apiFilters),
+    // Poll while any garment is still having its background removed, so the cutout appears
+    // automatically once the async worker finishes.
+    refetchInterval: (query) => {
+      const garments = query.state.data ?? [];
+      const removing = garments.some(
+        (garment) => garment.backgroundRemovalStatus === 'Pending' || garment.backgroundRemovalStatus === 'Processing'
+      );
+      return removing ? 1500 : false;
+    }
   });
   const mutations = useWardrobeMutations();
   const uploads = useEagerGarmentUploads(setUploadQueue);
@@ -49,11 +58,34 @@ export function WardrobePage() {
   useEffect(() => {
     uploads.start(uploadQueue);
   }, [uploadQueue, uploads]);
+
+  // Flag processed photos that duplicate an existing garment or another queued item (compared by
+  // the pre-background-removal perceptual hash); flagged items are excluded from submit.
+  useEffect(() => {
+    const existingHashes = (garmentsQuery.data ?? [])
+      .map((garment) => garment.perceptualHash)
+      .filter((hash): hash is string => Boolean(hash));
+    setUploadQueue((current) => {
+      const flags = computeDuplicateFlags(current, existingHashes);
+      let changed = false;
+      const next = current.map((item) => {
+        const duplicate = flags.get(item.id) ?? null;
+        if ((item.duplicate ?? null) === duplicate) {
+          return item;
+        }
+
+        changed = true;
+        return { ...item, duplicate };
+      });
+
+      return changed ? next : current;
+    });
+  }, [uploadQueue, garmentsQuery.data]);
   const garments = filterGarmentsByLocalTags(allGarments, filters.tag);
   const existingTags = useMemo(() => {
-    const tags = [...uploadDefaults.tags, ...allGarments.flatMap((garment) => garment.tags ?? [])];
+    const tags = allGarments.flatMap((garment) => garment.tags ?? []);
     return Array.from(new Set(tags)).sort((left, right) => left.localeCompare(right));
-  }, [allGarments, uploadDefaults.tags]);
+  }, [allGarments]);
 
   function addFiles(files: File[]) {
     if (files.length === 0) {
@@ -64,9 +96,9 @@ export function WardrobePage() {
     setUploadQueue((current) => [
       ...current,
       ...createUploadQueueItems(files, {
-        category: uploadDefaults.category,
-        color: uploadDefaults.color,
-        season: uploadDefaults.season,
+        category: defaultUploadDefaults.category,
+        color: defaultUploadDefaults.color,
+        season: defaultUploadDefaults.season,
         existingTags
       })
     ]);
@@ -132,7 +164,11 @@ export function WardrobePage() {
                 garment={garment}
                 needsBetterPhoto={needsBetterPhoto(garment)}
                 pendingAction={pendingActionFor(garment, mutations)}
-                onDelete={(item) => mutations.deleteMutation.mutate(item.id)}
+                onDelete={(item) => {
+                  if (window.confirm(`Delete “${item.name}”? This cannot be undone.`)) {
+                    mutations.deleteMutation.mutate(item.id);
+                  }
+                }}
                 onDuplicate={(item) => mutations.duplicateMutation.mutate(item)}
                 onEdit={setEditingGarment}
                 onFavorite={(item) => mutations.favoriteMutation.mutate(item)}
@@ -162,10 +198,8 @@ export function WardrobePage() {
         <WardrobeUploadPanel
           queue={uploadQueue}
           isUploading={mutations.uploadQueueMutation.isPending}
-          defaults={uploadDefaults}
           onAddFiles={addFiles}
           onChangeItem={changeQueueItem}
-          onDefaultsChange={setUploadDefaults}
           onRemoveItem={removeQueueItem}
           onRetryItem={retryQueueItem}
           onSubmitAll={() => mutations.uploadQueueMutation.mutate(uploadQueue, { onSuccess: () => setUploadQueue([]) })}

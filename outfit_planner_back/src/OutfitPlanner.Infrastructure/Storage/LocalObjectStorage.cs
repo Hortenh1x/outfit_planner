@@ -40,6 +40,15 @@ public sealed class LocalObjectStorage : IObjectStorage
             : null;
     }
 
+    public Stream? OpenReadObject(string objectKey)
+    {
+        objectKey = NormalizeObjectKey(objectKey);
+        var fullPath = FullPathForObjectKey(objectKey);
+        return File.Exists(fullPath)
+            ? new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read)
+            : null;
+    }
+
     public bool DeleteObject(string objectKey)
     {
         objectKey = NormalizeObjectKey(objectKey);

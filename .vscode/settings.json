@@ -1,0 +1,12 @@
+{
+  // graphify перестраивает граф в graphify-out/ после КАЖДОГО коммита (post-commit hook),
+  // переписывая ~9 МБ файлов (graph.json, graph.html и т.д.). Файловый вотчер Code-OSS
+  // реагировал на этот поток изменений и нативно падал (SIGSEGV) при коммите.
+  // Исключаем папку из вотчера/поиска — граф продолжает обновляться, но редактор её не трогает.
+  "files.watcherExclude": {
+    "**/graphify-out/**": true
+  },
+  "search.exclude": {
+    "**/graphify-out/**": true
+  }
+}

@@ -32,6 +32,9 @@ var tests = new List<(string Name, Action Test)>
     ("local file store persists records across restarts", TestLocalFileStorePersistsRecordsAcrossRestarts),
     ("api uses local file store when postgres is not configured", TestApiUsesLocalFileStoreWithoutPostgres),
     ("api fails closed without a local object storage signing secret", TestApiFailsClosedWithoutObjectStorageSigningSecret),
+    ("api hardens abuse and security response surfaces", TestApiHardensAbuseAndSecuritySurfaces),
+    ("api maps validation exceptions to bad request", TestApiMapsValidationExceptionsToBadRequest),
+    ("validation failures raise a validation exception", TestValidationFailuresRaiseValidationException),
     ("postgres schema contains tables required by repository ports", TestPostgresSchemaContainsRepositoryTables),
     ("postgres schema contains production auth tables and indexes", TestPostgresSchemaContainsAuthTables),
     ("postgres schema contains user account profile fields", TestPostgresSchemaContainsUserAccountProfileFields),
@@ -109,7 +112,10 @@ var tests = new List<(string Name, Action Test)>
     ("photo upload service stores body reference photo privately", TestPhotoUploadStoresBodyReferencePhoto),
     ("wardrobe service deletes garment records and stored photos", TestWardrobeServiceDeletesGarmentAndStoredPhoto),
     ("wardrobe service deletes body reference records and stored photos", TestWardrobeServiceDeletesBodyReferenceAndStoredPhoto),
+    ("garment rotation works against non-file object storage", TestGarmentRotationWorksOnNonFileObjectStorage),
+    ("wardrobe service purges all stored photos for a user", TestWardrobeServicePurgesAllUserStoredPhotos),
     ("postgres schema contains structured garment metadata and query indexes", TestPostgresSchemaContainsStructuredMetadataAndIndexes),
+    ("postgres schema contains cascade and cleanup indexes", TestPostgresSchemaContainsCascadeAndCleanupIndexes),
     ("postgres schema contains privacy storage auth hardening and try-on retention fields", TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields),
     ("try-on storage persists mode cost and cache metadata", TestTryOnStoragePersistsModeCostAndCacheMetadata),
     ("api uses DbUp migrations instead of startup schema initializer", TestApiUsesDbUpMigrations),
@@ -120,6 +126,7 @@ var tests = new List<(string Name, Action Test)>
     ("fashn provider sends only body try-on items for normal modes", TestFashnProviderSendsOnlyBodyTryOnItems),
     ("fashn provider requires api key before network call", TestFashnProviderRequiresApiKey),
     ("fashn provider sends configured generation options", TestFashnProviderSendsConfiguredGenerationOptions),
+    ("fashn default resolution charges base credits", TestFashnDefaultResolutionChargesBaseCredits),
     ("fashn provider sends tryon max quality gender prompt", TestFashnProviderSendsTryOnMaxQualityGenderPrompt),
     ("fashn provider omits prompt when no template configured", TestFashnProviderOmitsPromptWhenNoTemplateConfigured),
     ("fashn provider submits try-on request and polls status", TestFashnProviderSubmitsRequestAndPollsStatus),
@@ -495,6 +502,45 @@ static void TestApiFailsClosedWithoutObjectStorageSigningSecret()
 
     AssertTrue(program.Contains("EnsureLocalObjectStorageSigningSecret", StringComparison.Ordinal), "API should validate the local object-storage signing secret at startup.");
     AssertTrue(program.Contains("ObjectStorage:Local:SigningSecret must be configured outside Development", StringComparison.Ordinal), "API must fail fast outside Development when the local object-storage signing secret is missing, so signed URLs cannot be forged with the source-visible development key.");
+}
+
+static void TestApiMapsValidationExceptionsToBadRequest()
+{
+    var program = File.ReadAllText(Path.Combine("outfit_planner_back", "src", "OutfitPlanner.Api", "Program.cs"));
+    var validationException = File.ReadAllText(Path.Combine("outfit_planner_back", "src", "OutfitPlanner.Domain", "ValidationException.cs"));
+    var wardrobeService = File.ReadAllText(Path.Combine("outfit_planner_back", "src", "OutfitPlanner.Application", "Services", "WardrobeService.cs"));
+
+    AssertTrue(validationException.Contains("class ValidationException : InvalidOperationException", StringComparison.Ordinal), "ValidationException should derive from InvalidOperationException for backward compatibility.");
+    AssertTrue(wardrobeService.Contains("throw new ValidationException(", StringComparison.Ordinal), "services should raise ValidationException for invalid input.");
+    AssertTrue(program.Contains("catch (ValidationException ex)", StringComparison.Ordinal), "handlers should map ValidationException to 400 rather than catching all InvalidOperationException.");
+    AssertTrue(program.Contains("is OutfitPlanner.Domain.ValidationException", StringComparison.Ordinal), "the global handler should centrally map uncaught ValidationException to 400 without logging it as a server fault.");
+    AssertTrue(program.Contains("EnsureProviderConfiguration", StringComparison.Ordinal), "startup should validate selected provider credentials.");
+    AssertTrue(program.Contains("Fashn:ApiKey must be configured", StringComparison.Ordinal), "selecting a FASHN provider without an API key should fail fast at startup.");
+}
+
+static void TestValidationFailuresRaiseValidationException()
+{
+    var store = new InMemoryOutfitStore();
+    var service = new WardrobeService(store, store, new SystemClock());
+
+    AssertThrows<ValidationException>(
+        () => service.CreateGarment(new CreateGarmentCommand("user-a", "tee", GarmentCategory.Top, "https://app.test/x.png", "https://app.test/x.png", Array.Empty<string>(), FormalityScore: 9)),
+        "an out-of-range score should raise a ValidationException (mapped to HTTP 400).");
+}
+
+static void TestApiHardensAbuseAndSecuritySurfaces()
+{
+    var program = File.ReadAllText(Path.Combine("outfit_planner_back", "src", "OutfitPlanner.Api", "Program.cs"));
+    var authService = File.ReadAllText(Path.Combine("outfit_planner_back", "src", "OutfitPlanner.Application", "Services", "AuthService.cs"));
+
+    AssertTrue(program.Contains("RejectionStatusCode = StatusCodes.Status429TooManyRequests", StringComparison.Ordinal), "throttled requests should return HTTP 429, not the default 503.");
+    AssertTrue(program.Contains("MetadataName.RetryAfter", StringComparison.Ordinal), "rate-limit rejections should emit a Retry-After header.");
+    AssertTrue(program.Contains("try-on-rate-limit", StringComparison.Ordinal), "the paid AI try-on start endpoint should be rate limited.");
+    AssertTrue(program.Contains("X-Content-Type-Options", StringComparison.Ordinal) && program.Contains("nosniff", StringComparison.Ordinal), "responses should set X-Content-Type-Options: nosniff.");
+    AssertTrue(program.Contains("Referrer-Policy", StringComparison.Ordinal), "responses should set a Referrer-Policy.");
+    AssertTrue(program.Contains("app.UseHsts()", StringComparison.Ordinal), "non-development should enable HSTS.");
+    AssertTrue(program.Contains("Cors:AllowedOrigins", StringComparison.Ordinal), "production CORS origins should be configurable rather than hardcoded to localhost.");
+    AssertTrue(authService.Contains("CryptographicOperations.FixedTimeEquals", StringComparison.Ordinal), "CSRF token-hash comparison should be constant-time.");
 }
 
 static void TestPostgresSchemaContainsRepositoryTables()
@@ -2060,6 +2106,55 @@ static void TestStoredPhotoUrlRefresherRefreshesGarmentVariants()
     }
 }
 
+static void TestWardrobeServicePurgesAllUserStoredPhotos()
+{
+    var tempPath = Path.Combine(Path.GetTempPath(), "outfit-planner-purge-tests", Guid.NewGuid().ToString("N"));
+
+    try
+    {
+        var storage = new LocalPhotoStorage(tempPath);
+        var store = new InMemoryOutfitStore();
+        var service = new WardrobeService(store, store, new SystemClock(), storage);
+        var uploader = new PhotoUploadService(storage);
+
+        var garmentPhoto = uploader.UploadGarmentPhoto(new IncomingPhoto("shirt.png", "image/png", MinimalPngBytes().Length, new MemoryStream(MinimalPngBytes())));
+        service.CreateGarment(new CreateGarmentCommand("user-a", "linen shirt", GarmentCategory.Top, garmentPhoto.Url, garmentPhoto.Url, Array.Empty<string>()));
+        var bodyPhoto = uploader.UploadBodyReferencePhoto(new IncomingPhoto("body.png", "image/png", MinimalPngBytes().Length, new MemoryStream(MinimalPngBytes())));
+        service.CreateBodyReferencePhoto("user-a", bodyPhoto.Url);
+
+        var removed = service.PurgeUserStoredPhotos("user-a");
+
+        AssertTrue(removed >= 2, "purge should remove the user's garment and body objects.");
+        AssertTrue(!File.Exists(Path.Combine(tempPath, "garments", "original", garmentPhoto.FileName)), "account purge should remove the garment original object.");
+        AssertTrue(!File.Exists(Path.Combine(tempPath, "body-reference-photos", "original", bodyPhoto.FileName)), "account purge should remove the body reference original object.");
+        AssertTrue(!File.Exists(Path.Combine(tempPath, "body-reference-photos", "private-preview", bodyPhoto.FileName)), "account purge should remove the blurred body preview object.");
+    }
+    finally
+    {
+        if (Directory.Exists(tempPath))
+        {
+            Directory.Delete(tempPath, recursive: true);
+        }
+    }
+}
+
+static void TestGarmentRotationWorksOnNonFileObjectStorage()
+{
+    // A byte-only object store with no local file path (like S3/MinIO). GetObject returns null
+    // on purpose, so this fails unless server-side reads go through OpenReadObject.
+    var objects = new InMemoryByteObjectStorage();
+    var storage = new LocalPhotoStorage(objects, new ImageProcessor());
+    var bytes = MinimalPngBytes();
+    var stored = storage.SaveGarmentPhoto(new IncomingPhoto("shirt.png", "image/png", bytes.Length, new MemoryStream(bytes)));
+
+    var rotated = storage.RotateGarment(stored.Url, 90d);
+
+    AssertTrue(rotated.ImageUrl.Contains("/garments/processed-cutout/", StringComparison.Ordinal), "rotation should re-render the cutout against a non-file (S3/MinIO-style) object store.");
+    var fileName = Path.GetFileName(rotated.ImageUrl.Split('?', 2)[0]);
+    using var baseStream = objects.OpenReadObject($"garments/base-cutout/{fileName}");
+    AssertTrue(baseStream is not null, "the immutable base cutout should remain readable through the storage abstraction.");
+}
+
 static void TestPhotoUploadStoresBodyReferencePhoto()
 {
     var tempPath = Path.Combine(Path.GetTempPath(), "outfit-planner-body-photo-tests", Guid.NewGuid().ToString("N"));
@@ -2187,6 +2282,29 @@ static void TestPostgresSchemaContainsStructuredMetadataAndIndexes()
     AssertTrue(schema.Contains("ix_scheduled_outfits_user_date", StringComparison.OrdinalIgnoreCase), "schema should index schedule date lookup.");
     AssertTrue(schema.Contains("ix_outfits_user_created_at", StringComparison.OrdinalIgnoreCase), "schema should index outfit recent sorting.");
     AssertTrue(schema.Contains("using gin (tags)", StringComparison.OrdinalIgnoreCase), "schema should add a GIN index for garment tags.");
+}
+
+static void TestPostgresSchemaContainsCascadeAndCleanupIndexes()
+{
+    var basePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var schema = File.ReadAllText(Path.Combine(basePath, "database", "schema.sql"));
+    var migration = File.ReadAllText(Path.Combine(basePath, "database", "migrations", "006_add_indexes.sql"));
+
+    foreach (var index in new[]
+    {
+        "ix_try_on_jobs_user_created_at",
+        "ix_auth_sessions_expires_at",
+        "ix_outfit_items_outfit_id",
+        "ix_outfit_items_garment_id",
+        "ix_scheduled_outfits_outfit_id",
+        "ix_try_on_jobs_outfit_id",
+        "ix_share_links_outfit_id",
+        "ix_body_reference_photos_user_id"
+    })
+    {
+        AssertTrue(schema.Contains(index, StringComparison.OrdinalIgnoreCase), $"schema.sql should declare {index} (cascade/cleanup index).");
+        AssertTrue(migration.Contains(index, StringComparison.OrdinalIgnoreCase), $"migration 006 should declare {index} so schema.sql and migrations stay in sync.");
+    }
 }
 
 static void TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields()
@@ -2498,6 +2616,25 @@ static void TestFashnProviderSendsConfiguredGenerationOptions()
     AssertEqual("model", inputs.GetProperty("garment_photo_type").GetString(), "request should use configured garment photo type.");
     AssertEqual(42, inputs.GetProperty("seed").GetInt32(), "request should use configured seed.");
     AssertTrue(!inputs.TryGetProperty("person_hint", out _), "legacy FASHN requests should not send stale person hint configuration.");
+}
+
+static void TestFashnDefaultResolutionChargesBaseCredits()
+{
+    var settings = new FashnTryOnSettings(
+        "test-key",
+        "tryon-max",
+        "quality",
+        2,
+        TimeSpan.Zero,
+        NumSamples: 1,
+        OutputFormat: "png",
+        ReturnBase64: false,
+        SegmentationFree: true,
+        GarmentPhotoType: "auto",
+        Seed: 42);
+
+    AssertEqual("1k", settings.Resolution, "FASHN should default to 1k resolution per the documented default.");
+    AssertEqual(2, settings.CreditsPerRun, "tryon-max quality at the default 1k resolution should charge the base credit amount, not the 4k premium.");
 }
 
 static void TestFashnProviderSendsTryOnMaxQualityGenderPrompt()
@@ -2919,6 +3056,46 @@ static void AssertAssemblyDoesNotReference(IEnumerable<string> references, IEnum
     {
         throw new InvalidOperationException($"{message} Forbidden references: {string.Join(", ", forbiddenMatches)}.");
     }
+}
+
+sealed class InMemoryByteObjectStorage : IObjectStorage
+{
+    private readonly Dictionary<string, byte[]> _objects = new(StringComparer.Ordinal);
+
+    public StoredObject PutObject(ObjectStoragePutRequest request)
+    {
+        var key = Normalize(request.ObjectKey);
+        using var buffer = new MemoryStream();
+        request.Content.CopyTo(buffer);
+        var bytes = buffer.ToArray();
+        _objects[key] = bytes;
+        return new StoredObject(key, request.ContentType, bytes.Length, request.Private);
+    }
+
+    // No local file path on purpose: forces server-side reads through OpenReadObject.
+    public StoredObjectFile? GetObject(string objectKey) => null;
+
+    public Stream? OpenReadObject(string objectKey)
+        => _objects.TryGetValue(Normalize(objectKey), out var bytes) ? new MemoryStream(bytes) : null;
+
+    public bool DeleteObject(string objectKey) => _objects.Remove(Normalize(objectKey));
+
+    public int DeletePrefix(string prefix)
+    {
+        var normalized = Normalize(prefix).TrimEnd('/') + "/";
+        var keys = _objects.Keys.Where(key => key.StartsWith(normalized, StringComparison.Ordinal)).ToList();
+        foreach (var key in keys)
+        {
+            _objects.Remove(key);
+        }
+
+        return keys.Count;
+    }
+
+    public string CreateSignedReadUrl(string objectKey, TimeSpan lifetime)
+        => $"/api/storage/signed/{Normalize(objectKey)}?expires=1&signature=test";
+
+    private static string Normalize(string objectKey) => objectKey.Trim().Replace('\\', '/').TrimStart('/');
 }
 
 sealed class RecordingHttpProviderHandler : HttpMessageHandler

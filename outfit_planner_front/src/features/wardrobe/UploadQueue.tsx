@@ -26,7 +26,7 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, o
   }, [items]);
 
   if (items.length === 0) {
-    return <p className="wardrobe-rail-note">Drop several photos or use the camera input to build an upload queue.</p>;
+    return null;
   }
 
   return (
@@ -35,7 +35,7 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, o
         const textDraft = textDrafts[item.id] ?? textDraftFromItem(item);
 
         return (
-          <article className={item.status === 'invalid' ? 'upload-queue-row invalid' : 'upload-queue-row'} key={item.id}>
+          <article className={`upload-queue-row${item.status === 'invalid' ? ' invalid' : ''}${item.duplicate ? ' duplicate' : ''}`} key={item.id}>
             <UploadQueuePreview item={item} />
             <div className="upload-queue-heading">
               <strong>{item.file.name}</strong>
@@ -88,6 +88,13 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, o
               />
             </div>
             {item.validationError ? <p className="wardrobe-error" role="alert">{item.validationError}</p> : null}
+            {item.duplicate ? (
+              <p className="wardrobe-error" role="alert">
+                {item.duplicate === 'wardrobe'
+                  ? 'This photo is already in your wardrobe, so it won’t be added.'
+                  : 'This photo is already in this upload batch, so it won’t be added.'}
+              </p>
+            ) : null}
             {item.warnings.length > 0 ? (
               <div className="wardrobe-warning" role="status" aria-label={`Photo warnings for ${item.name}`}>
                 <strong>Needs better photo?</strong>

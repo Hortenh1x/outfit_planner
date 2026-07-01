@@ -641,6 +641,16 @@
   border-color: color-mix(in srgb, var(--editorial-accent) 48%, var(--editorial-hairline));
 }
 
+.upload-queue-row.duplicate {
+  border-color: color-mix(in srgb, var(--editorial-accent) 48%, var(--editorial-hairline));
+}
+
+.upload-queue-row.duplicate .upload-queue-preview,
+.upload-queue-row.duplicate label,
+.upload-queue-row.duplicate .upload-queue-field {
+  opacity: 0.55;
+}
+
 .upload-queue-heading {
   align-items: center;
   display: grid;
@@ -711,14 +721,73 @@
   padding: 10px;
 }
 
-.wardrobe-editor-photo img {
+.wardrobe-editor-photo-frame {
   aspect-ratio: 4 / 3;
   background: var(--editorial-panel);
   border: 1px solid var(--editorial-hairline);
   border-radius: var(--radius-small);
-  object-fit: contain;
+  overflow: hidden;
   padding: 10px;
-  width: 100%;
+  position: relative;
+}
+
+/*
+ * Absolute + explicit calc() sizing gives the image a definite box (frame content box), so
+ * `object-fit: contain` reliably fits the whole photo inside it. A percentage max-height on a
+ * grid/auto-sized parent does not resolve against an aspect-ratio height, which clipped tall
+ * photos even at 0deg. The live rotate()/scale() transform is layered on via inline style.
+ */
+.wardrobe-editor-photo-preview {
+  height: calc(100% - 20px);
+  left: 10px;
+  object-fit: contain;
+  position: absolute;
+  top: 10px;
+  width: calc(100% - 20px);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .wardrobe-editor-photo-preview {
+    transition: transform var(--duration-fast) var(--ease-out);
+  }
+
+  /* No tween while the pointer is scrubbing; the preview must track the drag exactly. */
+  .wardrobe-editor-photo-preview[data-scrubbing='true'] {
+    transition: none;
+  }
+}
+
+.rotate-control {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rotate-control-handle {
+  cursor: ew-resize;
+  gap: 6px;
+  touch-action: none;
+}
+
+.rotate-control-handle[data-scrubbing='true'] {
+  background: var(--editorial-accent-soft);
+  border-color: var(--editorial-accent);
+  color: var(--editorial-accent-strong);
+  cursor: grabbing;
+}
+
+.rotate-control-value {
+  color: var(--editorial-muted);
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 850;
+  min-width: 4.5ch;
+  text-align: right;
+}
+
+.rotate-control-reset {
+  margin-left: auto;
 }
 
 .wardrobe-editor-photo p {

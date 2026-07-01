@@ -39,12 +39,12 @@ public sealed class AuthService
 
         if (cleanPassword != repeatPassword)
         {
-            throw new InvalidOperationException("Passwords do not match.");
+            throw new ValidationException("Passwords do not match.");
         }
 
         if (_users.GetUserByNormalizedEmail(normalizedEmail) is not null)
         {
-            throw new InvalidOperationException("An account with this email already exists.");
+            throw new ValidationException("An account with this email already exists.");
         }
 
         var now = _clock.UtcNow;
@@ -68,7 +68,7 @@ public sealed class AuthService
         var user = _users.GetUserByNormalizedEmail(normalizedEmail);
         if (user?.PasswordHash is null || !_passwordHasher.VerifyPassword(user.PasswordHash, password))
         {
-            throw new InvalidOperationException("Email or password is invalid.");
+            throw new ValidationException("Email or password is invalid.");
         }
 
         var now = _clock.UtcNow;
@@ -88,7 +88,7 @@ public sealed class AuthService
         if (existingLogin is not null)
         {
             var user = _users.GetUserById(existingLogin.UserId)
-                ?? throw new InvalidOperationException("Linked account no longer exists.");
+                ?? throw new ValidationException("Linked account no longer exists.");
             _users.UpdateExternalLogin(existingLogin with { Email = normalizedEmail, LastLoginAt = now });
             var updated = user with { LastLoginAt = now, UpdatedAt = now };
             _users.UpdateUser(updated);
@@ -126,7 +126,7 @@ public sealed class AuthService
 
         if (requireCsrf)
         {
-            if (string.IsNullOrWhiteSpace(csrfToken) || _tokens.HashToken(csrfToken) != session.CsrfTokenHash)
+            if (string.IsNullOrWhiteSpace(csrfToken) || !FixedTimeEquals(_tokens.HashToken(csrfToken), session.CsrfTokenHash))
             {
                 return null;
             }
@@ -134,6 +134,15 @@ public sealed class AuthService
 
         var user = _users.GetUserById(session.UserId);
         return user is null ? null : new AuthenticatedSession(ToPublicUser(user), session.ExpiresAt);
+    }
+
+    // Constant-time comparison so CSRF token-hash validation does not leak match progress via timing.
+    private static bool FixedTimeEquals(string left, string right)
+    {
+        var leftBytes = System.Text.Encoding.UTF8.GetBytes(left);
+        var rightBytes = System.Text.Encoding.UTF8.GetBytes(right);
+        return leftBytes.Length == rightBytes.Length
+            && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(leftBytes, rightBytes);
     }
 
     public void RevokeSession(string? sessionToken)
@@ -259,7 +268,7 @@ public sealed class AuthService
         var cleanPassword = RequirePassword(password);
         if (cleanPassword != repeatPassword)
         {
-            throw new InvalidOperationException("Passwords do not match.");
+            throw new ValidationException("Passwords do not match.");
         }
 
         var now = _clock.UtcNow;
@@ -342,7 +351,7 @@ public sealed class AuthService
         var normalized = RequireText(provider, "External provider").ToLowerInvariant();
         if (!AllowedExternalProviders.Contains(normalized))
         {
-            throw new InvalidOperationException("Unsupported external auth provider.");
+            throw new ValidationException("Unsupported external auth provider.");
         }
 
         return normalized;
@@ -357,7 +366,7 @@ public sealed class AuthService
         }
         catch (FormatException)
         {
-            throw new InvalidOperationException("Email must be a valid address.");
+            throw new ValidationException("Email must be a valid address.");
         }
     }
 
@@ -366,17 +375,17 @@ public sealed class AuthService
         var clean = RequireText(password, "Password");
         if (clean.Length < 8)
         {
-            throw new InvalidOperationException("Password must be at least 8 characters.");
+            throw new ValidationException("Password must be at least 8 characters.");
         }
 
         if (!clean.Any(char.IsLetter))
         {
-            throw new InvalidOperationException("Password must contain at least one letter.");
+            throw new ValidationException("Password must contain at least one letter.");
         }
 
         if (!clean.Any(char.IsDigit))
         {
-            throw new InvalidOperationException("Password must contain at least one digit.");
+            throw new ValidationException("Password must contain at least one digit.");
         }
 
         return clean;
@@ -386,7 +395,7 @@ public sealed class AuthService
     {
         if (string.IsNullOrWhiteSpace(value))
         {
-            throw new InvalidOperationException($"{label} is required.");
+            throw new ValidationException($"{label} is required.");
         }
 
         return value.Trim();
@@ -397,7 +406,7 @@ public sealed class AuthService
         var clean = RequireText(username, "Username");
         if (clean.Length > 80)
         {
-            throw new InvalidOperationException("Username must be 80 characters or shorter.");
+            throw new ValidationException("Username must be 80 characters or shorter.");
         }
 
         return clean;

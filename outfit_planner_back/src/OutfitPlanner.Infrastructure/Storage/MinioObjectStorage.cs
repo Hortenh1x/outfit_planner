@@ -42,27 +42,73 @@ public class MinioObjectStorage : IObjectStorage, IDisposable
     public StoredObject PutObject(ObjectStoragePutRequest request)
     {
         var key = NormalizeObjectKey(request.ObjectKey);
-        var length = request.Content.CanSeek ? request.Content.Length : 0;
-        var put = new PutObjectRequest
-        {
-            BucketName = _bucketName,
-            Key = key,
-            InputStream = request.Content,
-            ContentType = request.ContentType
-        };
 
-        _client.PutObjectAsync(put).GetAwaiter().GetResult();
-        return new StoredObject(key, request.ContentType, length, request.Private);
+        // S3 needs a known content length; buffer non-seekable streams so the recorded length is
+        // accurate (rather than 0) and the upload does not depend on chunked-transfer support.
+        Stream content = request.Content;
+        MemoryStream? buffered = null;
+        if (!content.CanSeek)
+        {
+            buffered = new MemoryStream();
+            content.CopyTo(buffered);
+            buffered.Position = 0;
+            content = buffered;
+        }
+
+        try
+        {
+            var length = content.Length;
+            _client.PutObjectAsync(new PutObjectRequest
+            {
+                BucketName = _bucketName,
+                Key = key,
+                InputStream = content,
+                ContentType = request.ContentType
+            }).GetAwaiter().GetResult();
+            return new StoredObject(key, request.ContentType, length, request.Private);
+        }
+        finally
+        {
+            buffered?.Dispose();
+        }
     }
 
     public StoredObjectFile? GetObject(string objectKey)
     {
+        // S3/MinIO has no local file path; objects are served to clients via presigned URLs
+        // (CreateSignedReadUrl) and read server-side via OpenReadObject.
         return null;
+    }
+
+    public Stream? OpenReadObject(string objectKey)
+    {
+        var key = NormalizeObjectKey(objectKey);
+        try
+        {
+            using var response = _client.GetObjectAsync(_bucketName, key).GetAwaiter().GetResult();
+            var buffer = new MemoryStream();
+            response.ResponseStream.CopyTo(buffer);
+            buffer.Position = 0;
+            return buffer;
+        }
+        catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
     }
 
     public bool DeleteObject(string objectKey)
     {
         var key = NormalizeObjectKey(objectKey);
+        try
+        {
+            _client.GetObjectMetadataAsync(_bucketName, key).GetAwaiter().GetResult();
+        }
+        catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+
         _client.DeleteObjectAsync(_bucketName, key).GetAwaiter().GetResult();
         return true;
     }

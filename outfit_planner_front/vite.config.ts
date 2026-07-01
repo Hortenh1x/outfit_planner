@@ -7,6 +7,11 @@ export default defineConfig(({ mode }) => {
   const useHttps = process.env.VITE_DEV_HTTPS === 'true' || mode === 'https';
   const devApiTarget = process.env.VITE_DEV_API_TARGET ?? 'https://localhost:5001';
   const httpsOptions = useHttps ? getHttpsOptions() : undefined;
+  // Hostnames allowed when the dev server is fronted by a public domain (e.g. a Cloudflare Tunnel).
+  // Comma-separated in VITE_ALLOWED_HOSTS. localhost / IPs are always allowed by Vite regardless.
+  const allowedHosts = process.env.VITE_ALLOWED_HOSTS
+    ? process.env.VITE_ALLOWED_HOSTS.split(',').map((host) => host.trim()).filter(Boolean)
+    : undefined;
 
   return {
     plugins: [
@@ -15,6 +20,7 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       https: httpsOptions ?? (useHttps ? {} : undefined),
+      allowedHosts,
       proxy: {
         '/api': {
           target: devApiTarget,

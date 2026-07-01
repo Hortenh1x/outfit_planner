@@ -2,7 +2,7 @@ using OutfitPlanner.Application.Abstractions;
 
 namespace OutfitPlanner.Infrastructure.Storage;
 
-public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStoredPhotoDeletion, IGarmentImageRotator
+public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStoredPhotoDeletion, IGarmentImageRotator, IGarmentOriginalImageReader, IGarmentBackgroundRemover
 {
     private static readonly TimeSpan DefaultSignedUrlLifetime = TimeSpan.FromMinutes(15);
 
@@ -24,6 +24,12 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
     {
         var processed = _images.ProcessGarmentPhoto(photo);
         return SaveProcessedPhoto("garments", processed, StoredImageVariant.ProcessedCutout);
+    }
+
+    public StoredPhoto SaveGarmentOriginal(IncomingPhoto photo)
+    {
+        var processed = _images.ProcessGarmentOriginal(photo);
+        return SaveProcessedPhoto("garments", processed, StoredImageVariant.Original);
     }
 
     public StoredPhoto SaveBodyReferencePhoto(IncomingPhoto photo)
@@ -58,6 +64,11 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
         return DeletePhoto("body-reference-photos", photoUrl);
     }
 
+    public bool DeleteAvatarPhoto(string photoUrl)
+    {
+        return DeletePhoto("avatars", photoUrl);
+    }
+
     public double ComputeGarmentAutoStraightenAngle(string garmentImageUrl)
     {
         var baseBytes = LoadGarmentBaseCutout(garmentImageUrl);
@@ -79,6 +90,69 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
         return new GarmentRotationOutcome(SignedUrl(cutout), SignedUrl(thumbnail), rendered.PerceptualHash);
     }
 
+    public GarmentRemovalOutcome RemoveGarmentBackground(string garmentImageUrl)
+    {
+        var fileName = FileNameFromPhotoUrl(garmentImageUrl)
+            ?? throw new InvalidOperationException("Cannot resolve the garment image for background removal.");
+        var originalBytes = ReadGarmentOriginalImageBytes(garmentImageUrl)
+            ?? throw new InvalidOperationException("The garment original image is unavailable for background removal.");
+
+        // Reuse the full garment pipeline (rembg + variants) on the stored original, then overwrite
+        // the garment's existing cutout/thumbnail/base-cutout/mask objects in place (same fileName).
+        var processed = _images.ProcessGarmentPhoto(new IncomingPhoto(
+            fileName,
+            "image/png",
+            originalBytes.LongLength,
+            new MemoryStream(originalBytes, writable: false)));
+
+        StoredObject? cutout = null;
+        StoredObject? thumbnail = null;
+        foreach (var image in processed.Images)
+        {
+            switch (image.Variant)
+            {
+                case StoredImageVariant.ProcessedCutout:
+                    cutout = OverwriteGarmentVariant(StoredImageVariant.ProcessedCutout, fileName, image.Bytes);
+                    break;
+                case StoredImageVariant.BaseCutout:
+                    OverwriteGarmentVariant(StoredImageVariant.BaseCutout, fileName, image.Bytes);
+                    break;
+                case StoredImageVariant.Thumbnail:
+                    thumbnail = OverwriteGarmentVariant(StoredImageVariant.Thumbnail, fileName, image.Bytes);
+                    break;
+                case StoredImageVariant.SegmentationMask:
+                    OverwriteGarmentVariant(StoredImageVariant.SegmentationMask, fileName, image.Bytes);
+                    break;
+            }
+        }
+
+        if (cutout is null || thumbnail is null)
+        {
+            throw new InvalidOperationException("Background removal did not produce a cutout.");
+        }
+
+        return new GarmentRemovalOutcome(SignedUrl(cutout), SignedUrl(thumbnail), processed.PerceptualHash);
+    }
+
+    public byte[]? ReadGarmentOriginalImageBytes(string garmentImageUrl)
+    {
+        var fileName = FileNameFromPhotoUrl(garmentImageUrl);
+        if (fileName is null)
+        {
+            return null;
+        }
+
+        using var stream = _objects.OpenReadObject(ObjectKey("garments", StoredImageVariant.Original, fileName));
+        if (stream is null)
+        {
+            return null;
+        }
+
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
+
     private byte[]? LoadGarmentBaseCutout(string garmentImageUrl)
     {
         var fileName = FileNameFromPhotoUrl(garmentImageUrl);
@@ -88,9 +162,18 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
         }
 
         // Prefer the immutable base; fall back to the current cutout for legacy garments.
-        var baseObject = _objects.GetObject(ObjectKey("garments", StoredImageVariant.BaseCutout, fileName))
-            ?? _objects.GetObject(ObjectKey("garments", StoredImageVariant.ProcessedCutout, fileName));
-        return baseObject is null ? null : File.ReadAllBytes(baseObject.FullPath);
+        // Read through the storage abstraction (not a local file path) so rotation/auto-straighten
+        // work under S3/MinIO as well as local storage.
+        using var stream = _objects.OpenReadObject(ObjectKey("garments", StoredImageVariant.BaseCutout, fileName))
+            ?? _objects.OpenReadObject(ObjectKey("garments", StoredImageVariant.ProcessedCutout, fileName));
+        if (stream is null)
+        {
+            return null;
+        }
+
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
     }
 
     private StoredObject OverwriteGarmentVariant(StoredImageVariant variant, string fileName, byte[] bytes)

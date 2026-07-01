@@ -1,4 +1,5 @@
 using OutfitPlanner.Application.Abstractions;
+using OutfitPlanner.Domain;
 
 namespace OutfitPlanner.Application.Services;
 
@@ -25,6 +26,12 @@ public sealed class PhotoUploadService
         return _storage.SaveGarmentPhoto(ValidateAndBufferPhoto(photo));
     }
 
+    // Fast path: stores the original + thumbnail only (no rembg) for the non-blocking add flow.
+    public StoredPhoto UploadGarmentOriginal(IncomingPhoto photo)
+    {
+        return _storage.SaveGarmentOriginal(ValidateAndBufferPhoto(photo));
+    }
+
     public StoredPhoto UploadBodyReferencePhoto(IncomingPhoto photo)
     {
         return _storage.SaveBodyReferencePhoto(ValidateAndBufferPhoto(photo));
@@ -39,17 +46,17 @@ public sealed class PhotoUploadService
     {
         if (photo.Length <= 0)
         {
-            throw new InvalidOperationException("Photo file is required.");
+            throw new ValidationException("Photo file is required.");
         }
 
         if (photo.Length > MaxPhotoBytes)
         {
-            throw new InvalidOperationException("Photo file must be 50 MB or smaller.");
+            throw new ValidationException("Photo file must be 50 MB or smaller.");
         }
 
         if (!AllowedContentTypes.Contains(photo.ContentType))
         {
-            throw new InvalidOperationException("Upload a JPG, PNG, or WebP image.");
+            throw new ValidationException("Upload a JPG, PNG, or WebP image.");
         }
 
         using var buffer = new MemoryStream();
@@ -57,18 +64,18 @@ public sealed class PhotoUploadService
         var bytes = buffer.ToArray();
         if (bytes.LongLength != photo.Length)
         {
-            throw new InvalidOperationException("Photo upload length did not match the received file.");
+            throw new ValidationException("Photo upload length did not match the received file.");
         }
 
         var detectedContentType = DetectContentType(bytes);
         if (detectedContentType is null)
         {
-            throw new InvalidOperationException("Upload a valid JPG, PNG, or WebP image.");
+            throw new ValidationException("Upload a valid JPG, PNG, or WebP image.");
         }
 
         if (!string.Equals(photo.ContentType, detectedContentType, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException("Photo content does not match the declared image type.");
+            throw new ValidationException("Photo content does not match the declared image type.");
         }
 
         return photo with { Content = new MemoryStream(bytes, writable: false) };

@@ -615,6 +615,37 @@ describe('BuilderPage', () => {
     expect(screen.queryByRole('img', { name: /generated try-on preview/i })).not.toBeInTheDocument();
   });
 
+  it('toggles a garment selection off when its piece is clicked again', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/white.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderBuilder();
+
+    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    expect(screen.getByRole('button', { name: /white tee/i })).toHaveClass('selected');
+
+    // Clicking the already-selected piece clears the slot.
+    await userEvent.click(screen.getByRole('button', { name: /white tee/i }));
+    expect(screen.getByRole('button', { name: /white tee/i })).not.toHaveClass('selected');
+  });
+
   it('updates and deletes the selected saved outfit', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);

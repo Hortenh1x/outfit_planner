@@ -110,7 +110,8 @@ public sealed class InMemoryOutfitStore :
             command.IsArchived,
             command.LastWornAt,
             command.LaundryStatus ?? "clean",
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            PerceptualHash: command.PerceptualHash);
 
         AddGarment(garment);
         return garment;
@@ -176,6 +177,17 @@ public sealed class InMemoryOutfitStore :
     public IReadOnlyList<GarmentItem> ListGarmentsByUser(string userId)
     {
         return ListGarmentsByUser(userId, new GarmentQuery());
+    }
+
+    public IReadOnlyList<GarmentItem> ListGarmentsMissingPerceptualHash(int limit)
+    {
+        lock (_lock)
+        {
+            return _garments.Values
+                .Where(garment => string.IsNullOrEmpty(garment.PerceptualHash))
+                .Take(limit)
+                .ToList();
+        }
     }
 
     public IReadOnlyList<GarmentItem> ListGarmentsByUser(string userId, GarmentQuery query)

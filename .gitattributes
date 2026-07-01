@@ -1,0 +1,2 @@
+# Keep SQL migrations and the schema snapshot as LF so diffs stay clean across Windows and Linux.
+*.sql text eol=lf

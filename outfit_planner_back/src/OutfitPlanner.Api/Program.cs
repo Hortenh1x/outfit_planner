@@ -10,6 +10,7 @@ using OutfitPlanner.Infrastructure.Storage;
 using OutfitPlanner.Infrastructure.TryOn;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Google;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Http.Features;
@@ -63,25 +64,52 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     }
 });
 
+// Development always allows the local Vite/preview origins. Outside Development only origins that
+// are explicitly configured (Cors:AllowedOrigins, comma-separated) are allowed, so a same-origin
+// deploy needs no config and a split-origin deploy must opt its frontend origin in (rather than
+// silently leaving localhost allowed in production).
+var developmentCorsOrigins = new[]
+{
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+    "https://localhost:5173",
+    "https://127.0.0.1:5173",
+    "https://localhost:4173",
+    "https://127.0.0.1:4173"
+};
+var configuredCorsOrigins = (builder.Configuration["Cors:AllowedOrigins"] ?? string.Empty)
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    .Select(origin => origin.TrimEnd('/'));
+var allowedCorsOrigins = (builder.Environment.IsDevelopment() ? developmentCorsOrigins : Array.Empty<string>())
+    .Concat(configuredCorsOrigins)
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
         policy
-            .WithOrigins(
-                "http://localhost:5173",
-                "http://127.0.0.1:5173",
-                "http://localhost:4173",
-                "http://127.0.0.1:4173",
-                "https://localhost:5173",
-                "https://127.0.0.1:5173",
-                "https://localhost:4173",
-                "https://127.0.0.1:4173")
+            .WithOrigins(allowedCorsOrigins)
             .AllowCredentials()
             .AllowAnyHeader()
             .AllowAnyMethod());
 });
 builder.Services.AddRateLimiter(options =>
 {
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (rejection, cancellationToken) =>
+    {
+        if (rejection.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            rejection.HttpContext.Response.Headers.RetryAfter = ((int)retryAfter.TotalSeconds).ToString();
+        }
+
+        rejection.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await rejection.HttpContext.Response.WriteAsJsonAsync(new { error = "Too many requests. Please retry later." }, cancellationToken);
+    };
+
     options.AddPolicy("login-rate-limit", context =>
         RateLimitPartition.GetFixedWindowLimiter(
             context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
@@ -102,6 +130,22 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
                 QueueProcessingOrder = QueueProcessingOrder.OldestFirst
             }));
+    // Throttle paid AI try-on work per session (falls back to IP for unauthenticated callers),
+    // since the rate limiter runs before the user id is resolved in the pipeline.
+    options.AddPolicy("try-on-rate-limit", context =>
+    {
+        var sessionToken = context.Request.Cookies[SessionCookieName];
+        var partitionKey = !string.IsNullOrEmpty(sessionToken)
+            ? $"session:{sessionToken}"
+            : $"ip:{context.Connection.RemoteIpAddress?.ToString() ?? "unknown"}";
+        return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 30,
+            Window = TimeSpan.FromMinutes(5),
+            QueueLimit = 0,
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst
+        });
+    });
 });
 
 builder.Services.AddSingleton<IClock, OutfitPlanner.Infrastructure.Security.SystemClock>();
@@ -219,7 +263,30 @@ else
     builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnectionString));
     builder.Services.AddSingleton<ITryOnJobQueue>(provider => new RedisTryOnJobQueue(provider.GetRequiredService<IConnectionMultiplexer>()));
 }
+
+if (string.IsNullOrWhiteSpace(redisConnectionString))
+{
+    builder.Services.AddSingleton<IBackgroundRemovalJobQueue, OutfitPlanner.Infrastructure.BackgroundRemoval.InMemoryBackgroundRemovalJobQueue>();
+}
+else
+{
+    builder.Services.AddSingleton<IBackgroundRemovalJobQueue>(provider => new OutfitPlanner.Infrastructure.BackgroundRemoval.RedisBackgroundRemovalJobQueue(provider.GetRequiredService<IConnectionMultiplexer>()));
+}
+// Persist DataProtection keys (used to encrypt OAuth correlation/state cookies) so they survive
+// container restarts — otherwise external logins fail with "Correlation failed" after a restart.
+// Stored under the api_storage volume. Skipped during build-time OpenAPI generation.
+if (!IsOpenApiDocumentGeneration())
+{
+    var dataProtectionKeysPath = builder.Configuration["DataProtection:KeyRingPath"]
+        ?? Path.Combine(builder.Environment.ContentRootPath, "storage", "dataprotection-keys");
+    Directory.CreateDirectory(dataProtectionKeysPath);
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath))
+        .SetApplicationName("outfit-planner");
+}
+
 EnsureLocalObjectStorageSigningSecret(builder.Configuration, builder.Environment);
+EnsureProviderConfiguration(builder.Configuration);
 builder.Services.AddSingleton<IObjectStorage>(provider => CreateObjectStorage(builder.Configuration, builder.Environment, publicOrigin));
 builder.Services.AddSingleton<IStoredPhotoUrlRefresher>(provider => new StoredPhotoUrlRefresher(
     provider.GetRequiredService<IObjectStorage>(),
@@ -235,6 +302,10 @@ builder.Services.AddSingleton<IPhotoStorage>(provider => provider.GetRequiredSer
 builder.Services.AddSingleton<IStoredPhotoReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IStoredPhotoDeletion>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IGarmentImageRotator>(provider => provider.GetRequiredService<LocalPhotoStorage>());
+builder.Services.AddSingleton<IGarmentOriginalImageReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
+builder.Services.AddSingleton<IGarmentBackgroundRemover>(provider => provider.GetRequiredService<LocalPhotoStorage>());
+builder.Services.AddSingleton<IBackgroundRemovalJobRepository, OutfitPlanner.Infrastructure.BackgroundRemoval.InMemoryBackgroundRemovalJobRepository>();
+builder.Services.AddSingleton<IBackgroundRemovalJobProcessor, BackgroundRemovalJobProcessor>();
 var postgresConnectionString = builder.Configuration.GetConnectionString("Postgres");
 var storageProvider = string.IsNullOrWhiteSpace(postgresConnectionString) ? "LocalFile" : "Postgres";
 if (storageProvider == "Postgres")
@@ -278,6 +349,8 @@ builder.Services.AddSingleton<ShareService>();
 builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<PostgresConnectionProbe>();
 builder.Services.AddHostedService<TryOnBackgroundWorker>();
+builder.Services.AddHostedService<GarmentPerceptualHashBackfillWorker>();
+builder.Services.AddHostedService<BackgroundRemovalWorker>();
 
 var app = builder.Build();
 
@@ -290,10 +363,18 @@ var detailedErrorsEnabled = app.Environment.IsDevelopment()
     || app.Environment.IsEnvironment("Test")
     || builder.Configuration.GetValue("DetailedErrors", false);
 
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+}
+
 app.Use(async (context, next) =>
 {
     var traceId = context.TraceIdentifier;
     context.Response.Headers["X-Trace-Id"] = traceId;
+    // Baseline security headers for every response, including served image bytes and signed URLs.
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
 
     try
     {
@@ -301,6 +382,19 @@ app.Use(async (context, next) =>
     }
     catch (Exception ex)
     {
+        // Validation failures are user input errors, not server faults: map to 400 with the message
+        // (safe to surface) and do not log them as errors. Everything else is a 500.
+        if (ex is OutfitPlanner.Domain.ValidationException validationFailure)
+        {
+            if (!context.Response.HasStarted)
+            {
+                context.Response.StatusCode = StatusCodes.Status400BadRequest;
+                await Results.Json(new { error = validationFailure.Message, traceId }).ExecuteAsync(context);
+            }
+
+            return;
+        }
+
         var logger = context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("OutfitPlanner.Diagnostics");
         logger.LogError(ex, "Unhandled request failure {Method} {Path} trace {TraceId}", context.Request.Method, context.Request.Path, traceId);
 
@@ -403,7 +497,7 @@ api.MapPost("/auth/register", (RegisterRequest request, AuthService auth, IStore
         IssueAuthCookies(context, result, app.Environment);
         return Results.Ok(ToAuthSessionResponse(result, photoUrls, context.Request));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -417,7 +511,7 @@ api.MapPost("/auth/login", (LoginRequest request, AuthService auth, IStoredPhoto
         IssueAuthCookies(context, result, app.Environment);
         return Results.Ok(ToAuthSessionResponse(result, photoUrls, context.Request));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -443,7 +537,7 @@ api.MapPost("/auth/email-verification/request", (EmailVerificationRequest reques
         var token = auth.CreateEmailVerificationToken(request.Email);
         return Results.Ok(new { status = "verification-requested", token = app.Environment.IsDevelopment() ? token : null });
     }
-    catch (InvalidOperationException)
+    catch (ValidationException)
     {
         return Results.Ok(new { status = "verification-requested" });
     }
@@ -461,7 +555,7 @@ api.MapPost("/auth/password-reset/request", (PasswordResetRequest request, AuthS
         var token = auth.CreatePasswordResetToken(request.Email);
         return Results.Ok(new { status = "password-reset-requested", token = app.Environment.IsDevelopment() ? token : null });
     }
-    catch (InvalidOperationException)
+    catch (ValidationException)
     {
         return Results.Ok(new { status = "password-reset-requested" });
     }
@@ -475,11 +569,11 @@ api.MapPost("/auth/password-reset/confirm", (PasswordResetConfirmRequest request
             ? Results.Ok(new { status = "password-reset" })
             : Results.BadRequest(new { error = "Password reset token is invalid or expired." });
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
-});
+}).RequireRateLimiting("login-rate-limit");
 
 api.MapGet("/auth/sessions", (AuthService auth, HttpContext context) =>
 {
@@ -629,7 +723,7 @@ api.MapPatch("/account/profile", (
             ?? throw new InvalidOperationException("Authentication is required.");
         return Results.Ok(ToAuthSessionResponseFromSession(session, photoUrls, context.Request));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -654,7 +748,7 @@ api.MapPost("/account/avatar", async (
             ?? throw new InvalidOperationException("Authentication is required.");
         return Results.Ok(ToAuthSessionResponseFromSession(session, photoUrls, request));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         logger.LogWarning(ex, "Upload diagnostics: rejected avatar upload trace {TraceId}", request.HttpContext.TraceIdentifier);
         return Results.BadRequest(new { error = ex.Message });
@@ -662,9 +756,49 @@ api.MapPost("/account/avatar", async (
 })
     .Produces<AuthSessionResponse>(StatusCodes.Status200OK);
 
-api.MapDelete("/account", (IUserAccountRepository users, HttpContext context) =>
+api.MapDelete("/account", (
+    IUserAccountRepository users,
+    WardrobeService wardrobe,
+    TryOnService tryOn,
+    IStoredPhotoDeletion photoDeletion,
+    ILogger<Program> logger,
+    HttpContext context) =>
 {
-    var deleted = users.DeleteUserById(CurrentUser(context));
+    var userId = CurrentUser(context);
+
+    // Best-effort: erase the user's stored binaries before the cascade removes the rows that hold
+    // their object keys. A storage failure must not block account deletion (right to erasure).
+    try
+    {
+        tryOn.PurgeAiOutputs(userId);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Account deletion: failed to purge AI outputs for the deleted account.");
+    }
+
+    try
+    {
+        wardrobe.PurgeUserStoredPhotos(userId);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Account deletion: failed to purge stored garment/body photos for the deleted account.");
+    }
+
+    try
+    {
+        if (users.GetUserById(userId)?.AvatarObjectKey is { } avatarObjectKey)
+        {
+            photoDeletion.DeleteAvatarPhoto(avatarObjectKey);
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Account deletion: failed to purge the stored avatar for the deleted account.");
+    }
+
+    var deleted = users.DeleteUserById(userId);
     ClearAuthCookies(context, app.Environment);
     return deleted ? Results.NoContent() : Results.NotFound();
 });
@@ -676,7 +810,7 @@ api.MapPost("/body-reference-photos", (CreateBodyReferencePhotoRequest request, 
         var photo = wardrobe.CreateBodyReferencePhoto(CurrentUser(context), request.ImageUrl);
         return Results.Created($"/api/body-reference-photos/{photo.Id}", ToBodyReferencePhotoResponse(photo, photoUrls, context.Request));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -738,6 +872,13 @@ api.MapPost("/uploads/garment-photo", async (HttpRequest request, PhotoUploadSer
     return await UploadPhoto(request, logger, "garment", cancellationToken, photo => photos.UploadGarmentPhoto(photo));
 });
 
+// Fast path for the non-blocking add flow: stores the ORIGINAL + thumbnail only (no rembg) and
+// returns immediately; background removal then runs asynchronously after the garment is created.
+api.MapPost("/uploads/garment-original", async (HttpRequest request, PhotoUploadService photos, ILogger<Program> logger, CancellationToken cancellationToken) =>
+{
+    return await UploadPhoto(request, logger, "garment", cancellationToken, photo => photos.UploadGarmentOriginal(photo));
+});
+
 api.MapPost("/uploads/body-reference-photo", async (HttpRequest request, PhotoUploadService photos, ILogger<Program> logger, CancellationToken cancellationToken) =>
 {
     return await UploadPhoto(request, logger, "body-reference", cancellationToken, photo => photos.UploadBodyReferencePhoto(photo));
@@ -769,11 +910,13 @@ api.MapPost("/garments", (CreateGarmentRequest request, WardrobeService wardrobe
             request.IsFavorite ?? false,
             request.IsArchived ?? false,
             request.LastWornAt,
-            request.LaundryStatus));
+            request.LaundryStatus,
+            request.PerceptualHash,
+            request.BackgroundRemovalPending ?? false));
 
         return Results.Created($"/api/garments/{garment.Id}", ToGarmentResponse(garment, photoUrls, context.Request));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -807,7 +950,7 @@ api.MapPatch("/garments/{garmentId:guid}", (Guid garmentId, UpdateGarmentRequest
             request.RotationDegrees));
         return garment is null ? Results.NotFound() : Results.Ok(ToGarmentResponse(garment, photoUrls, context.Request));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -849,7 +992,7 @@ api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, ISt
         var outfit = outfits.CreateOutfit(CurrentUser(context), request.Name, request.GarmentIds);
         return Results.Created($"/api/outfits/{outfit.Id}", ToOutfitResponse(outfit, photoUrls, context.Request));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -869,7 +1012,7 @@ api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest req
             request.IsArchived));
         return outfit is null ? Results.NotFound() : Results.Ok(ToOutfitResponse(outfit, photoUrls, context.Request));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -899,7 +1042,7 @@ api.MapPost("/outfits/{outfitId:guid}/try-on/estimate", (
             request.BodyReferencePhotoId);
         return Results.Ok(ToTryOnEstimateResponse(estimate));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -927,11 +1070,12 @@ api.MapPost("/outfits/{outfitId:guid}/try-on", async (
             cancellationToken);
         return Results.Accepted($"/api/try-on-jobs/{job.Id}", job);
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
 })
+    .RequireRateLimiting("try-on-rate-limit")
     .Produces<TryOnJob>(StatusCodes.Status202Accepted);
 
 api.MapGet("/try-on-jobs/{jobId:guid}", (Guid jobId, TryOnService tryOn, HttpContext context) =>
@@ -955,7 +1099,7 @@ api.MapPost("/schedule", (ScheduleOutfitRequest request, ScheduleService schedul
         var scheduled = schedule.ScheduleOutfit(CurrentUser(context), request.Date, request.OutfitId);
         return Results.Ok(scheduled);
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -973,7 +1117,7 @@ api.MapGet("/schedule", (string from, string to, ScheduleService schedule, HttpC
     {
         return Results.Ok(schedule.GetSchedule(CurrentUser(context), fromDate, toDate));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -997,7 +1141,7 @@ api.MapPost("/outfits/{outfitId:guid}/share", (Guid outfitId, ShareService share
         var link = share.CreateShareLink(CurrentUser(context), outfitId);
         return Results.Ok(new ShareLinkResponse(link.Token, $"/share/{link.Token}"));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
@@ -1069,9 +1213,10 @@ static async Task<IResult> UploadPhoto(HttpRequest request, ILogger logger, stri
             PublicUploadUrl(request, stored.OriginalUrl),
             PublicUploadUrl(request, stored.ThumbnailUrl),
             PublicUploadUrl(request, stored.ProcessedCutoutUrl),
-            PublicUploadUrl(request, stored.SegmentationMaskUrl)));
+            PublicUploadUrl(request, stored.SegmentationMaskUrl),
+            stored.PerceptualHash));
     }
-    catch (InvalidOperationException ex)
+    catch (ValidationException ex)
     {
         logger.LogWarning(ex, "Upload diagnostics: rejected {Kind} upload trace {TraceId}", uploadKind, request.HttpContext.TraceIdentifier);
         return Results.BadRequest(new { error = ex.Message });
@@ -1190,7 +1335,7 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
                 configuration.GetValue("Fashn:SegmentationFree", true),
                 configuration["Fashn:GarmentPhotoType"] ?? "auto",
                 configuration.GetValue<int?>("Fashn:Seed"),
-                configuration["Fashn:Resolution"] ?? "4k",
+                configuration["Fashn:Resolution"] ?? "1k",
                 configuration["Fashn:GenderPromptTemplate"] ?? "")),
         "localvton" or "local-vton" or "localvtonprovider" => new LocalVtonProvider(
             httpFactory.CreateClient("local-vton"),
@@ -1215,6 +1360,35 @@ static ITryOnProvider CreateTryOnProvider(IServiceProvider provider, IConfigurat
             HttpProviderSettings(configuration, "GeneralImageEdit", "https://api.openai.com/v1/", "images/edits", requiresApiKey: true)),
         _ => new MockTryOnProvider()
     };
+}
+
+// Fail fast at startup when a selected provider is missing its required credentials, rather than
+// only failing on the first request that needs them. Skipped during build-time OpenAPI generation.
+static void EnsureProviderConfiguration(IConfiguration configuration)
+{
+    if (IsOpenApiDocumentGeneration())
+    {
+        return;
+    }
+
+    var tryOnProvider = (configuration["TryOn:Provider"] ?? "Mock").Trim().ToLowerInvariant();
+    if (tryOnProvider is "fashn" or "fashntryonprovider" or "compositefashn" or "composite-fashn" or "compositefashntryonprovider"
+        && string.IsNullOrWhiteSpace(configuration["Fashn:ApiKey"]))
+    {
+        throw new InvalidOperationException("Fashn:ApiKey must be configured when TryOn:Provider selects a FASHN provider.");
+    }
+
+    var objectStorageProvider = (configuration["ObjectStorage:Provider"] ?? "Local").Trim().ToLowerInvariant();
+    if (objectStorageProvider is "s3" or "minio")
+    {
+        var endpoint = configuration["ObjectStorage:S3:Endpoint"] ?? configuration["Minio:Endpoint"];
+        var accessKey = configuration["ObjectStorage:S3:AccessKey"] ?? configuration["Minio:AccessKey"];
+        var secretKey = configuration["ObjectStorage:S3:SecretKey"] ?? configuration["Minio:SecretKey"];
+        if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(accessKey) || string.IsNullOrWhiteSpace(secretKey))
+        {
+            throw new InvalidOperationException("ObjectStorage:S3 endpoint, access key, and secret key must be configured when ObjectStorage:Provider is S3 or Minio.");
+        }
+    }
 }
 
 // Fail fast at startup rather than letting LocalObjectStorage silently fall back to its

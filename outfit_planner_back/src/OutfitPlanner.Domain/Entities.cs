@@ -32,7 +32,12 @@ public sealed record GarmentItem(
     DateTimeOffset? LastWornAt,
     string LaundryStatus,
     DateTimeOffset CreatedAt,
-    double RotationDegrees = 0);
+    double RotationDegrees = 0,
+    // Average hash of the original photo BEFORE background removal, used to detect duplicate uploads.
+    string? PerceptualHash = null,
+    // Async background-removal state; Succeeded for legacy/already-processed garments.
+    BackgroundRemovalStatus BackgroundRemovalStatus = BackgroundRemovalStatus.Succeeded,
+    string? BackgroundRemovalError = null);
 
 public sealed record OutfitItem(
     Guid GarmentId,

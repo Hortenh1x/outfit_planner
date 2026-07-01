@@ -1,4 +1,6 @@
-import { AlertTriangle, Copy, Heart, Pencil, Trash2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import type { FocusEvent as ReactFocusEvent, PointerEvent as ReactPointerEvent } from 'react';
+import { AlertTriangle, Loader2, Pencil, Trash2 } from 'lucide-react';
 import type { GarmentItem } from '../../types';
 
 interface GarmentCardProps {
@@ -6,66 +8,148 @@ interface GarmentCardProps {
   needsBetterPhoto?: boolean;
   pendingAction?: string;
   onDelete: (garment: GarmentItem) => void;
-  onDuplicate: (garment: GarmentItem) => void;
   onEdit: (garment: GarmentItem) => void;
-  onFavorite: (garment: GarmentItem) => void;
 }
 
-export function GarmentCard({
-  garment,
-  needsBetterPhoto = false,
-  pendingAction,
-  onDelete,
-  onDuplicate,
-  onEdit,
-  onFavorite
-}: GarmentCardProps) {
+const LONG_PRESS_MS = 450;
+const MOVE_CANCEL_PX = 10;
+
+/**
+ * Image-first wardrobe card. The photo carries the card; edit/delete stay out of the way until the
+ * user asks for them: hover on desktop, focus for keyboards, and press-and-hold on touch. The
+ * actions remain in the accessibility tree at all times (hidden with opacity, not display), so
+ * screen readers and keyboards can always reach them.
+ */
+export function GarmentCard({ garment, needsBetterPhoto = false, pendingAction, onDelete, onEdit }: GarmentCardProps) {
   const disabled = Boolean(pendingAction);
-  const favoriteLabel = `${garment.isFavorite ? 'Unfavorite' : 'Favorite'} ${garment.name}`;
+  const cardRef = useRef<HTMLElement>(null);
+  const longPress = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const [revealed, setRevealed] = useState(false);
+
+  function cancelLongPress() {
+    if (longPress.current) {
+      window.clearTimeout(longPress.current.timer);
+      longPress.current = null;
+    }
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType !== 'touch' || disabled) {
+      return;
+    }
+    const { clientX: x, clientY: y } = event;
+    const timer = window.setTimeout(() => setRevealed(true), LONG_PRESS_MS);
+    longPress.current = { timer, x, y };
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLElement>) {
+    const press = longPress.current;
+    if (!press) {
+      return;
+    }
+    // A drag past the threshold is a scroll, not a long-press.
+    if (Math.abs(event.clientX - press.x) > MOVE_CANCEL_PX || Math.abs(event.clientY - press.y) > MOVE_CANCEL_PX) {
+      cancelLongPress();
+    }
+  }
+
+  function handlePointerEnter(event: ReactPointerEvent<HTMLElement>) {
+    if (event.pointerType !== 'touch' && !disabled) {
+      setRevealed(true);
+    }
+  }
+
+  function handlePointerLeave(event: ReactPointerEvent<HTMLElement>) {
+    cancelLongPress();
+    if (event.pointerType !== 'touch') {
+      setRevealed(false);
+    }
+  }
+
+  function handleBlur(event: ReactFocusEvent<HTMLElement>) {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setRevealed(false);
+    }
+  }
+
+  // Dismiss a touch-revealed card when the next interaction lands outside it.
+  useEffect(() => {
+    if (!revealed) {
+      return;
+    }
+    function handleDocumentPointerDown(event: PointerEvent) {
+      if (!cardRef.current?.contains(event.target as Node)) {
+        setRevealed(false);
+      }
+    }
+    document.addEventListener('pointerdown', handleDocumentPointerDown);
+    return () => document.removeEventListener('pointerdown', handleDocumentPointerDown);
+  }, [revealed]);
+
+  const isRemovingBackground =
+    garment.backgroundRemovalStatus === 'Pending' || garment.backgroundRemovalStatus === 'Processing';
 
   return (
     <article
+      ref={cardRef}
       className={garment.isArchived ? 'wardrobe-card archived' : 'wardrobe-card'}
       aria-busy={disabled}
       data-pending-action={pendingAction}
+      data-revealed={revealed ? 'true' : undefined}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={cancelLongPress}
+      onPointerCancel={cancelLongPress}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
+      onFocus={() => setRevealed(true)}
+      onBlur={handleBlur}
     >
       <div className="wardrobe-card-image">
         <img src={garment.thumbnailUrl || garment.imageUrl} alt={garment.name} />
-        <button
-          type="button"
-          className={garment.isFavorite ? 'wardrobe-icon-button active' : 'wardrobe-icon-button'}
-          aria-label={favoriteLabel}
-          disabled={disabled}
-          onClick={() => onFavorite(garment)}
-        >
-          <Heart size={16} fill={garment.isFavorite ? 'currentColor' : 'none'} aria-hidden="true" />
-        </button>
-      </div>
-      <div className="wardrobe-card-body">
-        <div>
-          <h3>{garment.name}</h3>
-          <p>{garment.category}</p>
-        </div>
-        {garment.tags.length > 0 ? (
-          <ul className="wardrobe-card-tags" aria-label={`Tags for ${garment.name}`}>
-            {garment.tags.map((tag) => <li key={tag}>{tag}</li>)}
-          </ul>
+        {isRemovingBackground ? (
+          <div className="wardrobe-card-removing" role="status" aria-label={`Removing background for ${garment.name}`}>
+            <Loader2 size={16} className="upload-queue-spinner" aria-hidden="true" />
+            <span>Removing background…</span>
+          </div>
         ) : null}
-        {needsBetterPhoto ? (
-          <span className="wardrobe-photo-warning" role="status" aria-label={`Needs better photo for ${garment.name}`}>
-            <AlertTriangle size={14} aria-hidden="true" />
-            Needs better photo?
-          </span>
+        {needsBetterPhoto || garment.backgroundRemovalStatus === 'Failed' ? (
+          <div className="wardrobe-card-badges">
+            {needsBetterPhoto ? (
+              <span className="wardrobe-photo-warning" role="status" aria-label={`Needs better photo for ${garment.name}`}>
+                <AlertTriangle size={14} aria-hidden="true" />
+                Needs better photo?
+              </span>
+            ) : null}
+            {garment.backgroundRemovalStatus === 'Failed' ? (
+              <span
+                className="wardrobe-photo-warning"
+                role="status"
+                aria-label={`Background removal failed for ${garment.name}`}
+              >
+                <AlertTriangle size={14} aria-hidden="true" />
+                Background removal failed
+              </span>
+            ) : null}
+          </div>
         ) : null}
-        <div className="wardrobe-card-actions" role="group" aria-label={`Actions for ${garment.name}`}>
-          <button type="button" aria-label={`Edit ${garment.name}`} disabled={disabled} onClick={() => onEdit(garment)}>
-            <Pencil size={15} aria-hidden="true" />
+        <div className="wardrobe-card-overlay" role="group" aria-label={`Actions for ${garment.name}`}>
+          <button
+            type="button"
+            aria-label={`Edit ${garment.name}`}
+            disabled={disabled}
+            onClick={() => onEdit(garment)}
+          >
+            <Pencil size={16} aria-hidden="true" />
           </button>
-          <button type="button" aria-label={`Duplicate ${garment.name}`} disabled={disabled} onClick={() => onDuplicate(garment)}>
-            <Copy size={15} aria-hidden="true" />
-          </button>
-          <button type="button" aria-label={`Delete ${garment.name}`} disabled={disabled} onClick={() => onDelete(garment)}>
-            <Trash2 size={15} aria-hidden="true" />
+          <button
+            type="button"
+            className="wardrobe-card-delete"
+            aria-label={`Delete ${garment.name}`}
+            disabled={disabled}
+            onClick={() => onDelete(garment)}
+          >
+            <Trash2 size={16} aria-hidden="true" />
           </button>
         </div>
       </div>

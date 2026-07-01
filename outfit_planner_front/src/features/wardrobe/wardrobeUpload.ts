@@ -4,6 +4,9 @@ import { validateUploadImageFile } from '../uploads/imageFile';
 
 export type UploadQueueStatus = 'invalid' | 'queued' | 'processing' | 'processed' | 'failed';
 
+// A processed photo can duplicate an existing wardrobe garment or an earlier item in the same batch.
+export type UploadDuplicateSource = 'wardrobe' | 'batch';
+
 export interface UploadQueueDefaults {
   category: GarmentCategory;
   color: string;
@@ -28,6 +31,7 @@ export interface UploadQueueItem {
   status: UploadQueueStatus;
   error: string | null;
   uploadedPhoto?: UploadedPhotoResponse | null;
+  duplicate?: UploadDuplicateSource | null;
   previewUrl?: string;
 }
 
@@ -86,7 +90,8 @@ export function createUploadQueueItem(file: File, defaults: UploadQueueDefaults,
     validationError,
     status: validationError ? 'invalid' : 'queued',
     error: null,
-    uploadedPhoto: null
+    uploadedPhoto: null,
+    duplicate: null
   };
 }
 
@@ -142,7 +147,72 @@ export function isQueueProcessing(items: UploadQueueItem[]): boolean {
 }
 
 export function hasCreatableItems(items: UploadQueueItem[]): boolean {
-  return items.some((item) => item.status === 'processed' || item.status === 'failed');
+  return items.some(isCreatableItem);
+}
+
+// A duplicate photo (of an existing garment or an earlier batch item) must not be created.
+export function isCreatableItem(item: UploadQueueItem): boolean {
+  return (item.status === 'processed' || item.status === 'failed') && !item.duplicate;
+}
+
+const NEAR_DUPLICATE_MAX_DISTANCE = 5;
+
+/**
+ * Flags processed items whose pre-background-removal perceptual hash is a near-duplicate of an
+ * existing wardrobe garment ('wardrobe') or of an earlier processed item in the same batch ('batch').
+ * The first occurrence within the batch is kept; later matches are flagged.
+ */
+export function computeDuplicateFlags(
+  items: UploadQueueItem[],
+  existingHashes: readonly string[]
+): Map<string, UploadDuplicateSource> {
+  const flags = new Map<string, UploadDuplicateSource>();
+  const wardrobeHashes = existingHashes.filter(isValidPerceptualHash);
+  const batchHashes: string[] = [];
+
+  for (const item of items) {
+    const hash = item.uploadedPhoto?.perceptualHash ?? null;
+    if (item.status !== 'processed' || !isValidPerceptualHash(hash)) {
+      continue;
+    }
+
+    if (wardrobeHashes.some((existing) => isNearDuplicateHash(existing, hash))) {
+      flags.set(item.id, 'wardrobe');
+      continue;
+    }
+
+    if (batchHashes.some((earlier) => isNearDuplicateHash(earlier, hash))) {
+      flags.set(item.id, 'batch');
+      continue;
+    }
+
+    batchHashes.push(hash);
+  }
+
+  return flags;
+}
+
+export function isNearDuplicateHash(left: string, right: string): boolean {
+  if (!isValidPerceptualHash(left) || !isValidPerceptualHash(right)) {
+    return false;
+  }
+
+  return hammingDistanceHex(left, right) <= NEAR_DUPLICATE_MAX_DISTANCE;
+}
+
+function isValidPerceptualHash(value: string | null | undefined): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{16}$/i.test(value);
+}
+
+function hammingDistanceHex(left: string, right: string): number {
+  let difference = BigInt(`0x${left}`) ^ BigInt(`0x${right}`);
+  let distance = 0;
+  while (difference > 0n) {
+    distance += Number(difference & 1n);
+    difference >>= 1n;
+  }
+
+  return distance;
 }
 
 export function suggestTagsForUpload(input: SuggestedTagInput): string[] {

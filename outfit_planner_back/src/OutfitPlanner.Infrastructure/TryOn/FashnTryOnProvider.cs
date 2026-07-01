@@ -19,7 +19,7 @@ public sealed record FashnTryOnSettings(
     bool SegmentationFree,
     string GarmentPhotoType,
     int? Seed,
-    string Resolution = "4k",
+    string Resolution = "1k",
     string? GenderPromptTemplate = null)
 {
     public bool UsesTryOnMax => string.Equals(ModelName, "tryon-max", StringComparison.OrdinalIgnoreCase);

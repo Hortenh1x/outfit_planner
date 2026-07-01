@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  ApiError,
   buildExternalAuthUrl,
   createBodyReferencePhoto,
   deleteBodyReferencePhoto,
@@ -32,6 +33,17 @@ import {
 describe('api client', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('throws a typed ApiError carrying the status and trace id', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Authentication is required.' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': 'trace-123' }
+      })
+    );
+
+    await expect(getCurrentSession()).rejects.toMatchObject({ name: 'ApiError', status: 401, traceId: 'trace-123' });
   });
 
   it('requests try-on estimates before confirmed generation', async () => {

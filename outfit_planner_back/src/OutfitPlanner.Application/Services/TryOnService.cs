@@ -48,7 +48,7 @@ public sealed class TryOnService
         var normalizedUserId = InputGuard.NormalizeUserId(userId);
         var normalizedBodyPhotoUrl = ResolveBodyReferencePhotoUrl(normalizedUserId, mode, bodyReferencePhotoUrl, sourceBodyPhotoId);
         var outfit = RefreshOutfitPhotoUrls(_outfits.GetOutfitByUser(normalizedUserId, outfitId)
-            ?? throw new InvalidOperationException("Outfit was not found."));
+            ?? throw new ValidationException("Outfit was not found."));
         var bodyIdentity = BodyReferenceIdentity(normalizedUserId, sourceBodyPhotoId, normalizedBodyPhotoUrl);
         var userGender = UserGenderFor(normalizedUserId);
         var cacheProbe = _estimator.Estimate(outfit, new TryOnEstimateInput(
@@ -88,27 +88,27 @@ public sealed class TryOnService
         var estimate = Estimate(normalizedUserId, outfitId, tryOnMode, normalizedBodyPhotoUrl, sourceBodyPhotoId);
         if (!estimate.IsAvailable)
         {
-            throw new InvalidOperationException(estimate.Summary);
+            throw new ValidationException(estimate.Summary);
         }
 
         if (confirmedCredits != estimate.EstimatedCredits)
         {
-            throw new InvalidOperationException("Confirmed credits do not match the current try-on estimate. Refresh the estimate before generating.");
+            throw new ValidationException("Confirmed credits do not match the current try-on estimate. Refresh the estimate before generating.");
         }
 
         if (!string.Equals(confirmedCacheKey, estimate.CacheKey, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException("Confirmed estimate is stale. Refresh the estimate before generating.");
+            throw new ValidationException("Confirmed estimate is stale. Refresh the estimate before generating.");
         }
 
         if (estimate.RequiresAi && !consentAccepted)
         {
-            throw new InvalidOperationException("Explicit consent is required before sending photos to an AI provider.");
+            throw new ValidationException("Explicit consent is required before sending photos to an AI provider.");
         }
 
         if (!_provider.Capabilities.SupportedModes.Contains(tryOnMode) && estimate.RequiresAi)
         {
-            throw new InvalidOperationException($"{_provider.Name} does not support {tryOnMode}.");
+            throw new ValidationException($"{_provider.Name} does not support {tryOnMode}.");
         }
 
         var now = _clock.UtcNow;
@@ -224,7 +224,7 @@ public sealed class TryOnService
                 userGender: UserGenderFor(queued.UserId)));
             if (estimate.RequiresAi && _users?.GetUserById(queued.UserId) is { Gender: null })
             {
-                throw new InvalidOperationException("Set gender in account settings before using AI try-on.");
+                throw new ValidationException("Set gender in account settings before using AI try-on.");
             }
 
             var visualOnlyItems = queued.TryOnMode == TryOnMode.ExperimentalCompositeTryOn
@@ -301,7 +301,7 @@ public sealed class TryOnService
         if (sourceBodyPhotoId is { } photoId)
         {
             var photo = _bodyPhotos.GetBodyReferencePhotoByUser(userId, photoId)
-                ?? throw new InvalidOperationException("Body reference photo was not found.");
+                ?? throw new ValidationException("Body reference photo was not found.");
             return $"body:{photo.Id:N}";
         }
 
@@ -318,7 +318,7 @@ public sealed class TryOnService
         if (sourceBodyPhotoId is { } photoId)
         {
             var photo = _bodyPhotos.GetBodyReferencePhotoByUser(userId, photoId)
-                ?? throw new InvalidOperationException("Body reference photo was not found.");
+                ?? throw new ValidationException("Body reference photo was not found.");
             return _photoUrls?.RefreshBodyReferencePhotoUrl(photo.ImageUrl) ?? photo.ImageUrl;
         }
 

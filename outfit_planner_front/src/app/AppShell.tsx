@@ -8,17 +8,32 @@ import { ThemeToggle, type ThemeMode } from '../components/ThemeToggle';
 import { authSessionQueryKey, useAuthSession } from '../features/auth/authQueries';
 import './editorialShell.css';
 
+const themeStorageKey = 'outfit-planner-theme';
+
+function readStoredTheme(): ThemeMode {
+  try {
+    return localStorage.getItem(themeStorageKey) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function persistTheme(theme: ThemeMode): void {
+  try {
+    localStorage.setItem(themeStorageKey, theme);
+  } catch {
+    // Ignore storage failures (private mode / disabled storage); the theme still applies this session.
+  }
+}
+
 export function AppShell() {
-  const [theme, setTheme] = useState<ThemeMode>(() => {
-    const storedTheme = localStorage.getItem('outfit-planner-theme');
-    return storedTheme === 'dark' ? 'dark' : 'light';
-  });
+  const [theme, setTheme] = useState<ThemeMode>(readStoredTheme);
   const sessionQuery = useAuthSession();
   const authProvidersQuery = useQuery({ queryKey: ['auth-providers'], queryFn: getAuthProviders, retry: 1 });
   const shellRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    localStorage.setItem('outfit-planner-theme', theme);
+    persistTheme(theme);
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 

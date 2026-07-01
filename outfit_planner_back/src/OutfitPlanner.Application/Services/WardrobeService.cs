@@ -14,14 +14,18 @@ public sealed class WardrobeService
     private readonly IClock _clock;
     private readonly IStoredPhotoDeletion? _photoDeletion;
     private readonly IGarmentImageRotator? _imageRotator;
+    private readonly IBackgroundRemovalJobQueue? _removalQueue;
+    private readonly IBackgroundRemovalJobRepository? _removalJobs;
 
-    public WardrobeService(IBodyReferencePhotoRepository bodyPhotos, IGarmentRepository garments, IClock clock, IStoredPhotoDeletion? photoDeletion = null, IGarmentImageRotator? imageRotator = null)
+    public WardrobeService(IBodyReferencePhotoRepository bodyPhotos, IGarmentRepository garments, IClock clock, IStoredPhotoDeletion? photoDeletion = null, IGarmentImageRotator? imageRotator = null, IBackgroundRemovalJobQueue? removalQueue = null, IBackgroundRemovalJobRepository? removalJobs = null)
     {
         _bodyPhotos = bodyPhotos;
         _garments = garments;
         _clock = clock;
         _photoDeletion = photoDeletion;
         _imageRotator = imageRotator;
+        _removalQueue = removalQueue;
+        _removalJobs = removalJobs;
     }
 
     public BodyReferencePhoto CreateBodyReferencePhoto(string userId, string imageUrl)
@@ -56,9 +60,14 @@ public sealed class WardrobeService
         var thumbnailUrl = string.IsNullOrWhiteSpace(command.ThumbnailUrl) ? imageUrl : command.ThumbnailUrl.Trim();
         var rotationDegrees = 0d;
 
+        // When background removal is deferred to the async worker, the stored image is the ORIGINAL
+        // (no cutout to straighten yet), so skip create-time auto-straighten — the worker does it
+        // once the cutout exists.
+        var removalPending = command.BackgroundRemovalPending && _removalQueue is not null && _removalJobs is not null;
+
         // Auto-straighten clothing categories from their silhouette; accessories/shoes/bags/hats
         // are often angled on purpose and are left untouched.
-        if (_imageRotator is not null && ShouldAutoStraighten(command.Category))
+        if (!removalPending && _imageRotator is not null && ShouldAutoStraighten(command.Category))
         {
             var angle = NormalizeRotation(_imageRotator.ComputeGarmentAutoStraightenAngle(imageUrl));
             if (Math.Abs(angle) >= 0.5d)
@@ -96,10 +105,25 @@ public sealed class WardrobeService
             command.LastWornAt,
             NormalizeLaundryStatus(command.LaundryStatus),
             _clock.UtcNow,
-            rotationDegrees);
+            rotationDegrees,
+            NormalizeOptionalText(command.PerceptualHash),
+            removalPending ? BackgroundRemovalStatus.Pending : BackgroundRemovalStatus.Succeeded);
 
         ValidateWeatherRange(garment.WeatherMinTemp, garment.WeatherMaxTemp);
         _garments.AddGarment(garment);
+
+        if (removalPending)
+        {
+            var now = _clock.UtcNow;
+            var job = new BackgroundRemovalJob(Guid.NewGuid(), userId, imageUrl, imageUrl, BackgroundRemovalStatus.Pending, now, now)
+            {
+                GarmentId = garment.Id,
+                GarmentCategory = garment.Category
+            };
+            _removalJobs!.AddBackgroundRemovalJob(job);
+            _removalQueue!.EnqueueAsync(job.Id).AsTask().GetAwaiter().GetResult();
+        }
+
         return garment;
     }
 
@@ -197,6 +221,43 @@ public sealed class WardrobeService
         return true;
     }
 
+    // Deletes every stored garment and body-reference object (all variants) for a user. Used by
+    // account deletion so sensitive binaries are erased before the database rows that hold their
+    // object keys are cascade-removed. Best-effort; returns the number of objects removed.
+    public int PurgeUserStoredPhotos(string userId)
+    {
+        if (_photoDeletion is null)
+        {
+            return 0;
+        }
+
+        var normalizedUserId = InputGuard.NormalizeUserId(userId);
+        var deleted = 0;
+
+        foreach (var garment in _garments.ListGarmentsByUser(normalizedUserId, new GarmentQuery()))
+        {
+            if (_photoDeletion.DeleteGarmentPhoto(garment.ImageUrl))
+            {
+                deleted++;
+            }
+
+            if (!string.Equals(garment.ImageUrl, garment.ThumbnailUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                _photoDeletion.DeleteGarmentPhoto(garment.ThumbnailUrl);
+            }
+        }
+
+        foreach (var photo in _bodyPhotos.ListBodyReferencePhotosByUser(normalizedUserId))
+        {
+            if (_photoDeletion.DeleteBodyReferencePhoto(photo.ImageUrl))
+            {
+                deleted++;
+            }
+        }
+
+        return deleted;
+    }
+
     private static IReadOnlyList<string> NormalizeTags(IReadOnlyList<string> tags)
     {
         return tags
@@ -247,7 +308,7 @@ public sealed class WardrobeService
     {
         if (score is < 1 or > 5)
         {
-            throw new InvalidOperationException($"{label} must be between 1 and 5.");
+            throw new ValidationException($"{label} must be between 1 and 5.");
         }
 
         return score;
@@ -257,7 +318,7 @@ public sealed class WardrobeService
     {
         if (minTemp is not null && maxTemp is not null && maxTemp < minTemp)
         {
-            throw new InvalidOperationException("Weather max temperature must be greater than or equal to weather min temperature.");
+            throw new ValidationException("Weather max temperature must be greater than or equal to weather min temperature.");
         }
     }
 
@@ -286,7 +347,7 @@ public sealed class WardrobeService
         var normalized = NormalizeToken(status) ?? DefaultLaundryStatus;
         if (normalized is not ("clean" or "worn" or "washing"))
         {
-            throw new InvalidOperationException("Laundry status must be clean, worn, or washing.");
+            throw new ValidationException("Laundry status must be clean, worn, or washing.");
         }
 
         return normalized;
