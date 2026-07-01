@@ -169,18 +169,14 @@ export function WardrobePage() {
                     mutations.deleteMutation.mutate(item.id);
                   }
                 }}
-                onDuplicate={(item) => mutations.duplicateMutation.mutate(item)}
                 onEdit={setEditingGarment}
-                onFavorite={(item) => mutations.favoriteMutation.mutate(item)}
               />
             ))}
           </div>
         )}
         {[
           garmentsQuery.error,
-          mutations.favoriteMutation.error,
           mutations.editMutation.error,
-          mutations.duplicateMutation.error,
           mutations.deleteMutation.error,
           mutations.uploadQueueMutation.error
         ].filter(Boolean).map((error) => (
@@ -220,12 +216,6 @@ function WardrobeEmptyState({ filtered, onReset }: { filtered: boolean; onReset:
 }
 
 function pendingActionFor(garment: GarmentItem, mutations: ReturnType<typeof useWardrobeMutations>): string | undefined {
-  if (mutations.favoriteMutation.isPending && mutations.favoriteMutation.variables?.id === garment.id) {
-    return 'favorite';
-  }
-  if (mutations.duplicateMutation.isPending && mutations.duplicateMutation.variables?.id === garment.id) {
-    return 'duplicate';
-  }
   if (mutations.deleteMutation.isPending && mutations.deleteMutation.variables === garment.id) {
     return 'delete';
   }

@@ -113,11 +113,10 @@ describe('WardrobePage', () => {
     await userEvent.click(within(screen.getByLabelText(/garment categories/i)).getByRole('button', { name: /^top$/i }));
     await userEvent.selectOptions(within(filters).getByLabelText(/^color$/i), 'black');
     await userEvent.selectOptions(within(filters).getByLabelText(/^season$/i), 'summer');
-    await userEvent.click(within(filters).getByLabelText(/favorites/i));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/garments?q=silk&category=Top&color=black&season=summer&favorite=true&archived=false&sort=recent',
+        '/api/garments?q=silk&category=Top&color=black&season=summer&archived=false&sort=recent',
         expect.any(Object)
       );
     });
@@ -160,22 +159,14 @@ describe('WardrobePage', () => {
     expect(await screen.findByRole('button', { name: /reset filters/i })).toBeInTheDocument();
   });
 
-  it('favorites edits duplicates and deletes garments through existing API calls', async () => {
+  it('edits and deletes garments through existing API calls', async () => {
     const fetchMock = mockWardrobeFetch();
 
     renderWardrobe();
 
-    await userEvent.click(await screen.findByRole('button', { name: /favorite black silk cami/i }));
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/garments/garment-1', expect.objectContaining({ method: 'PATCH', body: expect.stringContaining('"isFavorite":true') }));
-    });
-
-    expect(screen.queryByRole('button', { name: /archive black silk cami/i })).not.toBeInTheDocument();
-
-    await userEvent.click(await screen.findByRole('button', { name: /duplicate black silk cami/i }));
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/garments', expect.objectContaining({ method: 'POST', body: expect.stringContaining('Black silk cami copy') }));
-    });
+    // The like and duplicate actions were removed from cards; favorites is no longer a filter.
+    expect(screen.queryByRole('button', { name: /favorite black silk cami/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /duplicate black silk cami/i })).not.toBeInTheDocument();
 
     await userEvent.click(await screen.findByRole('button', { name: /edit black silk cami/i }));
     await userEvent.clear(await screen.findByLabelText(/^name$/i));
