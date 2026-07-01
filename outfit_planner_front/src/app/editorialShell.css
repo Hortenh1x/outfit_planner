@@ -183,18 +183,6 @@ button.editorial-nav-button:active,
   padding-top: 14px;
 }
 
-.editorial-account-kicker {
-  align-items: center;
-  color: var(--editorial-accent);
-  display: flex;
-  font-size: 0.73rem;
-  font-weight: 900;
-  gap: 7px;
-  letter-spacing: 0;
-  line-height: 1.2;
-  text-transform: uppercase;
-}
-
 .editorial-account-user {
   align-items: center;
   background: var(--editorial-panel-muted);

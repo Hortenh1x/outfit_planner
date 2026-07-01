@@ -41,8 +41,7 @@ export function CalendarPage() {
       <div className="calendar-workspace">
         <header className="calendar-hero">
           <div>
-            <p>Calendar</p>
-            <h1>Plan your looks, <em>every day.</em></h1>
+            <h1>Calendar</h1>
           </div>
         </header>
         <div className="calendar-toolbar">

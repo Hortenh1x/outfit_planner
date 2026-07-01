@@ -3,7 +3,6 @@ import { Camera, CloudUpload, Plus } from 'lucide-react';
 import type { GarmentCategory } from '../../types';
 import { UploadQueue } from './UploadQueue';
 import {
-  cleanPhotoChecklist,
   hasCreatableItems,
   isQueueProcessing,
   type UploadQueueItem,
@@ -67,11 +66,7 @@ export function WardrobeUploadPanel({
   return (
     <section className="wardrobe-rail" aria-label="Add garment">
       <div className="wardrobe-rail-heading">
-        <span>Add garment</span>
-        <h2>Catalog clean photos</h2>
-      </div>
-      <div className="clean-checklist" aria-label="Clean photo checklist">
-        {cleanPhotoChecklist.map((item) => <span key={item}>{item}</span>)}
+        <h2>Add garment</h2>
       </div>
       <label className="wardrobe-drop-zone" aria-disabled={isUploading} onDragOver={handleDragOver} onDrop={handleDrop}>
         <CloudUpload size={24} aria-hidden="true" />

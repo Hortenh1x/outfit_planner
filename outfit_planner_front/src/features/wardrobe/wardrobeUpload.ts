@@ -52,11 +52,6 @@ export interface ImageDimensions {
   height: number;
 }
 
-export const cleanPhotoChecklist = [
-  'Front view',
-  'Good lighting',
-  'No background clutter'
-];
 
 export function createUploadQueueItems(files: File[], defaults: UploadQueueDefaults): UploadQueueItem[] {
   return files.map((file, index) => createUploadQueueItem(file, defaults, index));

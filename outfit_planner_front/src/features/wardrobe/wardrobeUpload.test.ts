@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  cleanPhotoChecklist,
   createUploadQueueItems,
   getPhotoQualityWarnings,
   hasCreatableItems,
@@ -24,14 +23,6 @@ function queueItem(id: string, status: UploadQueueStatus): UploadQueueItem {
 }
 
 describe('wardrobeUpload', () => {
-  it('exposes the clean photo checklist copy required before upload', () => {
-    expect(cleanPhotoChecklist).toEqual([
-      'Front view',
-      'Good lighting',
-      'No background clutter'
-    ]);
-  });
-
   it('creates editable queue rows from multiple supported image files', () => {
     const files = [
       new File(['shirt'], 'black-silk-cami.png', { type: 'image/png' }),

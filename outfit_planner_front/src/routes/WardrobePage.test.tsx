@@ -86,18 +86,17 @@ describe('WardrobePage', () => {
     vi.unstubAllGlobals();
   });
 
-  it('renders editorial search filters checklist and garment cards', async () => {
+  it('renders editorial search filters and garment cards', async () => {
     const fetchMock = mockWardrobeFetch();
 
     renderWardrobe();
 
-    expect(await screen.findByRole('heading', { name: /every piece has/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /my wardrobe/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/search wardrobe/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/category filter/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^archived$/i)).not.toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: /^tags$/i })).toBeInTheDocument();
     expect(within(screen.getByLabelText(/garment categories/i)).getByRole('button', { name: /outerwear/i })).toBeInTheDocument();
-    expect(screen.getByLabelText(/clean photo checklist/i)).toHaveTextContent(/front view/i);
     expect(await screen.findByRole('img', { name: /black silk cami/i })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('/api/garments?archived=false&sort=recent', expect.any(Object));
   });

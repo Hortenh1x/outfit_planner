@@ -276,8 +276,7 @@ export function BuilderPage() {
       <div className="preview-stage">
         <header className="builder-hero">
           <div>
-            <p>Builder</p>
-            <h1>Build looks with <em>intention.</em></h1>
+            <h1>Builder</h1>
           </div>
           <span>{selectionLabel(selection, garments)}</span>
           <ModeToggle mode={mode} onChange={setMode} />
