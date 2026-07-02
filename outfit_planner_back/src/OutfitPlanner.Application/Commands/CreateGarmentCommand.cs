@@ -26,4 +26,6 @@ public sealed record CreateGarmentCommand(
     DateTimeOffset? LastWornAt = null,
     string? LaundryStatus = null,
     string? PerceptualHash = null,
-    bool BackgroundRemovalPending = false);
+    bool BackgroundRemovalPending = false,
+    int? CutoutWidthPx = null,
+    int? CutoutHeightPx = null);

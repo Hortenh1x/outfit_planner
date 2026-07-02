@@ -50,7 +50,11 @@ export function useWardrobeMutations() {
           primaryColor: item.primaryColor.trim() || null,
           season: item.season,
           perceptualHash: uploadedPhoto.perceptualHash ?? null,
-          backgroundRemovalPending: true
+          backgroundRemovalPending: true,
+          // Null on this fast path (no cutout yet); the async background-removal worker
+          // measures and persists the cutout once it exists.
+          cutoutWidthPx: uploadedPhoto.cutoutWidthPx ?? null,
+          cutoutHeightPx: uploadedPhoto.cutoutHeightPx ?? null
         }));
       }
 

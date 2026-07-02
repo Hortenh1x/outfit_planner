@@ -2,7 +2,7 @@ using OutfitPlanner.Application.Abstractions;
 
 namespace OutfitPlanner.Infrastructure.Storage;
 
-public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStoredPhotoDeletion, IGarmentImageRotator, IGarmentOriginalImageReader, IGarmentBackgroundRemover
+public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStoredPhotoDeletion, IGarmentImageRotator, IGarmentOriginalImageReader, IGarmentCutoutImageReader, IGarmentBackgroundRemover
 {
     private static readonly TimeSpan DefaultSignedUrlLifetime = TimeSpan.FromMinutes(15);
 
@@ -87,7 +87,7 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
         var thumbnail = OverwriteGarmentVariant(StoredImageVariant.Thumbnail, fileName, rendered.ThumbnailPng);
         OverwriteGarmentVariant(StoredImageVariant.SegmentationMask, fileName, rendered.SegmentationMaskPng);
 
-        return new GarmentRotationOutcome(SignedUrl(cutout), SignedUrl(thumbnail), rendered.PerceptualHash);
+        return new GarmentRotationOutcome(SignedUrl(cutout), SignedUrl(thumbnail), rendered.PerceptualHash, rendered.CutoutMeasurement);
     }
 
     public GarmentRemovalOutcome RemoveGarmentBackground(string garmentImageUrl)
@@ -131,10 +131,20 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
             throw new InvalidOperationException("Background removal did not produce a cutout.");
         }
 
-        return new GarmentRemovalOutcome(SignedUrl(cutout), SignedUrl(thumbnail), processed.PerceptualHash);
+        return new GarmentRemovalOutcome(SignedUrl(cutout), SignedUrl(thumbnail), processed.PerceptualHash, processed.CutoutMeasurement);
     }
 
     public byte[]? ReadGarmentOriginalImageBytes(string garmentImageUrl)
+    {
+        return ReadGarmentVariantBytes(garmentImageUrl, StoredImageVariant.Original);
+    }
+
+    public byte[]? ReadGarmentCutoutImageBytes(string garmentImageUrl)
+    {
+        return ReadGarmentVariantBytes(garmentImageUrl, StoredImageVariant.ProcessedCutout);
+    }
+
+    private byte[]? ReadGarmentVariantBytes(string garmentImageUrl, StoredImageVariant variant)
     {
         var fileName = FileNameFromPhotoUrl(garmentImageUrl);
         if (fileName is null)
@@ -142,7 +152,7 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
             return null;
         }
 
-        using var stream = _objects.OpenReadObject(ObjectKey("garments", StoredImageVariant.Original, fileName));
+        using var stream = _objects.OpenReadObject(ObjectKey("garments", variant, fileName));
         if (stream is null)
         {
             return null;
@@ -218,7 +228,8 @@ public sealed class LocalPhotoStorage : IPhotoStorage, IStoredPhotoReader, IStor
             PrivatePreviewObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.PrivatePreview)?.ObjectKey,
             PerceptualHash = processed.PerceptualHash,
             BaseCutoutUrl = OptionalSignedUrl(storedByVariant.GetValueOrDefault(StoredImageVariant.BaseCutout)),
-            BaseCutoutObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.BaseCutout)?.ObjectKey
+            BaseCutoutObjectKey = storedByVariant.GetValueOrDefault(StoredImageVariant.BaseCutout)?.ObjectKey,
+            CutoutMeasurement = processed.CutoutMeasurement
         };
     }
 

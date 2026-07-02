@@ -138,6 +138,8 @@ create table if not exists garment_items (
     rotation_degrees double precision not null default 0,
     background_removal_status text not null default 'Succeeded',
     background_removal_error text,
+    cutout_width_px integer,
+    cutout_height_px integer,
     created_at timestamptz not null default now()
 );
 
@@ -165,6 +167,8 @@ alter table garment_items add column if not exists laundry_status text not null 
 alter table garment_items add column if not exists rotation_degrees double precision not null default 0;
 alter table garment_items add column if not exists background_removal_status text not null default 'Succeeded';
 alter table garment_items add column if not exists background_removal_error text;
+alter table garment_items add column if not exists cutout_width_px integer;
+alter table garment_items add column if not exists cutout_height_px integer;
 
 create table if not exists outfits (
     id uuid primary key,

@@ -37,7 +37,11 @@ public sealed record GarmentItem(
     string? PerceptualHash = null,
     // Async background-removal state; Succeeded for legacy/already-processed garments.
     BackgroundRemovalStatus BackgroundRemovalStatus = BackgroundRemovalStatus.Succeeded,
-    string? BackgroundRemovalError = null);
+    string? BackgroundRemovalError = null,
+    // Alpha-bounding-box size of the current cutout in pixels. The absolute numbers depend on
+    // the shot, but height/width is invariant to shooting distance and drives relative sizing.
+    int? CutoutWidthPx = null,
+    int? CutoutHeightPx = null);
 
 public sealed record OutfitItem(
     Guid GarmentId,

@@ -111,7 +111,9 @@ public sealed class InMemoryOutfitStore :
             command.LastWornAt,
             command.LaundryStatus ?? "clean",
             DateTimeOffset.UtcNow,
-            PerceptualHash: command.PerceptualHash);
+            PerceptualHash: command.PerceptualHash,
+            CutoutWidthPx: command.CutoutWidthPx,
+            CutoutHeightPx: command.CutoutHeightPx);
 
         AddGarment(garment);
         return garment;
@@ -187,6 +189,40 @@ public sealed class InMemoryOutfitStore :
                 .Where(garment => string.IsNullOrEmpty(garment.PerceptualHash))
                 .Take(limit)
                 .ToList();
+        }
+    }
+
+    public IReadOnlyList<GarmentItem> ListGarmentsMissingCutoutMeasurement(int limit)
+    {
+        lock (_lock)
+        {
+            return _garments.Values
+                .Where(garment => garment.BackgroundRemovalStatus == BackgroundRemovalStatus.Succeeded
+                    && (garment.CutoutWidthPx is null || garment.CutoutHeightPx is null))
+                .Take(limit)
+                .ToList();
+        }
+    }
+
+    public void UpdateGarmentPerceptualHash(Guid garmentId, string perceptualHash)
+    {
+        lock (_lock)
+        {
+            if (_garments.TryGetValue(garmentId, out var garment))
+            {
+                _garments[garmentId] = garment with { PerceptualHash = perceptualHash };
+            }
+        }
+    }
+
+    public void UpdateGarmentCutoutMeasurement(Guid garmentId, int cutoutWidthPx, int cutoutHeightPx)
+    {
+        lock (_lock)
+        {
+            if (_garments.TryGetValue(garmentId, out var garment))
+            {
+                _garments[garmentId] = garment with { CutoutWidthPx = cutoutWidthPx, CutoutHeightPx = cutoutHeightPx };
+            }
         }
     }
 

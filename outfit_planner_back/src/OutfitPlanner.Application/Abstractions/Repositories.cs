@@ -18,7 +18,14 @@ public interface IGarmentRepository
     IReadOnlyList<GarmentItem> ListGarmentsByUser(string userId, GarmentQuery query);
     // Garments (across all users) that have no stored perceptual hash yet, capped at `limit`.
     IReadOnlyList<GarmentItem> ListGarmentsMissingPerceptualHash(int limit);
+    // Garments (across all users) whose cutout exists (background removal succeeded) but has no
+    // stored cutout measurement yet, capped at `limit`.
+    IReadOnlyList<GarmentItem> ListGarmentsMissingCutoutMeasurement(int limit);
     void UpdateGarment(GarmentItem garment);
+    // Column-scoped updates for the startup backfill workers: both backfills can touch the same
+    // row concurrently, so they must not rewrite the whole record from a stale in-memory copy.
+    void UpdateGarmentPerceptualHash(Guid garmentId, string perceptualHash);
+    void UpdateGarmentCutoutMeasurement(Guid garmentId, int cutoutWidthPx, int cutoutHeightPx);
     bool DeleteGarmentByUser(string userId, Guid garmentId);
 }
 

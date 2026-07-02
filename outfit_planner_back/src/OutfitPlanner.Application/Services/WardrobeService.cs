@@ -59,6 +59,7 @@ public sealed class WardrobeService
         var imageUrl = InputGuard.RequireText(command.ImageUrl, "Garment image URL");
         var thumbnailUrl = string.IsNullOrWhiteSpace(command.ThumbnailUrl) ? imageUrl : command.ThumbnailUrl.Trim();
         var rotationDegrees = 0d;
+        var (cutoutWidthPx, cutoutHeightPx) = NormalizeCutoutMeasurement(command.CutoutWidthPx, command.CutoutHeightPx);
 
         // When background removal is deferred to the async worker, the stored image is the ORIGINAL
         // (no cutout to straighten yet), so skip create-time auto-straighten — the worker does it
@@ -76,6 +77,10 @@ public sealed class WardrobeService
                 imageUrl = rotated.ImageUrl;
                 thumbnailUrl = rotated.ThumbnailUrl;
                 rotationDegrees = angle;
+                if (rotated.CutoutMeasurement is { } straightened)
+                {
+                    (cutoutWidthPx, cutoutHeightPx) = (straightened.WidthPx, straightened.HeightPx);
+                }
             }
         }
 
@@ -107,7 +112,9 @@ public sealed class WardrobeService
             _clock.UtcNow,
             rotationDegrees,
             NormalizeOptionalText(command.PerceptualHash),
-            removalPending ? BackgroundRemovalStatus.Pending : BackgroundRemovalStatus.Succeeded);
+            removalPending ? BackgroundRemovalStatus.Pending : BackgroundRemovalStatus.Succeeded,
+            CutoutWidthPx: cutoutWidthPx,
+            CutoutHeightPx: cutoutHeightPx);
 
         ValidateWeatherRange(garment.WeatherMinTemp, garment.WeatherMaxTemp);
         _garments.AddGarment(garment);
@@ -190,7 +197,11 @@ public sealed class WardrobeService
                 {
                     ImageUrl = rotated.ImageUrl,
                     ThumbnailUrl = rotated.ThumbnailUrl,
-                    RotationDegrees = normalized
+                    RotationDegrees = normalized,
+                    // The re-rendered cutout has a new bounding box, so refresh the measurement
+                    // (keep the previous one only if the render could not measure).
+                    CutoutWidthPx = rotated.CutoutMeasurement?.WidthPx ?? existing.CutoutWidthPx,
+                    CutoutHeightPx = rotated.CutoutMeasurement?.HeightPx ?? existing.CutoutHeightPx
                 };
             }
             else
@@ -320,6 +331,13 @@ public sealed class WardrobeService
         {
             throw new ValidationException("Weather max temperature must be greater than or equal to weather min temperature.");
         }
+    }
+
+    // The measurement is meaningful only as a complete positive pair; anything else (a lone
+    // dimension, zero, negative garbage) degrades to "not measured".
+    private static (int? WidthPx, int? HeightPx) NormalizeCutoutMeasurement(int? widthPx, int? heightPx)
+    {
+        return widthPx is > 0 && heightPx is > 0 ? (widthPx, heightPx) : (null, null);
     }
 
     private static bool ShouldAutoStraighten(GarmentCategory category)

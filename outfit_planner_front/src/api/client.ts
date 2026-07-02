@@ -287,6 +287,9 @@ export interface UploadedPhotoResponse {
   cutoutUrl?: string | null;
   maskUrl?: string | null;
   perceptualHash?: string | null;
+  // Alpha-bounding-box size of the processed cutout; null on the original-only fast path.
+  cutoutWidthPx?: number | null;
+  cutoutHeightPx?: number | null;
 }
 
 export async function uploadGarmentPhoto(file: File, signal?: AbortSignal): Promise<UploadedPhotoResponse> {
@@ -416,6 +419,8 @@ export function createGarment(input: {
   tags: string[];
   perceptualHash?: string | null;
   backgroundRemovalPending?: boolean;
+  cutoutWidthPx?: number | null;
+  cutoutHeightPx?: number | null;
 } & GarmentMetadataInput): Promise<GarmentItem> {
   return request<GarmentItem>('/garments', {
     method: 'POST',

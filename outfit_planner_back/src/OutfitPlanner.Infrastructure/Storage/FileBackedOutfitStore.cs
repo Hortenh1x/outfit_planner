@@ -86,9 +86,24 @@ public sealed class FileBackedOutfitStore :
         return _inner.ListGarmentsMissingPerceptualHash(limit);
     }
 
+    public IReadOnlyList<GarmentItem> ListGarmentsMissingCutoutMeasurement(int limit)
+    {
+        return _inner.ListGarmentsMissingCutoutMeasurement(limit);
+    }
+
     public void UpdateGarment(GarmentItem garment)
     {
         Mutate(() => _inner.UpdateGarment(garment));
+    }
+
+    public void UpdateGarmentPerceptualHash(Guid garmentId, string perceptualHash)
+    {
+        Mutate(() => _inner.UpdateGarmentPerceptualHash(garmentId, perceptualHash));
+    }
+
+    public void UpdateGarmentCutoutMeasurement(Guid garmentId, int cutoutWidthPx, int cutoutHeightPx)
+    {
+        Mutate(() => _inner.UpdateGarmentCutoutMeasurement(garmentId, cutoutWidthPx, cutoutHeightPx));
     }
 
     public bool DeleteGarmentByUser(string userId, Guid garmentId)

@@ -41,6 +41,9 @@ public sealed class ImageProcessor : IImageProcessor
         var fileName = $"{Guid.NewGuid():N}{extension}";
         var original = Encode(image, photo.ContentType);
         using var cutoutImage = CreateGarmentCutout(photo.FileName, photo.ContentType, original);
+        // Trim transparent padding so the stored cutout IS the garment's alpha bounding box;
+        // relative-size rendering can then treat the image frame as the measured extent.
+        var measurement = TrimToOpaqueBounds(cutoutImage);
         using var thumbnailImage = ResizeClone(cutoutImage, ThumbnailSide);
         var thumbnail = EncodePng(thumbnailImage);
         var cutout = EncodePng(cutoutImage);
@@ -58,7 +61,8 @@ public sealed class ImageProcessor : IImageProcessor
                 new ProcessedImage(StoredImageVariant.ProcessedCutout, "image/png", ".png", cutout),
                 new ProcessedImage(StoredImageVariant.BaseCutout, "image/png", ".png", cutout),
                 new ProcessedImage(StoredImageVariant.SegmentationMask, "image/png", ".png", mask)
-            });
+            },
+            measurement);
     }
 
     public string? ComputePerceptualHash(byte[] imageBytes)
@@ -71,6 +75,22 @@ public sealed class ImageProcessor : IImageProcessor
         using var image = Image.Load<Rgba32>(imageBytes);
         NormalizeMetadataAndSize(image, MaxImageSide);
         return AverageHash(image);
+    }
+
+    public GarmentCutoutMeasurement? MeasureGarmentCutout(byte[] imageBytes)
+    {
+        if (imageBytes is null || imageBytes.Length == 0)
+        {
+            return null;
+        }
+
+        using var image = Image.Load<Rgba32>(imageBytes);
+        // Cutouts carry no EXIF, but the backfill also measures legacy originals, whose
+        // orientation may still live in metadata rather than pixels.
+        image.Mutate(operation => operation.AutoOrient());
+        return OpaqueBounds(image) is { } bounds
+            ? new GarmentCutoutMeasurement(bounds.Width, bounds.Height)
+            : null;
     }
 
     public ProcessedPhotoSet ProcessGarmentOriginal(IncomingPhoto photo)
@@ -160,33 +180,39 @@ public sealed class ImageProcessor : IImageProcessor
     public GarmentRotationRender RenderRotatedGarment(byte[] baseCutoutPngBytes, double degrees)
     {
         using var baseImage = Image.Load<Rgba32>(baseCutoutPngBytes);
-        using var rotated = RotateAndTrim(baseImage, degrees);
+        using var rotated = RotateClone(baseImage, degrees);
+        var measurement = TrimToOpaqueBounds(rotated);
         using var thumbnailImage = ResizeClone(rotated, ThumbnailSide);
         var cutout = EncodePng(rotated);
         var thumbnail = EncodePng(thumbnailImage);
         var mask = CreateSegmentationMask(rotated);
         var hash = AverageHash(rotated);
-        return new GarmentRotationRender(cutout, thumbnail, mask, hash);
+        return new GarmentRotationRender(cutout, thumbnail, mask, hash, measurement);
     }
 
-    private static Image<Rgba32> RotateAndTrim(Image<Rgba32> source, double degrees)
+    private static Image<Rgba32> RotateClone(Image<Rgba32> source, double degrees)
     {
         var normalized = NormalizeDegrees(degrees);
-        if (Math.Abs(normalized) < 0.01)
+        return Math.Abs(normalized) < 0.01
+            ? source.Clone()
+            : source.Clone(operation => operation.Rotate((float)normalized));
+    }
+
+    // Crops the image in place to its alpha bounding box and returns the resulting measurement,
+    // or null (and no crop) when the image has no opaque pixels at all.
+    private static GarmentCutoutMeasurement? TrimToOpaqueBounds(Image<Rgba32> image)
+    {
+        if (OpaqueBounds(image) is not { } bounds)
         {
-            return source.Clone();
+            return null;
         }
 
-        var rotated = source.Clone(operation => operation.Rotate((float)normalized));
-        if (OpaqueBounds(rotated) is { } bounds
-            && bounds.Width > 0
-            && bounds.Height > 0
-            && (bounds.Width != rotated.Width || bounds.Height != rotated.Height))
+        if (bounds.Width != image.Width || bounds.Height != image.Height)
         {
-            rotated.Mutate(operation => operation.Crop(bounds));
+            image.Mutate(operation => operation.Crop(bounds));
         }
 
-        return rotated;
+        return new GarmentCutoutMeasurement(bounds.Width, bounds.Height);
     }
 
     private static double NormalizeDegrees(double degrees)
