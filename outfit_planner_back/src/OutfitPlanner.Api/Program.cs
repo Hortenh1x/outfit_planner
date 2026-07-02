@@ -303,6 +303,7 @@ builder.Services.AddSingleton<IStoredPhotoReader>(provider => provider.GetRequir
 builder.Services.AddSingleton<IStoredPhotoDeletion>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IGarmentImageRotator>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IGarmentOriginalImageReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
+builder.Services.AddSingleton<IGarmentCutoutImageReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IGarmentBackgroundRemover>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IBackgroundRemovalJobRepository, OutfitPlanner.Infrastructure.BackgroundRemoval.InMemoryBackgroundRemovalJobRepository>();
 builder.Services.AddSingleton<IBackgroundRemovalJobProcessor, BackgroundRemovalJobProcessor>();
@@ -350,6 +351,7 @@ builder.Services.AddSingleton<AuthService>();
 builder.Services.AddSingleton<PostgresConnectionProbe>();
 builder.Services.AddHostedService<TryOnBackgroundWorker>();
 builder.Services.AddHostedService<GarmentPerceptualHashBackfillWorker>();
+builder.Services.AddHostedService<GarmentCutoutMeasurementBackfillWorker>();
 builder.Services.AddHostedService<BackgroundRemovalWorker>();
 
 var app = builder.Build();
@@ -912,7 +914,9 @@ api.MapPost("/garments", (CreateGarmentRequest request, WardrobeService wardrobe
             request.LastWornAt,
             request.LaundryStatus,
             request.PerceptualHash,
-            request.BackgroundRemovalPending ?? false));
+            request.BackgroundRemovalPending ?? false,
+            request.CutoutWidthPx,
+            request.CutoutHeightPx));
 
         return Results.Created($"/api/garments/{garment.Id}", ToGarmentResponse(garment, photoUrls, context.Request));
     }
@@ -1214,7 +1218,9 @@ static async Task<IResult> UploadPhoto(HttpRequest request, ILogger logger, stri
             PublicUploadUrl(request, stored.ThumbnailUrl),
             PublicUploadUrl(request, stored.ProcessedCutoutUrl),
             PublicUploadUrl(request, stored.SegmentationMaskUrl),
-            stored.PerceptualHash));
+            stored.PerceptualHash,
+            stored.CutoutMeasurement?.WidthPx,
+            stored.CutoutMeasurement?.HeightPx));
     }
     catch (ValidationException ex)
     {

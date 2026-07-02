@@ -54,6 +54,7 @@ var tests = new List<(string Name, Action Test)>
     ("wardrobe service updates structured garment metadata without reupload", TestWardrobeServiceUpdatesStructuredMetadata),
     ("wardrobe service auto-straightens clothing categories on create only", TestWardrobeServiceAutoStraightensClothingOnly),
     ("wardrobe service rotates and persists garment rotation on update", TestWardrobeServiceRotatesGarmentOnUpdate),
+    ("wardrobe service persists and refreshes garment cutout measurement", TestWardrobeServicePersistsAndRefreshesCutoutMeasurement),
     ("wardrobe service filters sorts and paginates garments", TestWardrobeServiceFiltersSortsAndPaginatesGarments),
     ("outfit service updates gets filters and deletes outfits", TestOutfitServiceUpdatesFiltersAndDeletesOutfits),
     ("outfit service applies slot compatibility rules", TestOutfitSlotCompatibilityRules),
@@ -96,6 +97,8 @@ var tests = new List<(string Name, Action Test)>
     ("try-on output storage port and adapter exist", TestTryOnOutputStoragePortAndAdapter),
     ("image processing pipeline exposes privacy preserving variants", TestImageProcessingPipelineContracts),
     ("garment processing emits an immutable base cutout variant", TestImageProcessorEmitsBaseCutoutVariant),
+    ("garment processing trims the cutout to its alpha bounding box and measures it", TestGarmentProcessingMeasuresAndTrimsCutout),
+    ("cutout measurement is invariant to shooting distance and padding", TestMeasureGarmentCutoutIsScaleInvariant),
     ("garment deskew straightens a tilted silhouette", TestGarmentDeskewStraightensTiltedSilhouette),
     ("garment deskew skips square and extreme tilts", TestGarmentDeskewSkipsSquareAndExtremeTilt),
     ("garment rotation render produces rotated variants", TestImageProcessorRendersRotatedGarmentVariants),
@@ -115,6 +118,7 @@ var tests = new List<(string Name, Action Test)>
     ("garment rotation works against non-file object storage", TestGarmentRotationWorksOnNonFileObjectStorage),
     ("wardrobe service purges all stored photos for a user", TestWardrobeServicePurgesAllUserStoredPhotos),
     ("postgres schema contains structured garment metadata and query indexes", TestPostgresSchemaContainsStructuredMetadataAndIndexes),
+    ("postgres schema declares garment cutout measurement columns", TestPostgresSchemaContainsCutoutMeasurementColumns),
     ("postgres schema contains cascade and cleanup indexes", TestPostgresSchemaContainsCascadeAndCleanupIndexes),
     ("postgres schema contains privacy storage auth hardening and try-on retention fields", TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields),
     ("try-on storage persists mode cost and cache metadata", TestTryOnStoragePersistsModeCostAndCacheMetadata),
@@ -925,6 +929,53 @@ static void TestWardrobeServiceRotatesGarmentOnUpdate()
 
     var metadataOnly = service.UpdateGarment("user-a", garment.Id, new UpdateGarmentCommand(Name: "weekender bag"));
     AssertTrue(Math.Abs(metadataOnly!.RotationDegrees - 90d) < 0.001, "a metadata-only edit should preserve the saved rotation");
+}
+
+static void TestWardrobeServicePersistsAndRefreshesCutoutMeasurement()
+{
+    var store = new InMemoryOutfitStore();
+    var rotator = new RecordingGarmentImageRotator
+    {
+        AutoStraightenAngle = 0d,
+        RotationMeasurement = new GarmentCutoutMeasurement(300, 100)
+    };
+    var service = new WardrobeService(store, store, new SystemClock(), null, rotator);
+
+    var garment = service.CreateGarment(CreateGarment("user-a", "tote bag", GarmentCategory.Bag) with
+    {
+        CutoutWidthPx = 100,
+        CutoutHeightPx = 300
+    });
+    AssertEqual(100, garment.CutoutWidthPx, "upload-time cutout width should persist on the garment");
+    AssertEqual(300, garment.CutoutHeightPx, "upload-time cutout height should persist on the garment");
+
+    var rotated = service.UpdateGarment("user-a", garment.Id, new UpdateGarmentCommand(RotationDegrees: 90d));
+    AssertEqual(300, rotated!.CutoutWidthPx, "manual rotation should refresh the measurement from the re-rendered cutout");
+    AssertEqual(100, rotated.CutoutHeightPx, "manual rotation should refresh the measurement from the re-rendered cutout");
+
+    var metadataOnly = service.UpdateGarment("user-a", garment.Id, new UpdateGarmentCommand(Name: "weekender"));
+    AssertEqual(300, metadataOnly!.CutoutWidthPx, "a metadata-only edit should preserve the measurement");
+
+    // Garbage measurements (a lone dimension, zero, negatives) degrade to "not measured".
+    var unmeasured = service.CreateGarment(CreateGarment("user-a", "belt", GarmentCategory.Accessory) with
+    {
+        CutoutWidthPx = -5,
+        CutoutHeightPx = 10
+    });
+    AssertTrue(unmeasured.CutoutWidthPx is null && unmeasured.CutoutHeightPx is null, "invalid measurements should be dropped");
+
+    // The backfill worker's repository surface: unmeasured garments with a finished cutout are
+    // selected, and the column-scoped update fills them without rewriting the record.
+    var missing = store.ListGarmentsMissingCutoutMeasurement(10);
+    AssertTrue(missing.Any(item => item.Id == unmeasured.Id), "unmeasured garments should be selected for backfill");
+    AssertTrue(missing.All(item => item.Id != garment.Id), "measured garments should not be selected for backfill");
+
+    store.UpdateGarmentCutoutMeasurement(unmeasured.Id, 42, 84);
+    var backfilled = store.GetGarmentByUser("user-a", unmeasured.Id);
+    AssertEqual(42, backfilled!.CutoutWidthPx, "the column-scoped update should persist the measurement");
+    AssertEqual(84, backfilled.CutoutHeightPx, "the column-scoped update should persist the measurement");
+    AssertEqual("belt", backfilled.Name, "the column-scoped update should leave the rest of the record intact");
+    AssertEqual(0, store.ListGarmentsMissingCutoutMeasurement(10).Count, "backfilled garments should stop being selected");
 }
 
 static void TestWardrobeServiceFiltersSortsAndPaginatesGarments()
@@ -1906,6 +1957,63 @@ static void TestImageProcessorEmitsBaseCutoutVariant()
         "garment processing should emit an immutable base-cutout variant to rotate from later");
 }
 
+static void TestGarmentProcessingMeasuresAndTrimsCutout()
+{
+    // The same garment silhouette "shot" close up and far away: identical shape, different scale
+    // and transparent padding around it.
+    var closeUp = TransparentPaddedRectanglePng(400, 400, 100, 300);
+    var farAway = TransparentPaddedRectanglePng(800, 800, 50, 150);
+
+    var closeProcessed = new ImageProcessor(new RecordingBackgroundRemovalProvider(closeUp))
+        .ProcessGarmentPhoto(new IncomingPhoto("shirt.png", "image/png", closeUp.Length, new MemoryStream(closeUp)));
+    var farProcessed = new ImageProcessor(new RecordingBackgroundRemovalProvider(farAway))
+        .ProcessGarmentPhoto(new IncomingPhoto("shirt.png", "image/png", farAway.Length, new MemoryStream(farAway)));
+
+    AssertTrue(closeProcessed.CutoutMeasurement is not null && farProcessed.CutoutMeasurement is not null, "garment processing should measure the cutout");
+    AssertEqual(100, closeProcessed.CutoutMeasurement!.WidthPx, "measurement should be the opaque bounding box width, not the padded frame");
+    AssertEqual(300, closeProcessed.CutoutMeasurement.HeightPx, "measurement should be the opaque bounding box height, not the padded frame");
+
+    var closeAspect = closeProcessed.CutoutMeasurement.HeightPx / (double)closeProcessed.CutoutMeasurement.WidthPx;
+    var farAspect = farProcessed.CutoutMeasurement!.HeightPx / (double)farProcessed.CutoutMeasurement.WidthPx;
+    AssertTrue(Math.Abs(closeAspect - farAspect) < 0.001, "the same garment shot closer or farther must measure the same aspect ratio");
+
+    var cutout = closeProcessed.Images.First(image => image.Variant == StoredImageVariant.ProcessedCutout);
+    using var cutoutImage = Image.Load<Rgba32>(cutout.Bytes);
+    AssertEqual(100, cutoutImage.Width, "the stored cutout should be trimmed to its alpha bounding box");
+    AssertEqual(300, cutoutImage.Height, "the stored cutout should be trimmed to its alpha bounding box");
+}
+
+static void TestMeasureGarmentCutoutIsScaleInvariant()
+{
+    // MeasureGarmentCutout is what the startup backfill runs on stored cutouts/originals.
+    var processor = new ImageProcessor(new RecordingBackgroundRemovalProvider(MinimalPngBytes()));
+
+    var tight = processor.MeasureGarmentCutout(TransparentPaddedRectanglePng(120, 320, 100, 300));
+    var padded = processor.MeasureGarmentCutout(TransparentPaddedRectanglePng(640, 640, 200, 600));
+    AssertTrue(tight is not null && padded is not null, "padded cutouts should measure");
+    AssertEqual(100, tight!.WidthPx, "measurement should ignore transparent padding");
+    AssertEqual(300, tight.HeightPx, "measurement should ignore transparent padding");
+    AssertEqual(200, padded!.WidthPx, "a larger shot of the same shape should scale the raw pixels");
+    AssertEqual(600, padded.HeightPx, "a larger shot of the same shape should scale the raw pixels");
+    AssertTrue(
+        Math.Abs(tight.HeightPx / (double)tight.WidthPx - padded.HeightPx / (double)padded.WidthPx) < 0.001,
+        "aspect ratio must be invariant to shooting distance and padding");
+
+    // Legacy fallback: an image without transparency (e.g. a stored original) measures as its
+    // full frame instead of failing.
+    using var opaqueImage = new Image<Rgba32>(240, 180);
+    using var jpegStream = new MemoryStream();
+    opaqueImage.Save(jpegStream, new SixLabors.ImageSharp.Formats.Jpeg.JpegEncoder());
+    var opaque = processor.MeasureGarmentCutout(jpegStream.ToArray());
+    AssertEqual(240, opaque!.WidthPx, "an image without alpha should measure as its full frame");
+    AssertEqual(180, opaque.HeightPx, "an image without alpha should measure as its full frame");
+
+    AssertTrue(processor.MeasureGarmentCutout(Array.Empty<byte>()) is null, "empty input should not measure");
+    AssertTrue(
+        processor.MeasureGarmentCutout(TransparentPaddedRectanglePng(50, 50, 0, 0)) is null,
+        "a fully transparent image should not measure");
+}
+
 static void TestGarmentDeskewStraightensTiltedSilhouette()
 {
     var processor = new ImageProcessor(new RecordingBackgroundRemovalProvider(MinimalPngBytes()));
@@ -2282,6 +2390,19 @@ static void TestPostgresSchemaContainsStructuredMetadataAndIndexes()
     AssertTrue(schema.Contains("ix_scheduled_outfits_user_date", StringComparison.OrdinalIgnoreCase), "schema should index schedule date lookup.");
     AssertTrue(schema.Contains("ix_outfits_user_created_at", StringComparison.OrdinalIgnoreCase), "schema should index outfit recent sorting.");
     AssertTrue(schema.Contains("using gin (tags)", StringComparison.OrdinalIgnoreCase), "schema should add a GIN index for garment tags.");
+}
+
+static void TestPostgresSchemaContainsCutoutMeasurementColumns()
+{
+    var basePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var schema = File.ReadAllText(Path.Combine(basePath, "database", "schema.sql"));
+    var migration = File.ReadAllText(Path.Combine(basePath, "database", "migrations", "008_garment_cutout_measurement.sql"));
+
+    foreach (var column in new[] { "cutout_width_px", "cutout_height_px" })
+    {
+        AssertTrue(schema.Contains(column, StringComparison.OrdinalIgnoreCase), $"schema.sql should include garment column {column}.");
+        AssertTrue(migration.Contains(column, StringComparison.OrdinalIgnoreCase), $"migration 008 should add {column} so schema.sql and migrations stay in sync.");
+    }
 }
 
 static void TestPostgresSchemaContainsCascadeAndCleanupIndexes()
@@ -2848,6 +2969,30 @@ static byte[] MinimalPngBytes()
     return Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAANSURBVBhXY/j///9/AAn7A/0FQ0XKAAAAAElFTkSuQmCC");
 }
 
+// An opaque rectangle centered on a transparent canvas — a garment silhouette whose alpha
+// bounding box is exactly rectWidth x rectHeight regardless of the canvas (padding) size.
+static byte[] TransparentPaddedRectanglePng(int width, int height, int rectWidth, int rectHeight)
+{
+    using var image = new Image<Rgba32>(width, height);
+    var startX = (width - rectWidth) / 2;
+    var startY = (height - rectHeight) / 2;
+    image.ProcessPixelRows(accessor =>
+    {
+        for (var y = startY; y < startY + rectHeight; y++)
+        {
+            var row = accessor.GetRowSpan(y);
+            for (var x = startX; x < startX + rectWidth; x++)
+            {
+                row[x] = new Rgba32(30, 30, 35, 255);
+            }
+        }
+    });
+
+    using var output = new MemoryStream();
+    image.Save(output, new SixLabors.ImageSharp.Formats.Png.PngEncoder());
+    return output.ToArray();
+}
+
 static byte[] TiltedRectanglePng(int width, int height, int rectWidth, int rectHeight, double tiltDegrees)
 {
     using var image = new Image<Rgba32>(width, height);
@@ -3265,6 +3410,8 @@ sealed class RecordingGarmentImageRotator : IGarmentImageRotator
 {
     public double AutoStraightenAngle { get; init; } = 12d;
 
+    public GarmentCutoutMeasurement? RotationMeasurement { get; init; }
+
     public int ComputeCalls { get; private set; }
 
     public int RotateCalls { get; private set; }
@@ -3281,7 +3428,7 @@ sealed class RecordingGarmentImageRotator : IGarmentImageRotator
     {
         RotateCalls++;
         LastRotateDegrees = degrees;
-        return new GarmentRotationOutcome($"{garmentImageUrl}#cutout{degrees:0.##}", $"{garmentImageUrl}#thumb{degrees:0.##}", "rotated-hash");
+        return new GarmentRotationOutcome($"{garmentImageUrl}#cutout{degrees:0.##}", $"{garmentImageUrl}#thumb{degrees:0.##}", "rotated-hash", RotationMeasurement);
     }
 }
 
@@ -3340,6 +3487,12 @@ sealed class CountingPhotoStorage : IPhotoStorage
     public int Calls { get; private set; }
 
     public StoredPhoto SaveGarmentPhoto(IncomingPhoto photo)
+    {
+        Calls++;
+        return new StoredPhoto("test.jpg", photo.ContentType, photo.Length, "/uploads/garments/test.jpg");
+    }
+
+    public StoredPhoto SaveGarmentOriginal(IncomingPhoto photo)
     {
         Calls++;
         return new StoredPhoto("test.jpg", photo.ContentType, photo.Length, "/uploads/garments/test.jpg");

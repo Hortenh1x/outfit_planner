@@ -14,7 +14,11 @@ type Override<T, R> = Omit<T, keyof R> & R;
 export type BodyReferencePhoto = ArrayItem<JsonResponse<paths['/api/body-reference-photos']['get'], 200>>;
 export type GarmentItem = Override<
   JsonResponse<paths['/api/garments/{garmentId}']['get'], 200>,
-  { perceptualHash?: string | null }
+  {
+    perceptualHash?: string | null;
+    cutoutWidthPx?: number | null;
+    cutoutHeightPx?: number | null;
+  }
 >;
 export type Outfit = JsonResponse<paths['/api/outfits/{outfitId}']['get'], 200>;
 export type ScheduledOutfit = ArrayItem<JsonResponse<paths['/api/schedule']['get'], 200>>;

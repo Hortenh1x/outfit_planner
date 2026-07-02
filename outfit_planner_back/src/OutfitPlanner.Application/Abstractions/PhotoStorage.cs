@@ -15,7 +15,13 @@ public sealed record StoredPhoto(string FileName, string ContentType, long Lengt
     public string? PerceptualHash { get; init; }
     public string? BaseCutoutUrl { get; init; }
     public string? BaseCutoutObjectKey { get; init; }
+    public GarmentCutoutMeasurement? CutoutMeasurement { get; init; }
 }
+
+// Alpha-bounding-box size of a garment cutout in pixels. Absolute pixel counts depend on the
+// shot, but the height/width ratio is invariant to shooting distance, which is what relative
+// garment sizing renders from.
+public sealed record GarmentCutoutMeasurement(int WidthPx, int HeightPx);
 
 public sealed record StoredPhotoFile(string FullPath, string ContentType);
 
@@ -41,7 +47,8 @@ public sealed record ProcessedPhotoSet(
     string ContentType,
     long Length,
     string? PerceptualHash,
-    IReadOnlyList<ProcessedImage> Images);
+    IReadOnlyList<ProcessedImage> Images,
+    GarmentCutoutMeasurement? CutoutMeasurement = null);
 
 public sealed record ObjectStoragePutRequest(
     string ObjectKey,
@@ -76,13 +83,19 @@ public interface IImageProcessor
     // Average hash of an image's content, used to detect duplicate garment uploads by the
     // original photo (before background removal). Returns null for empty/invalid input.
     string? ComputePerceptualHash(byte[] imageBytes);
+
+    // Alpha-bounding-box size of the given image (pixels with alpha above the opacity
+    // threshold). Images without transparency measure as their full frame. Returns null for
+    // empty input or a fully transparent image.
+    GarmentCutoutMeasurement? MeasureGarmentCutout(byte[] imageBytes);
 }
 
 public sealed record GarmentRotationRender(
     byte[] CutoutPng,
     byte[] ThumbnailPng,
     byte[] SegmentationMaskPng,
-    string PerceptualHash);
+    string PerceptualHash,
+    GarmentCutoutMeasurement? CutoutMeasurement = null);
 
 public interface IGarmentImageRotator
 {
@@ -94,13 +107,24 @@ public interface IGarmentImageRotator
     GarmentRotationOutcome RotateGarment(string garmentImageUrl, double degrees);
 }
 
-public sealed record GarmentRotationOutcome(string ImageUrl, string ThumbnailUrl, string? PerceptualHash);
+public sealed record GarmentRotationOutcome(
+    string ImageUrl,
+    string ThumbnailUrl,
+    string? PerceptualHash,
+    GarmentCutoutMeasurement? CutoutMeasurement = null);
 
 public interface IGarmentOriginalImageReader
 {
     // Reads the stored ORIGINAL (pre-background-removal) image bytes for a garment given its
     // display image URL, or null when the original is unavailable (e.g. a legacy garment).
     byte[]? ReadGarmentOriginalImageBytes(string garmentImageUrl);
+}
+
+public interface IGarmentCutoutImageReader
+{
+    // Reads the stored processed-cutout bytes for a garment given its display image URL, or
+    // null when no cutout variant exists (e.g. a garment whose background removal never ran).
+    byte[]? ReadGarmentCutoutImageBytes(string garmentImageUrl);
 }
 
 public interface IGarmentBackgroundRemover
@@ -110,7 +134,11 @@ public interface IGarmentBackgroundRemover
     GarmentRemovalOutcome RemoveGarmentBackground(string garmentImageUrl);
 }
 
-public sealed record GarmentRemovalOutcome(string CutoutUrl, string ThumbnailUrl, string? PerceptualHash);
+public sealed record GarmentRemovalOutcome(
+    string CutoutUrl,
+    string ThumbnailUrl,
+    string? PerceptualHash,
+    GarmentCutoutMeasurement? CutoutMeasurement = null);
 
 public interface IObjectStorage
 {

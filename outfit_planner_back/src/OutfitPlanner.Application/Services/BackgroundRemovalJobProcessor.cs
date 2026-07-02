@@ -68,6 +68,7 @@ public sealed class BackgroundRemovalJobProcessor : IBackgroundRemovalJobProcess
             var imageUrl = removal.CutoutUrl;
             var thumbnailUrl = removal.ThumbnailUrl;
             var rotationDegrees = 0d;
+            var cutoutMeasurement = removal.CutoutMeasurement;
 
             // Auto-straighten clothing categories now that the base cutout exists (needs the category,
             // which only the garment knows).
@@ -80,6 +81,7 @@ public sealed class BackgroundRemovalJobProcessor : IBackgroundRemovalJobProcess
                     imageUrl = rotated.ImageUrl;
                     thumbnailUrl = rotated.ThumbnailUrl;
                     rotationDegrees = angle;
+                    cutoutMeasurement = rotated.CutoutMeasurement ?? cutoutMeasurement;
                 }
             }
 
@@ -92,7 +94,9 @@ public sealed class BackgroundRemovalJobProcessor : IBackgroundRemovalJobProcess
                     RotationDegrees = rotationDegrees,
                     PerceptualHash = removal.PerceptualHash ?? garment.PerceptualHash,
                     BackgroundRemovalStatus = BackgroundRemovalStatus.Succeeded,
-                    BackgroundRemovalError = null
+                    BackgroundRemovalError = null,
+                    CutoutWidthPx = cutoutMeasurement?.WidthPx ?? garment.CutoutWidthPx,
+                    CutoutHeightPx = cutoutMeasurement?.HeightPx ?? garment.CutoutHeightPx
                 });
             }
 

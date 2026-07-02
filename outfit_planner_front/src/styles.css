@@ -655,6 +655,16 @@ input[type="file"] {
   min-width: 128px;
 }
 
+/* Garments with a stored cutout measurement get explicit relative-scale dimensions from
+   computeRelativeSize; drop the legacy clamps and size the content box exactly so the shared
+   0.7rem frame padding stays uniform without distorting the relative scale. */
+.clothes-stack img.relative-size {
+  box-sizing: content-box;
+  max-height: none;
+  max-width: none;
+  min-width: 0;
+}
+
 .tilt-left,
 .tilt-right {
   transform: none;

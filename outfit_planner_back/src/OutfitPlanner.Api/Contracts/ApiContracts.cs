@@ -27,7 +27,9 @@ public sealed record CreateGarmentRequest(
     DateTimeOffset? LastWornAt,
     string? LaundryStatus,
     string? PerceptualHash = null,
-    bool? BackgroundRemovalPending = null);
+    bool? BackgroundRemovalPending = null,
+    int? CutoutWidthPx = null,
+    int? CutoutHeightPx = null);
 
 public sealed record UpdateGarmentRequest(
     string? Name,
@@ -122,7 +124,10 @@ public sealed record UploadedPhotoResponse(
     string? ThumbnailUrl,
     string? CutoutUrl,
     string? MaskUrl,
-    string? PerceptualHash);
+    string? PerceptualHash,
+    // Alpha-bounding-box size of the processed cutout; null on the original-only fast path.
+    int? CutoutWidthPx = null,
+    int? CutoutHeightPx = null);
 
 public sealed record RegisterRequest(string Email, string Password, string RepeatPassword);
 

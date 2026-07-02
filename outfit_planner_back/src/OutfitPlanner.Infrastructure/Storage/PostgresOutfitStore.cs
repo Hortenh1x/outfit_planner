@@ -119,13 +119,15 @@ public sealed class PostgresOutfitStore :
                 primary_color, secondary_colors, material, brand, size, season,
                 weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
                 comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at,
-                rotation_degrees, perceptual_hash, background_removal_status, background_removal_error)
+                rotation_degrees, perceptual_hash, background_removal_status, background_removal_error,
+                cutout_width_px, cutout_height_px)
             values (
                 @id, @user_id, @name, @category, @body_zone, @image_url, @thumbnail_url, @tags,
                 @primary_color, @secondary_colors, @material, @brand, @size, @season,
                 @weather_min_temp, @weather_max_temp, @occasion, @formality_score, @warmth_score,
                 @comfort_score, @is_favorite, @is_archived, @last_worn_at, @laundry_status, @created_at,
-                @rotation_degrees, @perceptual_hash, @background_removal_status, @background_removal_error)
+                @rotation_degrees, @perceptual_hash, @background_removal_status, @background_removal_error,
+                @cutout_width_px, @cutout_height_px)
             """, connection, transaction);
         AddGarmentParameters(command, garment);
         command.ExecuteNonQuery();
@@ -139,7 +141,8 @@ public sealed class PostgresOutfitStore :
                 primary_color, secondary_colors, material, brand, size, season,
                 weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
                 comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at,
-                rotation_degrees, perceptual_hash, background_removal_status, background_removal_error
+                rotation_degrees, perceptual_hash, background_removal_status, background_removal_error,
+                cutout_width_px, cutout_height_px
             from garment_items
             where user_id = @user_id and id = @id
             """);
@@ -167,7 +170,8 @@ public sealed class PostgresOutfitStore :
                 primary_color, secondary_colors, material, brand, size, season,
                 weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
                 comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at,
-                rotation_degrees, perceptual_hash, background_removal_status, background_removal_error
+                rotation_degrees, perceptual_hash, background_removal_status, background_removal_error,
+                cutout_width_px, cutout_height_px
             from garment_items
             where {string.Join(" and ", where)}
             {GarmentOrderBy(query.Sort)}
@@ -192,9 +196,37 @@ public sealed class PostgresOutfitStore :
                 primary_color, secondary_colors, material, brand, size, season,
                 weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
                 comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at,
-                rotation_degrees, perceptual_hash, background_removal_status, background_removal_error
+                rotation_degrees, perceptual_hash, background_removal_status, background_removal_error,
+                cutout_width_px, cutout_height_px
             from garment_items
             where perceptual_hash is null or perceptual_hash = ''
+            order by created_at
+            limit @limit
+            """);
+        command.Parameters.AddWithValue("limit", limit);
+
+        using var reader = command.ExecuteReader();
+        var garments = new List<GarmentItem>();
+        while (reader.Read())
+        {
+            garments.Add(ReadGarment(reader));
+        }
+
+        return garments;
+    }
+
+    public IReadOnlyList<GarmentItem> ListGarmentsMissingCutoutMeasurement(int limit)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select id, user_id, name, category, body_zone, image_url, thumbnail_url, tags,
+                primary_color, secondary_colors, material, brand, size, season,
+                weather_min_temp, weather_max_temp, occasion, formality_score, warmth_score,
+                comfort_score, is_favorite, is_archived, last_worn_at, laundry_status, created_at,
+                rotation_degrees, perceptual_hash, background_removal_status, background_removal_error,
+                cutout_width_px, cutout_height_px
+            from garment_items
+            where (cutout_width_px is null or cutout_height_px is null)
+                and background_removal_status = 'Succeeded'
             order by created_at
             limit @limit
             """);
@@ -250,10 +282,38 @@ public sealed class PostgresOutfitStore :
                 rotation_degrees = @rotation_degrees,
                 perceptual_hash = @perceptual_hash,
                 background_removal_status = @background_removal_status,
-                background_removal_error = @background_removal_error
+                background_removal_error = @background_removal_error,
+                cutout_width_px = @cutout_width_px,
+                cutout_height_px = @cutout_height_px
             where id = @id and user_id = @user_id
             """);
         AddGarmentParameters(command, garment);
+        command.ExecuteNonQuery();
+    }
+
+    public void UpdateGarmentPerceptualHash(Guid garmentId, string perceptualHash)
+    {
+        using var command = _dataSource.CreateCommand("""
+            update garment_items
+            set perceptual_hash = @perceptual_hash
+            where id = @id
+            """);
+        command.Parameters.AddWithValue("id", garmentId);
+        command.Parameters.AddWithValue("perceptual_hash", perceptualHash);
+        command.ExecuteNonQuery();
+    }
+
+    public void UpdateGarmentCutoutMeasurement(Guid garmentId, int cutoutWidthPx, int cutoutHeightPx)
+    {
+        using var command = _dataSource.CreateCommand("""
+            update garment_items
+            set cutout_width_px = @cutout_width_px,
+                cutout_height_px = @cutout_height_px
+            where id = @id
+            """);
+        command.Parameters.AddWithValue("id", garmentId);
+        command.Parameters.AddWithValue("cutout_width_px", cutoutWidthPx);
+        command.Parameters.AddWithValue("cutout_height_px", cutoutHeightPx);
         command.ExecuteNonQuery();
     }
 
@@ -1240,6 +1300,8 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("perceptual_hash", DbValue(garment.PerceptualHash));
         command.Parameters.AddWithValue("background_removal_status", garment.BackgroundRemovalStatus.ToString());
         command.Parameters.AddWithValue("background_removal_error", DbValue(garment.BackgroundRemovalError));
+        command.Parameters.AddWithValue("cutout_width_px", DbValue(garment.CutoutWidthPx));
+        command.Parameters.AddWithValue("cutout_height_px", DbValue(garment.CutoutHeightPx));
         command.Parameters.AddWithValue("created_at", garment.CreatedAt);
     }
 
@@ -1315,7 +1377,9 @@ public sealed class PostgresOutfitStore :
             reader.GetDouble(25),
             reader.IsDBNull(26) ? null : reader.GetString(26),
             Enum.Parse<BackgroundRemovalStatus>(reader.GetString(27)),
-            reader.IsDBNull(28) ? null : reader.GetString(28));
+            reader.IsDBNull(28) ? null : reader.GetString(28),
+            reader.IsDBNull(29) ? null : reader.GetInt32(29),
+            reader.IsDBNull(30) ? null : reader.GetInt32(30));
     }
 
     private static Outfit ReadOutfitShell(NpgsqlDataReader reader)

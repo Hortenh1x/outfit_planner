@@ -10,6 +10,7 @@ import { OutfitList } from '../features/builder/OutfitList';
 import { SlotPicker } from '../features/builder/SlotPicker';
 import { useAuthSession } from '../features/auth/authQueries';
 import { CATEGORY_SELECTION_KEYS, GARMENT_CATEGORIES, groupGarmentsByCategory, selectedGarmentIds, selectionLabel } from '../features/outfits/outfitUtils';
+import { computeRelativeSize } from '../features/outfits/relativeSize';
 import { creditsLabel, modeLabel } from '../features/tryon/tryOnText';
 import { garmentPhotoUrlsFromUpload } from '../features/uploads/uploadedPhotoUrls';
 import { validateUploadImageFile } from '../features/uploads/imageFile';
@@ -103,7 +104,9 @@ export function BuilderPage() {
         category: input.category,
         imageUrl: photoUrls.imageUrl,
         thumbnailUrl: photoUrls.thumbnailUrl,
-        tags: []
+        tags: [],
+        cutoutWidthPx: uploadedPhoto.cutoutWidthPx ?? null,
+        cutoutHeightPx: uploadedPhoto.cutoutHeightPx ?? null
       });
     },
     onSuccess: (garment) => {
@@ -286,14 +289,20 @@ export function BuilderPage() {
           {mode === 'clothes' ? (
             <div className="clothes-stack">
               {selectedGarments.length === 0 ? <EmptyPreview /> : null}
-              {selectedGarments.map((garment, index) => (
-                <img
-                  key={garment.id}
-                  src={garment.thumbnailUrl}
-                  alt={garment.name}
-                  className={index === 0 ? 'tilt-left' : 'tilt-right'}
-                />
-              ))}
+              {selectedGarments.map((garment, index) => {
+                // Measured garments render at their category's canonical relative scale;
+                // unmeasured ones keep the legacy clamp-based sizing.
+                const relativeSize = computeRelativeSize(garment);
+                return (
+                  <img
+                    key={garment.id}
+                    src={garment.thumbnailUrl}
+                    alt={garment.name}
+                    className={`${index === 0 ? 'tilt-left' : 'tilt-right'}${relativeSize ? ' relative-size' : ''}`}
+                    style={relativeSize ? { width: relativeSize.width, height: relativeSize.height } : undefined}
+                  />
+                );
+              })}
             </div>
           ) : (
             <div className="person-preview">

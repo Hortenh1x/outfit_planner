@@ -2,25 +2,29 @@ using OutfitPlanner.Application.Abstractions;
 
 namespace OutfitPlanner.Api;
 
-// One-time, best-effort backfill: computes the pre-background-removal perceptual hash for garments
-// created before hashing was wired up, so duplicate-upload detection also covers older items.
-// Garments whose original image can no longer be read are left un-hashed and simply skipped.
-public sealed class GarmentPerceptualHashBackfillWorker : BackgroundService
+// One-time, best-effort backfill: measures the alpha bounding box of the stored cutout for
+// garments created before cutout measurement was wired up, so relative sizing also covers older
+// items. Prefers the processed cutout; falls back to the original (which measures as its full
+// frame when it has no transparency). Garments with no readable image are simply skipped.
+public sealed class GarmentCutoutMeasurementBackfillWorker : BackgroundService
 {
     private const int BatchSize = 200;
 
     private readonly IGarmentRepository _garments;
+    private readonly IGarmentCutoutImageReader _cutoutImages;
     private readonly IGarmentOriginalImageReader _originalImages;
     private readonly IImageProcessor _images;
-    private readonly ILogger<GarmentPerceptualHashBackfillWorker> _logger;
+    private readonly ILogger<GarmentCutoutMeasurementBackfillWorker> _logger;
 
-    public GarmentPerceptualHashBackfillWorker(
+    public GarmentCutoutMeasurementBackfillWorker(
         IGarmentRepository garments,
+        IGarmentCutoutImageReader cutoutImages,
         IGarmentOriginalImageReader originalImages,
         IImageProcessor images,
-        ILogger<GarmentPerceptualHashBackfillWorker> logger)
+        ILogger<GarmentCutoutMeasurementBackfillWorker> logger)
     {
         _garments = garments;
+        _cutoutImages = cutoutImages;
         _originalImages = originalImages;
         _images = images;
         _logger = logger;
@@ -38,7 +42,7 @@ public sealed class GarmentPerceptualHashBackfillWorker : BackgroundService
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                var missing = _garments.ListGarmentsMissingPerceptualHash(BatchSize);
+                var missing = _garments.ListGarmentsMissingCutoutMeasurement(BatchSize);
                 if (missing.Count == 0)
                 {
                     break;
@@ -54,30 +58,30 @@ public sealed class GarmentPerceptualHashBackfillWorker : BackgroundService
 
                     try
                     {
-                        var bytes = _originalImages.ReadGarmentOriginalImageBytes(garment.ImageUrl);
-                        var hash = bytes is null ? null : _images.ComputePerceptualHash(bytes);
-                        if (string.IsNullOrEmpty(hash))
+                        var bytes = _cutoutImages.ReadGarmentCutoutImageBytes(garment.ImageUrl)
+                            ?? _originalImages.ReadGarmentOriginalImageBytes(garment.ImageUrl);
+                        var measurement = bytes is null ? null : _images.MeasureGarmentCutout(bytes);
+                        if (measurement is null)
                         {
                             skipped++;
                             continue;
                         }
 
-                        // Column-scoped update: the cutout-measurement backfill may be touching
-                        // the same row concurrently, and a whole-record rewrite from this stale
-                        // copy would erase its result.
-                        _garments.UpdateGarmentPerceptualHash(garment.Id, hash);
+                        // Column-scoped update: the perceptual-hash backfill may be touching the
+                        // same row concurrently, and a whole-record rewrite would race with it.
+                        _garments.UpdateGarmentCutoutMeasurement(garment.Id, measurement.WidthPx, measurement.HeightPx);
                         updated++;
                         progressed = true;
                     }
                     catch (Exception ex)
                     {
                         skipped++;
-                        _logger.LogWarning(ex, "Could not backfill perceptual hash for garment {GarmentId}.", garment.Id);
+                        _logger.LogWarning(ex, "Could not backfill cutout measurement for garment {GarmentId}.", garment.Id);
                     }
                 }
 
-                // A whole batch with no successful update means the rest are un-hashable
-                // (missing originals); stop rather than re-selecting the same rows forever.
+                // A whole batch with no successful update means the rest are unmeasurable
+                // (missing images); stop rather than re-selecting the same rows forever.
                 if (!progressed)
                 {
                     break;
@@ -87,7 +91,7 @@ public sealed class GarmentPerceptualHashBackfillWorker : BackgroundService
             if (updated > 0 || skipped > 0)
             {
                 _logger.LogInformation(
-                    "Garment perceptual-hash backfill complete: {Updated} updated, {Skipped} skipped.",
+                    "Garment cutout-measurement backfill complete: {Updated} updated, {Skipped} skipped.",
                     updated,
                     skipped);
             }
@@ -97,7 +101,7 @@ public sealed class GarmentPerceptualHashBackfillWorker : BackgroundService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Garment perceptual-hash backfill failed.");
+            _logger.LogError(ex, "Garment cutout-measurement backfill failed.");
         }
     }
 }
