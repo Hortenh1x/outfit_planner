@@ -129,6 +129,13 @@ public sealed record UploadedPhotoResponse(
     int? CutoutWidthPx = null,
     int? CutoutHeightPx = null);
 
+public sealed record HairstylePresetResponse(
+    string Id,
+    string Name,
+    UserGender Gender,
+    int SortOrder,
+    string AssetUrl);
+
 public sealed record RegisterRequest(string Email, string Password, string RepeatPassword);
 
 public sealed record LoginRequest(string Email, string Password);

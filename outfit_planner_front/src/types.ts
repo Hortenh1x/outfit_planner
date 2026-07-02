@@ -6,6 +6,7 @@ export type {
   CreatedOutfit,
   GarmentCategory,
   GarmentItem,
+  HairstylePreset,
   LaundryStatus,
   Outfit,
   OutfitItem,
@@ -29,5 +30,4 @@ export interface OutfitSelection {
   shoesId?: string;
   bagId?: string;
   accessoryId?: string;
-  hatId?: string;
 }

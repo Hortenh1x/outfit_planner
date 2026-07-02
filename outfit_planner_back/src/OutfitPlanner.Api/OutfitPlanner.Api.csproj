@@ -11,6 +11,7 @@
   <ItemGroup>
     <Content Include="..\..\database\schema.sql" Link="database\schema.sql" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\..\database\migrations\*.sql" LinkBase="database\migrations" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\hairstyles\**" LinkBase="assets\hairstyles" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="dbup-postgresql" Version="7.0.1" />

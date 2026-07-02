@@ -89,7 +89,7 @@ public sealed class TryOnCostEstimator
 
         if (visualItems.Count > 0 && input.Mode != TryOnMode.ExperimentalCompositeTryOn)
         {
-            warnings.Add("Shoes, bags, accessories, and hats are visual-only and will not be sent to AI in this mode.");
+            warnings.Add("Shoes, bags, and accessories are visual-only and will not be sent to AI in this mode.");
         }
 
         var credits = input.Mode switch

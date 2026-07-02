@@ -1,6 +1,6 @@
 import type { GarmentCategory, GarmentItem, OutfitSelection } from '../../types';
 
-export const GARMENT_CATEGORIES: GarmentCategory[] = ['Top', 'Bottom', 'Dress', 'Outerwear', 'Shoes', 'Bag', 'Accessory', 'Hat'];
+export const GARMENT_CATEGORIES: GarmentCategory[] = ['Top', 'Bottom', 'Dress', 'Outerwear', 'Shoes', 'Bag', 'Accessory'];
 
 export const CATEGORY_SELECTION_KEYS: Record<GarmentCategory, keyof OutfitSelection> = {
   Top: 'topId',
@@ -9,8 +9,7 @@ export const CATEGORY_SELECTION_KEYS: Record<GarmentCategory, keyof OutfitSelect
   Outerwear: 'outerwearId',
   Shoes: 'shoesId',
   Bag: 'bagId',
-  Accessory: 'accessoryId',
-  Hat: 'hatId'
+  Accessory: 'accessoryId'
 };
 
 export function groupGarmentsByCategory(garments: GarmentItem[]): Record<GarmentCategory, GarmentItem[]> {

@@ -1,0 +1,155 @@
+{
+  "source": {
+    "name": "Open Peeps",
+    "designer": "Pablo Stanley",
+    "url": "https://www.openpeeps.com/",
+    "vendoredFrom": "@dicebear/open-peeps@9.4.2 (npm), lib/components/head.js",
+    "modifications": "Skin-colored paths removed so only the hair remains; wrapped as standalone SVGs with computed viewBoxes."
+  },
+  "license": {
+    "name": "CC0 1.0",
+    "url": "https://creativecommons.org/publicdomain/zero/1.0/"
+  },
+  "presets": [
+    {
+      "id": "male-short-1",
+      "gender": "Male",
+      "name": "Short cut I",
+      "file": "male-short-1.svg",
+      "sortOrder": 1
+    },
+    {
+      "id": "male-short-2",
+      "gender": "Male",
+      "name": "Short cut II",
+      "file": "male-short-2.svg",
+      "sortOrder": 2
+    },
+    {
+      "id": "male-short-3",
+      "gender": "Male",
+      "name": "Short cut III",
+      "file": "male-short-3.svg",
+      "sortOrder": 3
+    },
+    {
+      "id": "male-short-4",
+      "gender": "Male",
+      "name": "Short cut IV",
+      "file": "male-short-4.svg",
+      "sortOrder": 4
+    },
+    {
+      "id": "male-flat-top",
+      "gender": "Male",
+      "name": "Flat top",
+      "file": "male-flat-top.svg",
+      "sortOrder": 5
+    },
+    {
+      "id": "male-flat-top-long",
+      "gender": "Male",
+      "name": "Flat top long",
+      "file": "male-flat-top-long.svg",
+      "sortOrder": 6
+    },
+    {
+      "id": "male-pompadour",
+      "gender": "Male",
+      "name": "Pompadour",
+      "file": "male-pompadour.svg",
+      "sortOrder": 7
+    },
+    {
+      "id": "male-shaved-1",
+      "gender": "Male",
+      "name": "Shaved I",
+      "file": "male-shaved-1.svg",
+      "sortOrder": 8
+    },
+    {
+      "id": "male-shaved-2",
+      "gender": "Male",
+      "name": "Shaved II",
+      "file": "male-shaved-2.svg",
+      "sortOrder": 9
+    },
+    {
+      "id": "male-shaved-3",
+      "gender": "Male",
+      "name": "Shaved III",
+      "file": "male-shaved-3.svg",
+      "sortOrder": 10
+    },
+    {
+      "id": "female-long",
+      "gender": "Female",
+      "name": "Long",
+      "file": "female-long.svg",
+      "sortOrder": 1
+    },
+    {
+      "id": "female-long-bangs",
+      "gender": "Female",
+      "name": "Long with bangs",
+      "file": "female-long-bangs.svg",
+      "sortOrder": 2
+    },
+    {
+      "id": "female-long-curly",
+      "gender": "Female",
+      "name": "Long curly",
+      "file": "female-long-curly.svg",
+      "sortOrder": 3
+    },
+    {
+      "id": "female-medium-straight",
+      "gender": "Female",
+      "name": "Medium straight",
+      "file": "female-medium-straight.svg",
+      "sortOrder": 4
+    },
+    {
+      "id": "female-medium-1",
+      "gender": "Female",
+      "name": "Medium I",
+      "file": "female-medium-1.svg",
+      "sortOrder": 5
+    },
+    {
+      "id": "female-medium-2",
+      "gender": "Female",
+      "name": "Medium II",
+      "file": "female-medium-2.svg",
+      "sortOrder": 6
+    },
+    {
+      "id": "female-medium-bangs-1",
+      "gender": "Female",
+      "name": "Medium with bangs I",
+      "file": "female-medium-bangs-1.svg",
+      "sortOrder": 7
+    },
+    {
+      "id": "female-medium-bangs-2",
+      "gender": "Female",
+      "name": "Medium with bangs II",
+      "file": "female-medium-bangs-2.svg",
+      "sortOrder": 8
+    },
+    {
+      "id": "female-bangs",
+      "gender": "Female",
+      "name": "Bangs",
+      "file": "female-bangs.svg",
+      "sortOrder": 9
+    },
+    {
+      "id": "female-space-buns",
+      "gender": "Female",
+      "name": "Space buns",
+      "file": "female-space-buns.svg",
+      "sortOrder": 10
+    }
+  ]
+}

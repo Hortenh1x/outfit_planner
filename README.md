@@ -6,7 +6,8 @@ The app is intentionally small, but it has a real backend/frontend split, signed
 
 ## Features
 
-- Wardrobe catalog for Top, Bottom, Dress, Outerwear, Shoes, Bag, Accessory, and Hat garments with editable structured metadata for colors, material, brand, size, season, weather, occasion, scoring, favorites, archive state, last worn date, and laundry status.
+- Wardrobe catalog for Top, Bottom, Dress, Outerwear, Shoes, Bag, and Accessory garments with editable structured metadata for colors, material, brand, size, season, weather, occasion, scoring, favorites, archive state, last worn date, and laundry status.
+- Global hairstyle presets (openly licensed, gender-filtered, single hair color) served by the API in place of the retired Hat garment category; presets are app-owned catalog data, not uploads, and are never sent to AI try-on.
 - Garment photo uploads from the browser.
 - Wardrobe uses an editorial Obra/Crimson-inspired interface for catalog search, filters, edit, archive, bulk upload, drag-and-drop upload, mobile camera capture, clean photo guidance, local tag suggestions, and photo quality warnings. Garment cards show the photo only; Edit and Delete are revealed on hover, keyboard focus, or touch press-and-hold.
 - Private body reference photo uploads for try-on generation.
@@ -87,7 +88,8 @@ Photo uploads are private by default:
 
 - Uploads are validated server-side by image magic bytes, then decoded, auto-oriented, stripped of metadata, resized/compressed, and stored as object variants.
 - Garment uploads store original, thumbnail, processed cutout, optional segmentation mask, and perceptual hash. The upload response exposes variant URLs, and new wardrobe items use the processed cutout as their primary image.
-- Garment cutouts are trimmed to their alpha bounding box and measured (`cutoutWidthPx`/`cutoutHeightPx`, persisted in `garment_items` and exposed on the garment DTO and upload response). The absolute pixels depend on the shot, but height/width is invariant to shooting distance, so the frontend `computeRelativeSize` utility (`src/features/outfits/relativeSize.ts`) renders garments at per-category canonical relative sizes: Top/Bottom/Dress/Outerwear normalize by width (display height expresses garment length), Shoes/Bag/Accessory/Hat fit a fixed box by their larger side. Measurement refreshes on rotation re-render and async background removal; a startup `GarmentCutoutMeasurementBackfillWorker` measures existing garments best-effort (cutout variant first, then original).
+- Garment cutouts are trimmed to their alpha bounding box and measured (`cutoutWidthPx`/`cutoutHeightPx`, persisted in `garment_items` and exposed on the garment DTO and upload response). The absolute pixels depend on the shot, but height/width is invariant to shooting distance, so the frontend `computeRelativeSize` utility (`src/features/outfits/relativeSize.ts`) renders garments at per-category canonical relative sizes: Top/Bottom/Dress/Outerwear normalize by width (display height expresses garment length), Shoes/Bag/Accessory fit a fixed box by their larger side. Measurement refreshes on rotation re-render and async background removal; a startup `GarmentCutoutMeasurementBackfillWorker` measures existing garments best-effort (cutout variant first, then original).
+- Global hairstyle presets replace hat garments: `GET /api/hairstyles` lists presets filtered by the account's gender (empty until gender is set), and `GET /api/hairstyles/assets/{fileName}` serves the SVG assets anonymously. The presets live in `outfit_planner_back/assets/hairstyles` with `manifest.json` as the source of truth (only manifest-listed files are served). Assets are vendored from Open Peeps by Pablo Stanley (CC0 1.0, via the `@dicebear/open-peeps` npm package), curated to ~10 male and ~10 female styles in a single hair color, excluding afro variants and head-wear variants. Migration 009 deletes legacy Hat garments and rebuilds the category constraints.
 - Garment cutouts use `BackgroundRemoval__Provider`; the default `Auto` provider uses local `rembg` when the executable is available and otherwise falls back to the dependency-free `Simple` provider. `Rembg` can be selected explicitly for one CLI process per upload, `RembgServer` targets a long-running local `rembg s` server, and `Http`/provider aliases call an API that returns a transparent image. Garment extraction currently assumes one clothing item per upload through a single-item provider boundary; multi-item detection/separation is intentionally not active yet.
 - Body reference uploads store original, thumbnail, blurred private preview, and perceptual hash. Account avatars store private original and thumbnail variants. Public `/uploads/body-reference-photos/{fileName}` access is disabled; clients receive signed object URLs.
 - Local signed object URLs are refreshed when wardrobe, body-reference, outfit, share, and try-on flows read saved records, so persisted local uploads keep rendering after URL expiry or API restarts.
@@ -147,6 +149,14 @@ Development containers with hot reload:
 
 ```powershell
 docker compose -f docker-compose.dev.yml up --build
+```
+
+Development containers with self-host add-ons (real AI background removal via `rembg`, plus
+FASHN/Google/Apple credentials wired from `.env`) — this is also the command that runs the
+publicly-hosted dev stack behind a Cloudflare Tunnel, see [`DEPLOY-CLOUDFLARE.md`](DEPLOY-CLOUDFLARE.md):
+
+```powershell
+docker compose -f docker-compose.dev.yml -f docker-compose.selfhost.override.yml up -d
 ```
 
 Open:
@@ -401,7 +411,7 @@ $env:Fashn__ApiKey = "YOUR_FASHN_API_KEY"
 dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
 ```
 
-The Builder asks the API for a try-on cost estimate before generation. The API classifies `Top`, `Bottom`, `Dress`, and `Outerwear` as body try-on items; `Shoes`, `Bag`, `Accessory`, and `Hat` are visual-only and are excluded from normal AI modes. AI try-on estimates and starts are blocked until the current account has `gender` set.
+The Builder asks the API for a try-on cost estimate before generation. The API classifies `Top`, `Bottom`, `Dress`, and `Outerwear` as body try-on items; `Shoes`, `Bag`, and `Accessory` are visual-only and are excluded from normal AI modes. Hairstyle presets are not garments and never reach try-on providers. AI try-on estimates and starts are blocked until the current account has `gender` set.
 
 Try-on modes:
 
@@ -525,7 +535,7 @@ curl.exe -k https://localhost:5001/api/health
 - Password registration requires at least 8 characters, at least one letter, and at least one digit.
 - Uploaded files default to local object storage; S3-compatible MinIO can be enabled with object storage configuration.
 - PostgreSQL schema changes are applied through DbUp migrations at startup.
-- Garment categories are Top, Bottom, Dress, Outerwear, Shoes, Bag, Accessory, and Hat.
+- Garment categories are Top, Bottom, Dress, Outerwear, Shoes, Bag, and Accessory. Head wear is covered by global hairstyle presets (`GET /api/hairstyles`), not garments.
 - The mock try-on provider is the default. FASHN, composite FASHN, GeneralImageEdit, Replicate, Fal, and local VTON/CatVTON providers require explicit environment configuration.
 
 ## Troubleshooting

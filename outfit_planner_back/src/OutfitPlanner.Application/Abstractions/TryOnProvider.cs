@@ -56,7 +56,7 @@ public interface ITryOnProvider
             .Where(item => item.Category is GarmentCategory.Top or GarmentCategory.Bottom or GarmentCategory.Dress or GarmentCategory.Outerwear)
             .ToArray();
         var visualItems = outfit.Items
-            .Where(item => item.Category is GarmentCategory.Shoes or GarmentCategory.Bag or GarmentCategory.Accessory or GarmentCategory.Hat)
+            .Where(item => item.Category is GarmentCategory.Shoes or GarmentCategory.Bag or GarmentCategory.Accessory)
             .ToArray();
         return Generate(new TryOnProviderRequest(
             userId,

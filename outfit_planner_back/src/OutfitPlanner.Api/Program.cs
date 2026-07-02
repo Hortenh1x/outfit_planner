@@ -307,6 +307,10 @@ builder.Services.AddSingleton<IGarmentCutoutImageReader>(provider => provider.Ge
 builder.Services.AddSingleton<IGarmentBackgroundRemover>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IBackgroundRemovalJobRepository, OutfitPlanner.Infrastructure.BackgroundRemoval.InMemoryBackgroundRemovalJobRepository>();
 builder.Services.AddSingleton<IBackgroundRemovalJobProcessor, BackgroundRemovalJobProcessor>();
+// Global hairstyle presets vendored under assets/hairstyles (copied to the output directory at
+// build time, like database/); manifest.json is the catalog's source of truth.
+builder.Services.AddSingleton<IHairstylePresetCatalog>(new ManifestHairstylePresetCatalog(
+    Path.Combine(AppContext.BaseDirectory, "assets", "hairstyles")));
 var postgresConnectionString = builder.Configuration.GetConnectionString("Postgres");
 var storageProvider = string.IsNullOrWhiteSpace(postgresConnectionString) ? "LocalFile" : "Postgres";
 if (storageProvider == "Postgres")
@@ -965,6 +969,28 @@ api.MapPatch("/garments/{garmentId:guid}", (Guid garmentId, UpdateGarmentRequest
 api.MapDelete("/garments/{garmentId:guid}", (Guid garmentId, WardrobeService wardrobe, HttpContext context) =>
     wardrobe.DeleteGarment(CurrentUser(context), garmentId) ? Results.NoContent() : Results.NotFound());
 
+api.MapGet("/hairstyles", (IHairstylePresetCatalog hairstyles, IUserAccountRepository users, HttpContext context) =>
+{
+    // Hairstyle presets are gender-specific; an account without a chosen gender gets an empty
+    // catalog (the UI prompts for gender elsewhere, mirroring the AI try-on gating).
+    var gender = users.GetUserById(CurrentUser(context))?.Gender;
+    var presets = gender is null
+        ? Array.Empty<HairstylePresetResponse>()
+        : hairstyles.ListHairstylePresets(gender.Value)
+            .Select(preset => ToHairstylePresetResponse(preset, context.Request))
+            .ToArray();
+    return Results.Ok(presets);
+})
+    .Produces<IReadOnlyList<HairstylePresetResponse>>(StatusCodes.Status200OK);
+
+// Static, openly licensed preset images; anonymous GET (see RequiresAuthenticatedUser), same
+// serving shape as /uploads/garments/{fileName}. Only manifest-listed file names resolve.
+api.MapGet("/hairstyles/assets/{fileName}", (string fileName, IHairstylePresetCatalog hairstyles) =>
+{
+    var asset = hairstyles.GetHairstyleAssetFile(fileName);
+    return asset is null ? Results.NotFound() : Results.File(asset.FullPath, asset.ContentType);
+});
+
 api.MapGet("/outfits", (
     OutfitService outfits,
     IStoredPhotoUrlRefresher photoUrls,
@@ -1289,6 +1315,17 @@ static BodyReferencePhoto ToBodyReferencePhotoResponse(BodyReferencePhoto photo,
     {
         ImageUrl = PublicUploadUrl(request, photoUrls.RefreshBodyReferencePhotoUrl(photo.ImageUrl)) ?? photo.ImageUrl
     };
+}
+
+static HairstylePresetResponse ToHairstylePresetResponse(HairstylePreset preset, HttpRequest request)
+{
+    var assetPath = $"/api/hairstyles/assets/{Uri.EscapeDataString(preset.AssetFileName)}";
+    return new HairstylePresetResponse(
+        preset.Id,
+        preset.Name,
+        preset.Gender,
+        preset.SortOrder,
+        PublicUploadUrl(request, assetPath) ?? assetPath);
 }
 
 static GarmentItem ToGarmentResponse(GarmentItem garment, IStoredPhotoUrlRefresher photoUrls, HttpRequest request)
@@ -1672,7 +1709,9 @@ static bool RequiresAuthenticatedUser(HttpContext context)
         && !path.StartsWith("/auth/", StringComparison.OrdinalIgnoreCase)
         && !path.StartsWith("/openapi/", StringComparison.OrdinalIgnoreCase)
         && !path.StartsWith("/storage/signed/", StringComparison.OrdinalIgnoreCase)
-        && !(HttpMethods.IsGet(context.Request.Method) && path.StartsWith("/share/", StringComparison.OrdinalIgnoreCase));
+        && !(HttpMethods.IsGet(context.Request.Method) && path.StartsWith("/share/", StringComparison.OrdinalIgnoreCase))
+        // Hairstyle preset assets are app-owned, openly licensed images (not user data).
+        && !(HttpMethods.IsGet(context.Request.Method) && path.StartsWith("/hairstyles/assets/", StringComparison.OrdinalIgnoreCase));
 }
 
 static bool RequiresCsrfToken(HttpRequest request)

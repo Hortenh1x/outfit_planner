@@ -17,6 +17,7 @@ COPY src/OutfitPlanner.Application/ src/OutfitPlanner.Application/
 COPY src/OutfitPlanner.Infrastructure/ src/OutfitPlanner.Infrastructure/
 COPY src/OutfitPlanner.Api/ src/OutfitPlanner.Api/
 COPY database/ database/
+COPY assets/ assets/
 RUN dotnet publish src/OutfitPlanner.Api/OutfitPlanner.Api.csproj -c Release -o /app/publish
 
 FROM runtime AS final

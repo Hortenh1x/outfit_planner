@@ -23,7 +23,6 @@ export const CATEGORY_SIZE_TARGETS: Record<GarmentCategory, CategorySizeTarget> 
   Bottom: { axis: 'width', targetPx: 160 },
   Bag: { axis: 'maxDimension', targetPx: 140 },
   Shoes: { axis: 'maxDimension', targetPx: 120 },
-  Hat: { axis: 'maxDimension', targetPx: 110 },
   Accessory: { axis: 'maxDimension', targetPx: 90 }
 };
 
