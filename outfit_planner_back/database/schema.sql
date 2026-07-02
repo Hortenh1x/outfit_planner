@@ -109,7 +109,7 @@ create table if not exists garment_items (
     id uuid primary key,
     user_id text not null references users(id) on delete cascade,
     name text not null,
-    category text not null check (category in ('Top', 'Bottom', 'Dress', 'Outerwear', 'Shoes', 'Bag', 'Accessory', 'Hat')),
+    category text not null check (category in ('Top', 'Bottom', 'Dress', 'Outerwear', 'Shoes', 'Bag', 'Accessory')),
     body_zone text not null check (body_zone in ('Torso', 'Legs', 'FullBody', 'Feet', 'Head', 'Hands', 'Accessory', 'OuterLayer')),
     image_url text not null,
     thumbnail_url text not null,
@@ -191,7 +191,7 @@ alter table outfits add column if not exists is_archived boolean not null defaul
 create table if not exists outfit_items (
     outfit_id uuid not null references outfits(id) on delete cascade,
     garment_id uuid not null references garment_items(id) on delete cascade,
-    category text not null check (category in ('Top', 'Bottom', 'Dress', 'Outerwear', 'Shoes', 'Bag', 'Accessory', 'Hat')),
+    category text not null check (category in ('Top', 'Bottom', 'Dress', 'Outerwear', 'Shoes', 'Bag', 'Accessory')),
     primary key (outfit_id, garment_id)
 );
 

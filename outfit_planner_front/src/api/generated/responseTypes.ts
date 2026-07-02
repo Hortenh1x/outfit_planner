@@ -12,6 +12,10 @@ type ArrayItem<T> = T extends readonly (infer Item)[] ? Item : never;
 type Override<T, R> = Omit<T, keyof R> & R;
 
 export type BodyReferencePhoto = ArrayItem<JsonResponse<paths['/api/body-reference-photos']['get'], 200>>;
+export type HairstylePreset = Override<
+  ArrayItem<JsonResponse<paths['/api/hairstyles']['get'], 200>>,
+  { sortOrder: number }
+>;
 export type GarmentItem = Override<
   JsonResponse<paths['/api/garments/{garmentId}']['get'], 200>,
   {

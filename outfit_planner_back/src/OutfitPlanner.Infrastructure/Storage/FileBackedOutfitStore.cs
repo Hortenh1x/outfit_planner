@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using OutfitPlanner.Application.Abstractions;
 using OutfitPlanner.Application.Services;
@@ -387,7 +388,7 @@ public sealed class FileBackedOutfitStore :
 
         try
         {
-            var json = File.ReadAllText(snapshotPath);
+            var json = RemoveRetiredHatEntries(File.ReadAllText(snapshotPath));
             return JsonSerializer.Deserialize<InMemoryOutfitStoreSnapshot>(json, JsonOptions)
                 ?? InMemoryOutfitStoreSnapshot.Empty;
         }
@@ -395,5 +396,65 @@ public sealed class FileBackedOutfitStore :
         {
             throw new InvalidOperationException($"Local outfit store snapshot is not valid JSON: {snapshotPath}", ex);
         }
+    }
+
+    // The Hat garment category was retired (hats were replaced by global hairstyle presets), but
+    // older local snapshots may still carry Hat records, and the string enum converter would
+    // fail on the removed value. Drop those garments and outfit items before deserializing —
+    // the same purge the Postgres migration applies.
+    private static string RemoveRetiredHatEntries(string json)
+    {
+        JsonNode? root;
+        try
+        {
+            root = JsonNode.Parse(json);
+        }
+        catch (JsonException)
+        {
+            // Not parseable as a document; let the typed deserialization report the error.
+            return json;
+        }
+
+        if (root is not JsonObject snapshot)
+        {
+            return json;
+        }
+
+        var changed = false;
+        if (snapshot["Garments"] is JsonArray garments)
+        {
+            changed |= RemoveHatCategoryEntries(garments);
+        }
+
+        if (snapshot["Outfits"] is JsonArray outfits)
+        {
+            foreach (var outfit in outfits)
+            {
+                if (outfit?["Items"] is JsonArray items)
+                {
+                    changed |= RemoveHatCategoryEntries(items);
+                }
+            }
+        }
+
+        return changed ? root.ToJsonString(JsonOptions) : json;
+    }
+
+    private static bool RemoveHatCategoryEntries(JsonArray entries)
+    {
+        var removed = false;
+        for (var index = entries.Count - 1; index >= 0; index--)
+        {
+            if (entries[index] is JsonObject entry
+                && entry["Category"] is JsonValue category
+                && category.TryGetValue<string>(out var value)
+                && string.Equals(value, "Hat", StringComparison.Ordinal))
+            {
+                entries.RemoveAt(index);
+                removed = true;
+            }
+        }
+
+        return removed;
     }
 }

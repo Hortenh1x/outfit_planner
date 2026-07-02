@@ -8,6 +8,5 @@ public enum GarmentCategory
     Outerwear,
     Shoes,
     Bag,
-    Accessory,
-    Hat
+    Accessory
 }

@@ -2,6 +2,7 @@ import type {
   BodyReferencePhoto,
   GarmentCategory,
   GarmentItem,
+  HairstylePreset,
   LaundryStatus,
   Outfit,
   ScheduledOutfit,
@@ -198,6 +199,12 @@ function isQueryFunctionContext(value: object): value is QueryFunctionLikeContex
 
 export function listGarments(filters?: GarmentFilters | QueryFunctionLikeContext): Promise<GarmentItem[]> {
   return request<GarmentItem[]>(`/garments${buildQuery(requestFilters(filters))}`);
+}
+
+// Global hairstyle presets, already filtered by the account's gender on the server; empty when
+// the account has no gender set.
+export function listHairstyles(): Promise<HairstylePreset[]> {
+  return request<HairstylePreset[]>('/hairstyles');
 }
 
 export function getGarment(garmentId: string): Promise<GarmentItem> {

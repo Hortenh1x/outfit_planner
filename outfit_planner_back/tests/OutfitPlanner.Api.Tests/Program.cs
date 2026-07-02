@@ -30,6 +30,7 @@ var tests = new List<(string Name, Action Test)>
     ("postgres store implements application repository ports", TestPostgresStoreImplementsRepositoryPorts),
     ("local file store implements application repository ports", TestLocalFileStoreImplementsRepositoryPorts),
     ("local file store persists records across restarts", TestLocalFileStorePersistsRecordsAcrossRestarts),
+    ("local file store drops retired hat records from old snapshots", TestLocalFileStoreDropsRetiredHatRecords),
     ("api uses local file store when postgres is not configured", TestApiUsesLocalFileStoreWithoutPostgres),
     ("api fails closed without a local object storage signing secret", TestApiFailsClosedWithoutObjectStorageSigningSecret),
     ("api hardens abuse and security response surfaces", TestApiHardensAbuseAndSecuritySurfaces),
@@ -48,6 +49,8 @@ var tests = new List<(string Name, Action Test)>
     ("api exposes secure auth endpoints and cookie settings", TestApiExposesSecureAuthEndpoints),
     ("api exposes privacy and auth hardening endpoints", TestApiExposesPrivacyAndAuthHardeningEndpoints),
     ("api exposes edit delete filtering and revoke endpoints", TestApiExposesEditDeleteFilterAndRevokeEndpoints),
+    ("api exposes gender-filtered hairstyle preset endpoints", TestApiExposesHairstylePresetEndpoints),
+    ("hairstyle preset catalog serves the vendored manifest", TestHairstylePresetCatalogServesVendoredManifest),
     ("api exposes openapi document generation", TestApiExposesOpenApiDocumentGeneration),
     ("api documents frontend response bodies for generated types", TestApiDocumentsFrontendResponseBodies),
     ("maps expanded garment categories to richer body zones", TestCategoryMapping),
@@ -119,6 +122,7 @@ var tests = new List<(string Name, Action Test)>
     ("wardrobe service purges all stored photos for a user", TestWardrobeServicePurgesAllUserStoredPhotos),
     ("postgres schema contains structured garment metadata and query indexes", TestPostgresSchemaContainsStructuredMetadataAndIndexes),
     ("postgres schema declares garment cutout measurement columns", TestPostgresSchemaContainsCutoutMeasurementColumns),
+    ("hat category is fully retired from schema and migrations", TestHatCategoryFullyRetired),
     ("postgres schema contains cascade and cleanup indexes", TestPostgresSchemaContainsCascadeAndCleanupIndexes),
     ("postgres schema contains privacy storage auth hardening and try-on retention fields", TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields),
     ("try-on storage persists mode cost and cache metadata", TestTryOnStoragePersistsModeCostAndCacheMetadata),
@@ -168,7 +172,7 @@ static void TestCategoryMapping()
     AssertEqual(BodyZone.Feet, GarmentRules.GetBodyZone(GarmentCategory.Shoes), "Shoes should map to feet");
     AssertEqual(BodyZone.Accessory, GarmentRules.GetBodyZone(GarmentCategory.Bag), "Bag should map to accessory");
     AssertEqual(BodyZone.Accessory, GarmentRules.GetBodyZone(GarmentCategory.Accessory), "Accessory should map to accessory");
-    AssertEqual(BodyZone.Head, GarmentRules.GetBodyZone(GarmentCategory.Hat), "Hat should map to head");
+    AssertTrue(!Enum.IsDefined(typeof(GarmentCategory), "Hat"), "the Hat category is retired; head wear is covered by hairstyle presets");
 }
 
 static void TestDomainLayerHasNoOuterReferences()
@@ -193,6 +197,7 @@ static void TestDockerfileCopiesDatabaseSchema()
     var dockerfile = File.ReadAllText(dockerfilePath);
 
     AssertTrue(dockerfile.Contains("COPY database/ database/", StringComparison.Ordinal), "Dockerfile should copy database/schema.sql before dotnet publish.");
+    AssertTrue(dockerfile.Contains("COPY assets/ assets/", StringComparison.Ordinal), "Dockerfile should copy hairstyle assets before dotnet publish.");
 }
 
 static void TestDockerComposeUsesPostgres18CompatibleVolumePath()
@@ -480,6 +485,59 @@ static void TestLocalFileStorePersistsRecordsAcrossRestarts()
         AssertEqual(outfit.Id, restarted.ListOutfitsByUser(user.Id)[0].Id, "local file store should restore outfits.");
         AssertEqual(outfit.Id, restarted.ListScheduleByUser(user.Id, day, day)[0].OutfitId, "local file store should restore schedule entries.");
         AssertEqual(job.Id, restarted.GetTryOnJobByUser(user.Id, job.Id)?.Id ?? Guid.Empty, "local file store should restore try-on jobs.");
+    }
+    finally
+    {
+        if (Directory.Exists(tempPath))
+        {
+            Directory.Delete(tempPath, recursive: true);
+        }
+    }
+}
+
+static void TestLocalFileStoreDropsRetiredHatRecords()
+{
+    var tempPath = Path.Combine(Path.GetTempPath(), "outfit-planner-local-store-tests", Guid.NewGuid().ToString("N"));
+
+    try
+    {
+        var snapshotPath = Path.Combine(tempPath, "outfit-store.json");
+        var store = new FileBackedOutfitStore(snapshotPath);
+        var top = store.CreateGarment(CreateGarment("user-a", "linen shirt", GarmentCategory.Top));
+        var legacyHat = store.CreateGarment(CreateGarment("user-a", "legacy hat", GarmentCategory.Accessory));
+        store.AddOutfit(new Outfit(
+            Guid.NewGuid(),
+            "user-a",
+            "city walk",
+            new[]
+            {
+                new OutfitItem(top.Id, top.Name, top.Category, top.BodyZone, top.ThumbnailUrl),
+                new OutfitItem(legacyHat.Id, legacyHat.Name, legacyHat.Category, legacyHat.BodyZone, legacyHat.ThumbnailUrl)
+            },
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            false,
+            false,
+            null,
+            null,
+            DateTimeOffset.UtcNow));
+
+        // Rewrite the persisted snapshot as if it predated the Hat removal: the placeholder
+        // garment (and its outfit item) becomes a legacy Hat record. BodyZone strings are not
+        // touched because only the "Category" property is rewritten.
+        var json = File.ReadAllText(snapshotPath).Replace("\"Category\": \"Accessory\"", "\"Category\": \"Hat\"");
+        AssertTrue(json.Contains("\"Hat\"", StringComparison.Ordinal), "test setup should embed a legacy Hat record.");
+        File.WriteAllText(snapshotPath, json);
+
+        var reloaded = new FileBackedOutfitStore(snapshotPath);
+        var garments = reloaded.ListGarmentsByUser("user-a");
+        AssertEqual(1, garments.Count, "legacy Hat garments should be dropped on snapshot load.");
+        AssertEqual(GarmentCategory.Top, garments[0].Category, "non-hat garments should survive the snapshot load.");
+
+        var outfits = reloaded.ListOutfitsByUser("user-a");
+        AssertEqual(1, outfits.Count, "outfits should survive the snapshot load.");
+        AssertEqual(1, outfits[0].Items.Count, "legacy Hat outfit items should be dropped on snapshot load.");
+        AssertEqual(top.Id, outfits[0].Items[0].GarmentId, "the remaining outfit item should be the non-hat garment.");
     }
     finally
     {
@@ -784,6 +842,45 @@ static void TestApiExposesEditDeleteFilterAndRevokeEndpoints()
     AssertTrue(program.Contains("MapDelete(\"/share/{token}\"", StringComparison.Ordinal), "api should expose share revocation.");
     AssertTrue(program.Contains("GarmentQuery", StringComparison.Ordinal), "garment list route should bind filter and pagination criteria.");
     AssertTrue(program.Contains("OutfitQuery", StringComparison.Ordinal), "outfit list route should bind filter and pagination criteria.");
+}
+
+static void TestApiExposesHairstylePresetEndpoints()
+{
+    var programPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "src", "OutfitPlanner.Api", "Program.cs"));
+    var program = File.ReadAllText(programPath);
+
+    AssertTrue(program.Contains("MapGet(\"/hairstyles\"", StringComparison.Ordinal), "api should expose the hairstyle preset listing.");
+    AssertTrue(program.Contains("MapGet(\"/hairstyles/assets/{fileName}\"", StringComparison.Ordinal), "api should serve hairstyle preset asset files.");
+    AssertTrue(program.Contains("users.GetUserById(CurrentUser(context))?.Gender", StringComparison.Ordinal), "hairstyle listing should filter by the account gender.");
+    AssertTrue(program.Contains("/hairstyles/assets/\", StringComparison.OrdinalIgnoreCase", StringComparison.Ordinal), "hairstyle asset GETs should be anonymous in the auth path rules.");
+}
+
+static void TestHairstylePresetCatalogServesVendoredManifest()
+{
+    var assetsPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "assets", "hairstyles"));
+    var catalog = new ManifestHairstylePresetCatalog(assetsPath);
+
+    var male = catalog.ListHairstylePresets(UserGender.Male);
+    var female = catalog.ListHairstylePresets(UserGender.Female);
+    AssertTrue(male.Count >= 8, $"the standard male set should have about ten presets (got {male.Count}).");
+    AssertTrue(female.Count >= 8, $"the standard female set should have about ten presets (got {female.Count}).");
+    AssertTrue(male.All(preset => preset.Gender == UserGender.Male), "the male listing must only contain male presets.");
+    AssertTrue(female.All(preset => preset.Gender == UserGender.Female), "the female listing must only contain female presets.");
+    AssertTrue(male.SequenceEqual(male.OrderBy(preset => preset.SortOrder).ToList()), "presets should come out ordered for display.");
+
+    foreach (var preset in male.Concat(female))
+    {
+        AssertTrue(
+            !preset.Id.Contains("afro", StringComparison.OrdinalIgnoreCase) && !preset.Name.Contains("afro", StringComparison.OrdinalIgnoreCase),
+            $"preset {preset.Id} must not be an afro variant.");
+        var asset = catalog.GetHairstyleAssetFile(preset.AssetFileName);
+        AssertTrue(asset is not null, $"preset {preset.Id} must resolve its asset file.");
+        AssertEqual("image/svg+xml", asset!.ContentType, $"preset {preset.Id} asset should be an SVG.");
+        AssertTrue(File.Exists(asset.FullPath), $"preset {preset.Id} asset file must exist on disk.");
+    }
+
+    AssertTrue(catalog.GetHairstyleAssetFile("manifest.json") is null, "files outside the preset list must not be servable.");
+    AssertTrue(catalog.GetHairstyleAssetFile("../../database/schema.sql") is null, "path traversal must not resolve assets.");
 }
 
 static void TestApiExposesOpenApiDocumentGeneration()
@@ -1137,8 +1234,7 @@ static void TestTryOnCostEstimatorClassifiesAndPricesModes()
         new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000004"), "trench coat", GarmentCategory.Outerwear, BodyZone.OuterLayer, "https://app.test/outerwear.png"),
         new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000005"), "loafers", GarmentCategory.Shoes, BodyZone.Feet, "https://app.test/shoes.png"),
         new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000006"), "bag", GarmentCategory.Bag, BodyZone.Accessory, "https://app.test/bag.png"),
-        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000007"), "scarf", GarmentCategory.Accessory, BodyZone.Accessory, "https://app.test/scarf.png"),
-        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000008"), "hat", GarmentCategory.Hat, BodyZone.Head, "https://app.test/hat.png"));
+        new OutfitItem(Guid.Parse("10000000-0000-0000-0000-000000000007"), "scarf", GarmentCategory.Accessory, BodyZone.Accessory, "https://app.test/scarf.png"));
     var estimator = new TryOnCostEstimator();
 
     var sequential = estimator.Estimate(outfit, new TryOnEstimateInput(
@@ -1159,22 +1255,21 @@ static void TestTryOnCostEstimatorClassifiesAndPricesModes()
     AssertTrue(sequential.BodyTryOnItems.Any(item => item.Category == GarmentCategory.Bottom), "bottom should be a body try-on category.");
     AssertTrue(sequential.BodyTryOnItems.Any(item => item.Category == GarmentCategory.Dress), "dress should be a body try-on category.");
     AssertTrue(sequential.BodyTryOnItems.Any(item => item.Category == GarmentCategory.Outerwear), "outerwear should be a body try-on category.");
-    AssertEqual(4, sequential.VisualOnlyItems.Count, "sequential estimate should classify visual-only items.");
+    AssertEqual(3, sequential.VisualOnlyItems.Count, "sequential estimate should classify visual-only items.");
     AssertTrue(sequential.VisualOnlyItems.Any(item => item.Category == GarmentCategory.Shoes), "shoes should be a visual-only category.");
     AssertTrue(sequential.VisualOnlyItems.Any(item => item.Category == GarmentCategory.Bag), "bag should be a visual-only category.");
     AssertTrue(sequential.VisualOnlyItems.Any(item => item.Category == GarmentCategory.Accessory), "accessory should be a visual-only category.");
-    AssertTrue(sequential.VisualOnlyItems.Any(item => item.Category == GarmentCategory.Hat), "hat should be a visual-only category.");
     AssertEqual(4, sequential.EstimatedCredits, "sequential estimate should cost one credit per body try-on item.");
     AssertTrue(sequential.IsAvailable, "sequential estimate should be available for multiple body items.");
     AssertTrue(sequential.RequiresAi, "sequential estimate should require AI.");
     AssertTrue(!sequential.RequiresPremiumConfirmation, "sequential estimate should not be premium.");
     AssertEqual(4, sequential.IncludedGarmentIds.Count, "sequential estimate should include only body try-on items.");
-    AssertEqual(4, sequential.ExcludedGarmentIds.Count, "sequential estimate should exclude visual-only items.");
+    AssertEqual(3, sequential.ExcludedGarmentIds.Count, "sequential estimate should exclude visual-only items.");
     AssertTrue(sequential.CacheKey.Length == 64, "cache key should be a SHA-256 hex string.");
     AssertTrue(sequential.CacheKey.All(character => char.IsDigit(character) || character is >= 'a' and <= 'f'), "cache key should be lowercase SHA-256 hex.");
 
     AssertEqual(1, composite.EstimatedCredits, "composite estimate should cost one credit.");
-    AssertEqual(8, composite.IncludedGarmentIds.Count, "composite estimate should include body and visual items.");
+    AssertEqual(7, composite.IncludedGarmentIds.Count, "composite estimate should include body and visual items.");
     AssertTrue(composite.RequiresPremiumConfirmation, "composite estimate should require premium confirmation.");
     AssertTrue(composite.HasCachedResult, "estimate should carry cache hit status from the caller.");
 }
@@ -2405,6 +2500,18 @@ static void TestPostgresSchemaContainsCutoutMeasurementColumns()
     }
 }
 
+static void TestHatCategoryFullyRetired()
+{
+    var basePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var schema = File.ReadAllText(Path.Combine(basePath, "database", "schema.sql"));
+    var migration = File.ReadAllText(Path.Combine(basePath, "database", "migrations", "009_remove_hat_category.sql"));
+
+    AssertTrue(!schema.Contains("'Hat'", StringComparison.Ordinal), "schema snapshot must not allow the retired Hat category.");
+    AssertTrue(migration.Contains("delete from garment_items where category = 'Hat'", StringComparison.Ordinal), "migration 009 should delete legacy Hat garments outright.");
+    AssertTrue(migration.Contains("garment_items_category_check", StringComparison.Ordinal), "migration 009 should rebuild the garment category constraint.");
+    AssertTrue(migration.Contains("outfit_items_category_check", StringComparison.Ordinal), "migration 009 should rebuild the outfit item category constraint.");
+}
+
 static void TestPostgresSchemaContainsCascadeAndCleanupIndexes()
 {
     var basePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
@@ -2440,7 +2547,6 @@ static void TestPostgresSchemaContainsPrivacyStorageAuthAndRetentionFields()
         "Shoes",
         "Bag",
         "Accessory",
-        "Hat",
         "FullBody",
         "Feet",
         "Head",
@@ -3095,7 +3201,7 @@ static TryOnProviderRequest CreateProviderRequest(Outfit outfit, TryOnMode mode)
         .Where(item => item.Category is GarmentCategory.Top or GarmentCategory.Bottom or GarmentCategory.Dress or GarmentCategory.Outerwear)
         .ToArray();
     var visualItems = outfit.Items
-        .Where(item => item.Category is GarmentCategory.Shoes or GarmentCategory.Bag or GarmentCategory.Accessory or GarmentCategory.Hat)
+        .Where(item => item.Category is GarmentCategory.Shoes or GarmentCategory.Bag or GarmentCategory.Accessory)
         .ToArray();
     return new TryOnProviderRequest(
         outfit.UserId,
