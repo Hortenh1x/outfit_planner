@@ -39,6 +39,7 @@ services:
     image: mcr.microsoft.com/dotnet/sdk:10.0
     command: dotnet watch --project src/OutfitPlanner.Api/OutfitPlanner.Api.csproj run --no-launch-profile --urls https://0.0.0.0:8081
     working_dir: /src
+    restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: https://+:8081
@@ -67,6 +68,7 @@ services:
     image: node:24-alpine
     command: sh -c "npm ci && npm run dev:docker"
     working_dir: /app
+    restart: unless-stopped
     environment:
       VITE_API_URL: /api
       VITE_DEV_HTTPS: "true"

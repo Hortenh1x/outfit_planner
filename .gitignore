@@ -13,6 +13,12 @@ dist/
 coverage/
 .vite/
 *.tsbuildinfo
+
+# Python (auto-tagging service venv + caches)
+.venv/
+.venv-autotag/
+__pycache__/
+*.pyc
 outfit_planner_front/vite.config.js
 outfit_planner_front/vite.config.d.ts
 outfit_planner_front/.generated/

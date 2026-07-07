@@ -226,31 +226,148 @@ public sealed class ImageProcessor : IImageProcessor
         return wrapped > 180d ? wrapped - 360d : wrapped;
     }
 
+    // Bounding box of the garment's main opaque mass. Background removal is imperfect (the local
+    // Simple keyer especially leaves textured-floor grain opaque), and a naive min/max over every
+    // opaque pixel would balloon the box out to a stray speck in a corner — making the garment
+    // measure far bigger than it visually is and render tiny inside its figure slot. So label the
+    // connected opaque regions (8-connectivity) and keep the union of the substantial ones (each
+    // ≥12% of the largest, which tolerates a garment split into a few parts by the cutout) while
+    // dropping scattered specks. The whole connected garment is always kept, so no real garment
+    // part is ever cropped. Returns null when nothing is opaque.
     private static Rectangle? OpaqueBounds(Image<Rgba32> image)
     {
-        var minX = int.MaxValue;
-        var minY = int.MaxValue;
-        var maxX = -1;
-        var maxY = -1;
+        var width = image.Width;
+        var height = image.Height;
+        var opaque = new bool[width * height];
+        var opaqueCount = 0;
         image.ProcessPixelRows(accessor =>
         {
             for (var y = 0; y < accessor.Height; y++)
             {
                 var row = accessor.GetRowSpan(y);
+                var rowBase = y * width;
                 for (var x = 0; x < row.Length; x++)
                 {
                     if (row[x].A >= 16)
                     {
-                        if (x < minX) minX = x;
-                        if (y < minY) minY = y;
-                        if (x > maxX) maxX = x;
-                        if (y > maxY) maxY = y;
+                        opaque[rowBase + x] = true;
+                        opaqueCount++;
                     }
                 }
             }
         });
 
+        if (opaqueCount == 0)
+        {
+            return null;
+        }
+
+        // Union-find over opaque pixels, linking each to its already-scanned neighbours (left, up,
+        // up-left, up-right) for 8-connectivity.
+        var parent = new int[width * height];
+        for (var i = 0; i < parent.Length; i++)
+        {
+            parent[i] = i;
+        }
+
+        for (var y = 0; y < height; y++)
+        {
+            var rowBase = y * width;
+            for (var x = 0; x < width; x++)
+            {
+                var index = rowBase + x;
+                if (!opaque[index])
+                {
+                    continue;
+                }
+
+                if (x > 0 && opaque[index - 1])
+                {
+                    UnionCells(parent, index, index - 1);
+                }
+                if (y > 0)
+                {
+                    if (opaque[index - width])
+                    {
+                        UnionCells(parent, index, index - width);
+                    }
+                    if (x > 0 && opaque[index - width - 1])
+                    {
+                        UnionCells(parent, index, index - width - 1);
+                    }
+                    if (x < width - 1 && opaque[index - width + 1])
+                    {
+                        UnionCells(parent, index, index - width + 1);
+                    }
+                }
+            }
+        }
+
+        // Component sizes, and the largest.
+        var sizes = new Dictionary<int, int>();
+        var largest = 0;
+        for (var index = 0; index < opaque.Length; index++)
+        {
+            if (!opaque[index])
+            {
+                continue;
+            }
+
+            var root = FindCell(parent, index);
+            var size = sizes.TryGetValue(root, out var current) ? current + 1 : 1;
+            sizes[root] = size;
+            if (size > largest)
+            {
+                largest = size;
+            }
+        }
+
+        // Keep components that are a substantial fraction of the largest; drop small scattered specks.
+        var keepThreshold = Math.Max(24, (int)(largest * 0.12));
+        var minX = int.MaxValue;
+        var minY = int.MaxValue;
+        var maxX = -1;
+        var maxY = -1;
+        for (var y = 0; y < height; y++)
+        {
+            var rowBase = y * width;
+            for (var x = 0; x < width; x++)
+            {
+                var index = rowBase + x;
+                if (!opaque[index] || sizes[FindCell(parent, index)] < keepThreshold)
+                {
+                    continue;
+                }
+
+                if (x < minX) minX = x;
+                if (y < minY) minY = y;
+                if (x > maxX) maxX = x;
+                if (y > maxY) maxY = y;
+            }
+        }
+
         return maxX < 0 ? null : new Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);
+    }
+
+    private static int FindCell(int[] parent, int node)
+    {
+        while (parent[node] != node)
+        {
+            parent[node] = parent[parent[node]];
+            node = parent[node];
+        }
+
+        return node;
+    }
+
+    private static void UnionCells(int[] parent, int a, int b)
+    {
+        var rootA = FindCell(parent, a);
+        var rootB = FindCell(parent, b);
+        if (rootA != rootB)
+        {
+            parent[rootA] = rootB;
+        }
     }
 
     private static void NormalizeMetadataAndSize(Image image, int maxSide)

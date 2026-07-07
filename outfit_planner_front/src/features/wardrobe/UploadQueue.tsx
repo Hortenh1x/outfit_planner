@@ -56,7 +56,7 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, o
               <select
                 value={item.category}
                 disabled={disabled}
-                onChange={(event) => onChangeItem(item.id, { category: event.target.value as GarmentCategory })}
+                onChange={(event) => onChangeItem(item.id, { category: event.target.value as GarmentCategory, categoryEdited: true })}
               >
                 {GARMENT_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}
               </select>
@@ -66,7 +66,7 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, o
               <input
                 value={item.primaryColor}
                 disabled={disabled}
-                onChange={(event) => onChangeItem(item.id, { primaryColor: event.target.value })}
+                onChange={(event) => onChangeItem(item.id, { primaryColor: event.target.value, colorEdited: true })}
               />
             </label>
             <label>
@@ -122,7 +122,7 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, o
     const nextDraft = { ...(textDrafts[item.id] ?? textDraftFromItem(item)), ...updates };
     setTextDrafts((current) => ({ ...current, [item.id]: nextDraft }));
     if (updates.seasonText !== undefined) {
-      onChangeItem(item.id, { season: parseTokenText(nextDraft.seasonText) });
+      onChangeItem(item.id, { season: parseTokenText(nextDraft.seasonText), seasonEdited: true });
     }
   }
 }

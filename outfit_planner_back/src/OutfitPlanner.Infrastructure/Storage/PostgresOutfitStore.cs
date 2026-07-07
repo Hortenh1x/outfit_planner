@@ -11,7 +11,8 @@ public sealed class PostgresOutfitStore :
     IOutfitScheduleRepository,
     ITryOnJobRepository,
     IShareLinkRepository,
-    IUserAccountRepository
+    IUserAccountRepository,
+    IAdminUserRepository
 {
     public static readonly IReadOnlyList<string> RequiredTables = new[]
     {
@@ -324,8 +325,10 @@ public sealed class PostgresOutfitStore :
         EnsureUser(connection, transaction, outfit.UserId);
 
         using var outfitCommand = new NpgsqlCommand("""
-            insert into outfits (id, user_id, name, tags, occasion, is_favorite, is_archived, clothes_only_preview_url, person_preview_url, created_at)
-            values (@id, @user_id, @name, @tags, @occasion, @is_favorite, @is_archived, @clothes_only_preview_url, @person_preview_url, @created_at)
+            insert into outfits (id, user_id, name, tags, occasion, is_favorite, is_archived, clothes_only_preview_url, person_preview_url, created_at,
+                hairstyle_preset_id, hairstyle_visible, silhouette_gender)
+            values (@id, @user_id, @name, @tags, @occasion, @is_favorite, @is_archived, @clothes_only_preview_url, @person_preview_url, @created_at,
+                @hairstyle_preset_id, @hairstyle_visible, @silhouette_gender)
             """, connection, transaction);
         AddOutfitParameters(outfitCommand, outfit);
         outfitCommand.ExecuteNonQuery();
@@ -371,7 +374,8 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("user_id", userId);
         AddOutfitQueryFilters(command, where, query);
         command.CommandText = $"""
-            select id, user_id, name, tags, occasion, is_favorite, is_archived, clothes_only_preview_url, person_preview_url, created_at
+            select id, user_id, name, tags, occasion, is_favorite, is_archived, clothes_only_preview_url, person_preview_url, created_at,
+                hairstyle_preset_id, hairstyle_visible, silhouette_gender
             from outfits
             where {string.Join(" and ", where)}
             {OutfitOrderBy(query.Sort)}
@@ -402,7 +406,10 @@ public sealed class PostgresOutfitStore :
                 is_favorite = @is_favorite,
                 is_archived = @is_archived,
                 clothes_only_preview_url = @clothes_only_preview_url,
-                person_preview_url = @person_preview_url
+                person_preview_url = @person_preview_url,
+                hairstyle_preset_id = @hairstyle_preset_id,
+                hairstyle_visible = @hairstyle_visible,
+                silhouette_gender = @silhouette_gender
             where id = @id and user_id = @user_id
             """, connection, transaction);
         outfitCommand.Parameters.AddWithValue("id", outfit.Id);
@@ -414,6 +421,9 @@ public sealed class PostgresOutfitStore :
         outfitCommand.Parameters.AddWithValue("is_archived", outfit.IsArchived);
         outfitCommand.Parameters.AddWithValue("clothes_only_preview_url", DbValue(outfit.ClothesOnlyPreviewUrl));
         outfitCommand.Parameters.AddWithValue("person_preview_url", DbValue(outfit.PersonPreviewUrl));
+        outfitCommand.Parameters.AddWithValue("hairstyle_preset_id", DbValue(outfit.HairstylePresetId));
+        outfitCommand.Parameters.AddWithValue("hairstyle_visible", outfit.HairstyleVisible);
+        outfitCommand.Parameters.AddWithValue("silhouette_gender", DbValue(outfit.SilhouetteGender?.ToString()));
         outfitCommand.ExecuteNonQuery();
 
         using var deleteItemsCommand = new NpgsqlCommand("""
@@ -706,8 +716,8 @@ public sealed class PostgresOutfitStore :
     public void AddUser(UserAccount user)
     {
         using var command = _dataSource.CreateCommand("""
-            insert into users (id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender)
-            values (@id, @email, @normalized_email, @display_name, @password_hash, @created_at, @updated_at, @last_login_at, @email_verified_at, @two_factor_enabled, @avatar_url, @avatar_object_key, @gender)
+            insert into users (id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender, role)
+            values (@id, @email, @normalized_email, @display_name, @password_hash, @created_at, @updated_at, @last_login_at, @email_verified_at, @two_factor_enabled, @avatar_url, @avatar_object_key, @gender, @role)
             """);
         AddUserParameters(command, user);
         command.ExecuteNonQuery();
@@ -727,7 +737,8 @@ public sealed class PostgresOutfitStore :
                 two_factor_enabled = @two_factor_enabled,
                 avatar_url = @avatar_url,
                 avatar_object_key = @avatar_object_key,
-                gender = @gender
+                gender = @gender,
+                role = @role
             where id = @id
             """);
         AddUserParameters(command, user);
@@ -737,7 +748,7 @@ public sealed class PostgresOutfitStore :
     public UserAccount? GetUserById(string userId)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender
+            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender, role
             from users
             where id = @id
             """);
@@ -750,7 +761,7 @@ public sealed class PostgresOutfitStore :
     public UserAccount? GetUserByNormalizedEmail(string normalizedEmail)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender
+            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender, role
             from users
             where normalized_email = @normalized_email
             """);
@@ -758,6 +769,117 @@ public sealed class PostgresOutfitStore :
 
         using var reader = command.ExecuteReader();
         return reader.Read() ? ReadUser(reader) : null;
+    }
+
+    // Per-user data counts ride along as subselects so one round-trip serves the admin list.
+    private const string AdminUserRecordColumns = """
+        u.id, u.email, u.normalized_email, u.display_name, u.password_hash, u.created_at, u.updated_at, u.last_login_at, u.email_verified_at, u.two_factor_enabled, u.avatar_url, u.avatar_object_key, u.gender, u.role,
+            (select count(*) from garment_items g where g.user_id = u.id) as garment_count,
+            (select count(*) from outfits o where o.user_id = u.id) as outfit_count,
+            (select count(*) from try_on_jobs t where t.user_id = u.id) as try_on_job_count,
+            (select count(*) from body_reference_photos b where b.user_id = u.id) as body_reference_photo_count,
+            (select count(*) from auth_sessions s where s.user_id = u.id and s.revoked_at is null and s.expires_at > @now) as active_session_count
+        """;
+
+    public IReadOnlyList<AdminUserRecord> ListUsers(AdminUserQuery query, DateTimeOffset now)
+    {
+        using var command = _dataSource.CreateCommand($"""
+            select {AdminUserRecordColumns}
+            from users u
+            where (@search_pattern is null or u.email ilike @search_pattern or u.display_name ilike @search_pattern)
+              and (@role is null or u.role = @role)
+            order by u.created_at desc, u.id
+            offset @offset limit @limit
+            """);
+        AddAdminUserQueryParameters(command, query);
+        command.Parameters.AddWithValue("now", now);
+        command.Parameters.AddWithValue("offset", query.Offset);
+        command.Parameters.AddWithValue("limit", query.Limit);
+
+        using var reader = command.ExecuteReader();
+        var records = new List<AdminUserRecord>();
+        while (reader.Read())
+        {
+            records.Add(ReadAdminUserRecord(reader));
+        }
+
+        return records;
+    }
+
+    public int CountUsers(AdminUserQuery query)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select count(*)
+            from users u
+            where (@search_pattern is null or u.email ilike @search_pattern or u.display_name ilike @search_pattern)
+              and (@role is null or u.role = @role)
+            """);
+        AddAdminUserQueryParameters(command, query);
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    public AdminUserRecord? GetUserRecord(string userId, DateTimeOffset now)
+    {
+        using var command = _dataSource.CreateCommand($"""
+            select {AdminUserRecordColumns}
+            from users u
+            where u.id = @id
+            """);
+        command.Parameters.AddWithValue("id", userId);
+        command.Parameters.AddWithValue("now", now);
+
+        using var reader = command.ExecuteReader();
+        return reader.Read() ? ReadAdminUserRecord(reader) : null;
+    }
+
+    public AdminUserStats GetStats()
+    {
+        using var command = _dataSource.CreateCommand("""
+            select
+                (select count(*) from users),
+                (select count(*) from garment_items),
+                (select count(*) from outfits),
+                (select count(*) from try_on_jobs)
+            """);
+
+        using var reader = command.ExecuteReader();
+        reader.Read();
+        return new AdminUserStats(
+            Convert.ToInt32(reader.GetInt64(0)),
+            Convert.ToInt32(reader.GetInt64(1)),
+            Convert.ToInt32(reader.GetInt64(2)),
+            Convert.ToInt32(reader.GetInt64(3)));
+    }
+
+    private static void AddAdminUserQueryParameters(NpgsqlCommand command, AdminUserQuery query)
+    {
+        command.Parameters.AddWithValue("search_pattern", DbValue(EscapeLikePattern(query.Search)));
+        command.Parameters.AddWithValue("role", DbValue(query.Role?.ToString()));
+    }
+
+    private static string? EscapeLikePattern(string? search)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+        {
+            return null;
+        }
+
+        var escaped = search.Trim()
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
+        return $"%{escaped}%";
+    }
+
+    private static AdminUserRecord ReadAdminUserRecord(NpgsqlDataReader reader)
+    {
+        return new AdminUserRecord(
+            ReadUser(reader),
+            Convert.ToInt32(reader.GetInt64(14)),
+            Convert.ToInt32(reader.GetInt64(15)),
+            Convert.ToInt32(reader.GetInt64(16)),
+            Convert.ToInt32(reader.GetInt64(17)),
+            Convert.ToInt32(reader.GetInt64(18)));
     }
 
     public void AddExternalLogin(ExternalAuthLogin login)
@@ -1145,7 +1267,8 @@ public sealed class PostgresOutfitStore :
     private Outfit? GetOutfit(string whereClause, Action<NpgsqlCommand> addParameters)
     {
         using var command = _dataSource.CreateCommand($"""
-            select id, user_id, name, tags, occasion, is_favorite, is_archived, clothes_only_preview_url, person_preview_url, created_at
+            select id, user_id, name, tags, occasion, is_favorite, is_archived, clothes_only_preview_url, person_preview_url, created_at,
+                hairstyle_preset_id, hairstyle_visible, silhouette_gender
             from outfits
             {whereClause}
             """);
@@ -1164,7 +1287,8 @@ public sealed class PostgresOutfitStore :
     private IReadOnlyList<OutfitItem> ListOutfitItems(Guid outfitId)
     {
         using var command = _dataSource.CreateCommand("""
-            select g.id, g.name, g.category, g.body_zone, g.thumbnail_url, g.rotation_degrees
+            select g.id, g.name, g.category, g.body_zone, g.thumbnail_url, g.rotation_degrees,
+                g.cutout_width_px, g.cutout_height_px
             from outfit_items oi
             join garment_items g on g.id = oi.garment_id
             where oi.outfit_id = @outfit_id
@@ -1182,7 +1306,9 @@ public sealed class PostgresOutfitStore :
                 Enum.Parse<GarmentCategory>(reader.GetString(2)),
                 Enum.Parse<BodyZone>(reader.GetString(3)),
                 reader.GetString(4),
-                reader.GetDouble(5)));
+                reader.GetDouble(5),
+                reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                reader.IsDBNull(7) ? null : reader.GetInt32(7)));
         }
 
         return items;
@@ -1203,6 +1329,7 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("avatar_url", DbValue(user.AvatarUrl));
         command.Parameters.AddWithValue("avatar_object_key", DbValue(user.AvatarObjectKey));
         command.Parameters.AddWithValue("gender", DbValue(user.Gender?.ToString()));
+        command.Parameters.AddWithValue("role", user.Role.ToString());
     }
 
     private static void AddExternalLoginParameters(NpgsqlCommand command, ExternalAuthLogin login)
@@ -1231,7 +1358,8 @@ public sealed class PostgresOutfitStore :
             TwoFactorEnabled = reader.GetBoolean(9),
             AvatarUrl = reader.IsDBNull(10) ? null : reader.GetString(10),
             AvatarObjectKey = reader.IsDBNull(11) ? null : reader.GetString(11),
-            Gender = reader.IsDBNull(12) ? null : Enum.Parse<UserGender>(reader.GetString(12))
+            Gender = reader.IsDBNull(12) ? null : Enum.Parse<UserGender>(reader.GetString(12)),
+            Role = reader.IsDBNull(13) ? UserRole.Free : Enum.Parse<UserRole>(reader.GetString(13))
         };
     }
 
@@ -1317,6 +1445,9 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("clothes_only_preview_url", DbValue(outfit.ClothesOnlyPreviewUrl));
         command.Parameters.AddWithValue("person_preview_url", DbValue(outfit.PersonPreviewUrl));
         command.Parameters.AddWithValue("created_at", outfit.CreatedAt);
+        command.Parameters.AddWithValue("hairstyle_preset_id", DbValue(outfit.HairstylePresetId));
+        command.Parameters.AddWithValue("hairstyle_visible", outfit.HairstyleVisible);
+        command.Parameters.AddWithValue("silhouette_gender", DbValue(outfit.SilhouetteGender?.ToString()));
     }
 
     private static void AddTryOnJobParameters(NpgsqlCommand command, TryOnJob job)
@@ -1395,7 +1526,12 @@ public sealed class PostgresOutfitStore :
             reader.GetBoolean(6),
             reader.IsDBNull(7) ? null : reader.GetString(7),
             reader.IsDBNull(8) ? null : reader.GetString(8),
-            reader.GetFieldValue<DateTimeOffset>(9));
+            reader.GetFieldValue<DateTimeOffset>(9))
+        {
+            HairstylePresetId = reader.IsDBNull(10) ? null : reader.GetString(10),
+            HairstyleVisible = reader.GetBoolean(11),
+            SilhouetteGender = reader.IsDBNull(12) ? null : Enum.Parse<UserGender>(reader.GetString(12))
+        };
     }
 
     private static TryOnJob ReadTryOnJob(NpgsqlDataReader reader)

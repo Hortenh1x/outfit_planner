@@ -24,10 +24,23 @@ export type GarmentItem = Override<
     cutoutHeightPx?: number | null;
   }
 >;
-export type Outfit = JsonResponse<paths['/api/outfits/{outfitId}']['get'], 200>;
+type OutfitResponse = JsonResponse<paths['/api/outfits/{outfitId}']['get'], 200>;
+export type OutfitItem = Override<
+  ArrayItem<OutfitResponse['items']>,
+  { cutoutWidthPx?: number | null; cutoutHeightPx?: number | null }
+>;
+// Composed-figure state shared by owner and shared outfit responses.
+type ComposedOutfitOverrides = {
+  items: OutfitItem[];
+  hairstylePresetId?: string | null;
+  hairstyleVisible?: boolean;
+  silhouetteGender?: 'Male' | 'Female' | null;
+  hairstyleAssetUrl?: string | null;
+};
+export type Outfit = Override<OutfitResponse, ComposedOutfitOverrides>;
 export type ScheduledOutfit = ArrayItem<JsonResponse<paths['/api/schedule']['get'], 200>>;
 export type TryOnJob = JsonResponse<paths['/api/try-on-jobs/{jobId}']['get'], 200>;
-export type SharedOutfit = JsonResponse<paths['/api/share/{token}']['get'], 200>;
+export type SharedOutfit = Override<JsonResponse<paths['/api/share/{token}']['get'], 200>, ComposedOutfitOverrides>;
 
 export type CreatedGarment = JsonResponse<paths['/api/garments']['post'], 201>;
 export type CreatedBodyReferencePhoto = JsonResponse<paths['/api/body-reference-photos']['post'], 201>;
@@ -42,4 +55,3 @@ export type BodyZone = GarmentItem['bodyZone'];
 export type LaundryStatus = GarmentItem['laundryStatus'];
 export type TryOnStatus = TryOnJob['status'];
 export type TryOnMode = TryOnCostEstimate['mode'];
-export type OutfitItem = ArrayItem<Outfit['items']>;

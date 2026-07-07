@@ -1,10 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { listGarments, type UpdateGarmentInput } from '../api/client';
 import { GarmentCard } from '../features/wardrobe/GarmentCard';
 import { GarmentEditor, type GarmentEditorSaveInput } from '../features/wardrobe/GarmentEditor';
+import { GarmentPreviewDialog } from '../features/wardrobe/GarmentPreviewDialog';
+import { WardrobeBuildBar } from '../features/wardrobe/WardrobeBuildBar';
 import { WardrobeFilters, type WardrobeViewMode } from '../features/wardrobe/WardrobeFilterControls';
 import { WardrobeUploadPanel, type WardrobeUploadDefaults } from '../features/wardrobe/WardrobeUploadPanel';
+import {
+  isGarmentSelected,
+  toggleWardrobeSelection,
+  wardrobeSelectionCount,
+  type WardrobeBuildSelection
+} from '../features/wardrobe/wardrobeSelection';
 import {
   defaultWardrobeFilters,
   filterGarmentsByLocalTags,
@@ -13,6 +22,7 @@ import {
 } from '../features/wardrobe/wardrobeFilters';
 import { useWardrobeMutations, wardrobeQueryKey } from '../features/wardrobe/wardrobeMutations';
 import { useEagerGarmentUploads } from '../features/wardrobe/useEagerGarmentUploads';
+import { useGarmentAutoTagging } from '../features/wardrobe/useGarmentAutoTagging';
 import {
   computeDuplicateFlags,
   createUploadQueueItems,
@@ -31,9 +41,12 @@ const defaultUploadDefaults: WardrobeUploadDefaults = {
 };
 
 export function WardrobePage() {
+  const navigate = useNavigate();
   const [filters, setFilters] = useState<WardrobeFilterState>(defaultWardrobeFilters);
   const [viewMode, setViewMode] = useState<WardrobeViewMode>('grid');
   const [editingGarment, setEditingGarment] = useState<GarmentItem | null>(null);
+  const [selection, setSelection] = useState<WardrobeBuildSelection>({});
+  const [previewGarment, setPreviewGarment] = useState<GarmentItem | null>(null);
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const apiFilters = useMemo(() => toGarmentFilters(filters), [filters]);
   const garmentsQuery = useQuery({
@@ -51,6 +64,7 @@ export function WardrobePage() {
   });
   const mutations = useWardrobeMutations();
   const uploads = useEagerGarmentUploads(setUploadQueue);
+  const autoTagging = useGarmentAutoTagging(setUploadQueue);
   const allGarments = garmentsQuery.data ?? [];
 
   // Kick off background removal as soon as items land in the queue, and refill
@@ -81,11 +95,27 @@ export function WardrobePage() {
       return changed ? next : current;
     });
   }, [uploadQueue, garmentsQuery.data]);
+  // Drop any selected garment that no longer exists (e.g. deleted while still checked).
+  useEffect(() => {
+    setSelection((current) => {
+      const ids = new Set(allGarments.map((garment) => garment.id));
+      const kept = Object.fromEntries(
+        Object.entries(current).filter(([, id]) => ids.has(id as string))
+      ) as WardrobeBuildSelection;
+      return Object.keys(kept).length === Object.keys(current).length ? current : kept;
+    });
+  }, [allGarments]);
   const garments = filterGarmentsByLocalTags(allGarments, filters.tag);
   const existingTags = useMemo(() => {
     const tags = allGarments.flatMap((garment) => garment.tags ?? []);
     return Array.from(new Set(tags)).sort((left, right) => left.localeCompare(right));
   }, [allGarments]);
+
+  // Prefill metadata as soon as a row's photo is processed, passing the user's existing tags so the
+  // model prefers them. Suggestions only fill fields the user has not touched; edits are never lost.
+  useEffect(() => {
+    autoTagging.start(uploadQueue, existingTags);
+  }, [uploadQueue, existingTags, autoTagging]);
 
   function addFiles(files: File[]) {
     if (files.length === 0) {
@@ -109,19 +139,27 @@ export function WardrobePage() {
   }
 
   function retryQueueItem(itemId: string) {
-    // Re-queue the item; the eager-upload effect restarts processing.
+    // Re-queue the item; the eager-upload effect restarts processing, then re-classifies.
+    autoTagging.abort(itemId);
     setUploadQueue((current) =>
-      current.map((item) => (item.id === itemId ? { ...item, status: 'queued', error: null } : item))
+      current.map((item) => (item.id === itemId ? { ...item, status: 'queued', error: null, autoTagStatus: 'idle' } : item))
     );
   }
 
   function removeQueueItem(itemId: string) {
     uploads.abort(itemId);
+    autoTagging.abort(itemId);
     setUploadQueue((current) => current.filter((item) => item.id !== itemId));
   }
 
   function resetFilters() {
     setFilters(defaultWardrobeFilters);
+  }
+
+  function buildFromSelection() {
+    // Hand the picked pieces to the Builder via router state; it applies them and clears the state.
+    navigate('/builder', { state: { wardrobeCompose: selection } });
+    setSelection({});
   }
 
   function saveEditedGarment(garmentId: string, input: GarmentEditorSaveInput) {
@@ -163,6 +201,9 @@ export function WardrobePage() {
                 garment={garment}
                 needsBetterPhoto={needsBetterPhoto(garment)}
                 pendingAction={pendingActionFor(garment, mutations)}
+                selected={isGarmentSelected(selection, garment)}
+                onToggleSelect={(item) => setSelection((current) => toggleWardrobeSelection(current, item))}
+                onEnlarge={setPreviewGarment}
                 onDelete={(item) => {
                   if (window.confirm(`Delete “${item.name}”? This cannot be undone.`)) {
                     mutations.deleteMutation.mutate(item.id);
@@ -200,6 +241,14 @@ export function WardrobePage() {
           onSubmitAll={() => mutations.uploadQueueMutation.mutate(uploadQueue, { onSuccess: () => setUploadQueue([]) })}
         />
       )}
+      {previewGarment ? (
+        <GarmentPreviewDialog garment={previewGarment} onClose={() => setPreviewGarment(null)} />
+      ) : null}
+      <WardrobeBuildBar
+        count={wardrobeSelectionCount(selection)}
+        onClear={() => setSelection({})}
+        onBuild={buildFromSelection}
+      />
     </section>
   );
 }

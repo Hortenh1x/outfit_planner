@@ -14,7 +14,8 @@ public sealed class FileBackedOutfitStore :
     IOutfitScheduleRepository,
     ITryOnJobRepository,
     IShareLinkRepository,
-    IUserAccountRepository
+    IUserAccountRepository,
+    IAdminUserRepository
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -305,6 +306,26 @@ public sealed class FileBackedOutfitStore :
     public bool DeleteUserById(string userId)
     {
         return MutateIfChanged(() => _inner.DeleteUserById(userId));
+    }
+
+    public IReadOnlyList<AdminUserRecord> ListUsers(AdminUserQuery query, DateTimeOffset now)
+    {
+        return _inner.ListUsers(query, now);
+    }
+
+    public int CountUsers(AdminUserQuery query)
+    {
+        return _inner.CountUsers(query);
+    }
+
+    public AdminUserRecord? GetUserRecord(string userId, DateTimeOffset now)
+    {
+        return _inner.GetUserRecord(userId, now);
+    }
+
+    public AdminUserStats GetStats()
+    {
+        return _inner.GetStats();
     }
 
     private void Mutate(Action action)

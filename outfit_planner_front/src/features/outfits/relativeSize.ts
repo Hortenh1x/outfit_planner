@@ -15,12 +15,17 @@ export interface CategorySizeTarget {
 /**
  * The single place that encodes cross-category proportions. Canonical display sizes are chosen
  * so a coat renders taller than a shirt, a dress reads long, and shoes/accessories stay small.
+ *
+ * The width-axis targets double as the composed-figure body-zone widths (scene units): Top/Dress
+ * are tuned to the silhouette's shoulder span and Bottom to its hip span in
+ * `ComposedOutfitFigure`, so worn garments fill the body (a tee spans the shoulders, shorts span
+ * the hips) instead of floating inside it. Keep them in sync with the silhouette artwork there.
  */
 export const CATEGORY_SIZE_TARGETS: Record<GarmentCategory, CategorySizeTarget> = {
-  Outerwear: { axis: 'width', targetPx: 200 },
-  Dress: { axis: 'width', targetPx: 185 },
-  Top: { axis: 'width', targetPx: 180 },
-  Bottom: { axis: 'width', targetPx: 160 },
+  Outerwear: { axis: 'width', targetPx: 224 },
+  Dress: { axis: 'width', targetPx: 212 },
+  Top: { axis: 'width', targetPx: 230 },
+  Bottom: { axis: 'width', targetPx: 182 },
   Bag: { axis: 'maxDimension', targetPx: 140 },
   Shoes: { axis: 'maxDimension', targetPx: 120 },
   Accessory: { axis: 'maxDimension', targetPx: 90 }

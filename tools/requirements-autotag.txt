@@ -1,0 +1,25 @@
+# Dependencies for the local garment auto-tagging service (tools/autotag_server.py).
+#
+# All models are downloaded once from Hugging Face on first run and run LOCALLY;
+# images never leave the machine. Licenses: FashionCLIP (patrickjohncyh/fashion-clip)
+# and its base laion/CLIP-ViT-B-32-laion2B-s34B-b79K are MIT; transformers is
+# Apache-2.0; torch is BSD-style; scikit-learn is BSD-3; pillow, numpy, fastapi,
+# uvicorn are permissive (HPND/BSD/MIT).
+#
+# Install torch SEPARATELY to match your CUDA toolkit (GPU is used automatically when
+# available, otherwise CPU). See https://pytorch.org/get-started/locally/ — e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu124
+# then:
+#   pip install -r tools/requirements-autotag.txt
+
+# Prefer Python 3.12 (via `uv venv --python 3.12`). Upper bounds are kept wide so pip/uv
+# can pick a version that ships a prebuilt wheel for your interpreter instead of compiling
+# from source (numpy compiling from an sdist is the tell-tale sign of a too-new Python).
+transformers>=4.44,<5
+pillow>=10.2
+numpy>=1.26
+scikit-learn>=1.4
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+# torch>=2.2  # install separately per your CUDA build (see note above)

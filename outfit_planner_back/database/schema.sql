@@ -11,7 +11,8 @@ create table if not exists users (
     two_factor_enabled boolean not null default false,
     avatar_url text,
     avatar_object_key text,
-    gender text check (gender is null or gender in ('Male', 'Female'))
+    gender text check (gender is null or gender in ('Male', 'Female')),
+    role text not null default 'Free' check (role in ('Free', 'Premium', 'Admin'))
 );
 
 alter table users add column if not exists email text;
@@ -24,6 +25,7 @@ alter table users add column if not exists two_factor_enabled boolean not null d
 alter table users add column if not exists avatar_url text;
 alter table users add column if not exists avatar_object_key text;
 alter table users add column if not exists gender text;
+alter table users add column if not exists role text not null default 'Free';
 
 do $$
 begin
@@ -35,6 +37,19 @@ begin
         alter table users
             add constraint ck_users_gender
             check (gender is null or gender in ('Male', 'Female'));
+    end if;
+end $$;
+
+do $$
+begin
+    if not exists (
+        select 1
+        from pg_constraint
+        where conname = 'ck_users_role'
+    ) then
+        alter table users
+            add constraint ck_users_role
+            check (role in ('Free', 'Premium', 'Admin'));
     end if;
 end $$;
 
@@ -180,6 +195,9 @@ create table if not exists outfits (
     is_archived boolean not null default false,
     clothes_only_preview_url text,
     person_preview_url text,
+    hairstyle_preset_id text,
+    hairstyle_visible boolean not null default true,
+    silhouette_gender text check (silhouette_gender is null or silhouette_gender in ('Male', 'Female')),
     created_at timestamptz not null default now()
 );
 
@@ -187,6 +205,9 @@ alter table outfits add column if not exists tags text[] not null default '{}';
 alter table outfits add column if not exists occasion text[] not null default '{}';
 alter table outfits add column if not exists is_favorite boolean not null default false;
 alter table outfits add column if not exists is_archived boolean not null default false;
+alter table outfits add column if not exists hairstyle_preset_id text;
+alter table outfits add column if not exists hairstyle_visible boolean not null default true;
+alter table outfits add column if not exists silhouette_gender text check (silhouette_gender is null or silhouette_gender in ('Male', 'Female'));
 
 create table if not exists outfit_items (
     outfit_id uuid not null references outfits(id) on delete cascade,

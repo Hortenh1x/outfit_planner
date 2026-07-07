@@ -2,7 +2,7 @@ import { type ChangeEvent, type PointerEvent, type RefObject, useEffect, useRef,
 import { createPortal } from 'react-dom';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarDays, Camera, Check, LogOut, Shirt, Upload, UserRound, Wand2, X } from 'lucide-react';
+import { CalendarDays, Camera, Check, LogOut, ShieldCheck, Shirt, Upload, UserRound, Wand2, X } from 'lucide-react';
 import { getAuthProviders, logout, updateAccountProfile, uploadAccountAvatar, type AuthUser, type UserGender } from '../api/client';
 import { ThemeToggle, type ThemeMode } from '../components/ThemeToggle';
 import { authSessionQueryKey, useAuthSession } from '../features/auth/authQueries';
@@ -64,6 +64,9 @@ export function AppShell() {
 }
 
 function PrimaryNavigation({ compact = false }: { compact?: boolean }) {
+  const sessionQuery = useAuthSession();
+  const isAdmin = sessionQuery.data?.user.role === 'Admin';
+
   return (
     <nav
       className={compact ? 'editorial-bottom-navigation editorial-nav' : 'editorial-nav'}
@@ -81,6 +84,12 @@ function PrimaryNavigation({ compact = false }: { compact?: boolean }) {
         <CalendarDays size={18} />
         <span>Calendar</span>
       </NavLink>
+      {isAdmin ? (
+        <NavLink to="/admin" className={navButtonClass}>
+          <ShieldCheck size={18} />
+          <span>Admin</span>
+        </NavLink>
+      ) : null}
     </nav>
   );
 }

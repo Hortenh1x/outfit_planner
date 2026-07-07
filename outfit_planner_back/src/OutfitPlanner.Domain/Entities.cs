@@ -49,7 +49,11 @@ public sealed record OutfitItem(
     GarmentCategory Category,
     BodyZone BodyZone,
     string ThumbnailUrl,
-    double RotationDegrees = 0);
+    double RotationDegrees = 0,
+    // Cutout alpha-bounding-box size of the garment, carried onto outfit items so composed
+    // outfit rendering (cards, shared view) can reuse relative sizing without garment access.
+    int? CutoutWidthPx = null,
+    int? CutoutHeightPx = null);
 
 public sealed record Outfit(
     Guid Id,
@@ -62,7 +66,18 @@ public sealed record Outfit(
     bool IsArchived,
     string? ClothesOnlyPreviewUrl,
     string? PersonPreviewUrl,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt)
+{
+    // Composed-figure state: the worn global hairstyle preset, its visibility, and the
+    // silhouette gender the outfit was composed on. Null on legacy outfits (renderers fall
+    // back to defaults).
+    public string? HairstylePresetId { get; init; }
+    public bool HairstyleVisible { get; init; } = true;
+    public UserGender? SilhouetteGender { get; init; }
+    // Response-only: resolved from the hairstyle catalog when building API responses; stores
+    // never persist it (repositories always see it as null).
+    public string? HairstyleAssetUrl { get; init; }
+}
 
 public sealed record ScheduledOutfit(
     Guid Id,
@@ -120,6 +135,9 @@ public sealed record UserAccount(
     public string? AvatarUrl { get; init; }
     public string? AvatarObjectKey { get; init; }
     public UserGender? Gender { get; init; }
+    // Stored role. Pinned accounts (see the Application role-pinning policy) may override this
+    // at read time; always resolve the effective role through the policy, not this field alone.
+    public UserRole Role { get; init; } = UserRole.Free;
 }
 
 public sealed record AuthEmailVerificationToken(

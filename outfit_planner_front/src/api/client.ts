@@ -59,6 +59,9 @@ export interface AuthProvider {
 
 export type UserGender = 'Male' | 'Female';
 
+// Effective account role (pinned-by-email overrides applied on the server).
+export type UserRole = 'Free' | 'Premium' | 'Admin';
+
 export interface AuthUser {
   id: string;
   email?: string | null;
@@ -66,6 +69,7 @@ export interface AuthUser {
   username?: string | null;
   avatarUrl?: string | null;
   gender?: UserGender | null;
+  role?: UserRole | null;
 }
 
 export interface AuthSession {
@@ -137,6 +141,11 @@ export type UpdateOutfitInput = Partial<{
   occasion: string[];
   isFavorite: boolean;
   isArchived: boolean;
+  // Composed-figure state; null hairstylePresetId leaves the worn hairstyle unchanged, an
+  // empty string clears it.
+  hairstylePresetId: string | null;
+  hairstyleVisible: boolean;
+  silhouetteGender: UserGender | null;
 }>;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -313,6 +322,43 @@ export async function uploadBodyReferencePhoto(file: File): Promise<UploadedPhot
   return uploadPhoto('/uploads/body-reference-photo', file);
 }
 
+export interface AutoTagColorSuggestion {
+  name: string;
+  hex: string;
+  confidence: number;
+}
+
+export interface AutoTagSuggestion {
+  value: string;
+  confidence: number;
+}
+
+export interface GarmentAutoTagResponse {
+  // False when the local auto-tag service is disabled or unreachable (empty suggestions).
+  isAvailable: boolean;
+  provider: string;
+  category?: GarmentCategory | null;
+  categoryConfidence: number;
+  colors: AutoTagColorSuggestion[];
+  seasons: AutoTagSuggestion[];
+  tags: AutoTagSuggestion[];
+}
+
+// Requests metadata prefill suggestions for a freshly uploaded garment photo. Client-orchestrated
+// after the row's cutout/original is ready (concurrency-limited + abortable, like eager removal).
+// Always resolves; an unavailable tagger yields isAvailable=false with empty suggestions.
+export async function classifyGarmentPhoto(
+  imageUrl: string,
+  knownTags: string[],
+  signal?: AbortSignal
+): Promise<GarmentAutoTagResponse> {
+  return request<GarmentAutoTagResponse>('/uploads/garment-photo/classify', {
+    method: 'POST',
+    body: JSON.stringify({ imageUrl, knownTags }),
+    signal
+  });
+}
+
 async function uploadPhoto(path: string, file: File, signal?: AbortSignal): Promise<UploadedPhotoResponse> {
   const formData = new FormData();
   formData.append('file', file);
@@ -456,7 +502,13 @@ export function getOutfit(outfitId: string): Promise<Outfit> {
   return request<Outfit>(`/outfits/${outfitId}`);
 }
 
-export function createOutfit(input: { name: string; garmentIds: string[] }): Promise<Outfit> {
+export function createOutfit(input: {
+  name: string;
+  garmentIds: string[];
+  hairstylePresetId?: string | null;
+  hairstyleVisible?: boolean;
+  silhouetteGender?: UserGender | null;
+}): Promise<Outfit> {
   return request<Outfit>('/outfits', {
     method: 'POST',
     body: JSON.stringify(input)
@@ -561,4 +613,88 @@ export function revokeShare(token: string): Promise<void> {
 
 export function getSharedOutfit(token: string): Promise<SharedOutfit> {
   return request<SharedOutfit>(`/share/${token}`);
+}
+
+// Admin panel API (requires the Admin role; non-admins receive 403).
+
+export interface AdminStats {
+  totalUsers: number;
+  totalGarments: number;
+  totalOutfits: number;
+  totalTryOnJobs: number;
+}
+
+export interface AdminUser {
+  id: string;
+  email?: string | null;
+  username: string;
+  gender?: UserGender | null;
+  role: UserRole;
+  // Pinned accounts keep their role by email; the panel cannot change or delete them.
+  rolePinned: boolean;
+  createdAt: string;
+  lastLoginAt?: string | null;
+  emailVerifiedAt?: string | null;
+  garmentCount: number;
+  outfitCount: number;
+  tryOnJobCount: number;
+  bodyReferencePhotoCount: number;
+  activeSessionCount: number;
+  avatarUrl?: string | null;
+}
+
+export interface AdminUsersPage {
+  items: AdminUser[];
+  totalCount: number;
+  offset: number;
+  limit: number;
+}
+
+export interface AdminUsersFilters {
+  q?: string;
+  role?: UserRole;
+  offset?: number;
+  limit?: number;
+}
+
+export function getAdminStats(): Promise<AdminStats> {
+  return request<AdminStats>('/admin/stats');
+}
+
+export function listAdminUsers(filters?: AdminUsersFilters | QueryFunctionLikeContext): Promise<AdminUsersPage> {
+  return request<AdminUsersPage>(`/admin/users${buildQuery(requestFilters(filters))}`);
+}
+
+export function getAdminUser(userId: string): Promise<AdminUser> {
+  return request<AdminUser>(`/admin/users/${encodeURIComponent(userId)}`);
+}
+
+export function updateAdminUserRole(userId: string, role: UserRole): Promise<AdminUser> {
+  return request<AdminUser>(`/admin/users/${encodeURIComponent(userId)}/role`, {
+    method: 'PUT',
+    body: JSON.stringify({ role })
+  });
+}
+
+export function revokeAdminUserSessions(userId: string): Promise<{ status: string }> {
+  return request<{ status: string }>(`/admin/users/${encodeURIComponent(userId)}/sessions/revoke`, {
+    method: 'POST'
+  });
+}
+
+export function purgeAdminUserAiOutputs(userId: string): Promise<{ purged: number }> {
+  return request<{ purged: number }>(`/admin/users/${encodeURIComponent(userId)}/purge-ai-outputs`, {
+    method: 'POST'
+  });
+}
+
+// Same shape as the self-service account export, with the account record sanitized.
+export function getAdminUserExport(userId: string): Promise<unknown> {
+  return request<unknown>(`/admin/users/${encodeURIComponent(userId)}/export`);
+}
+
+export function deleteAdminUser(userId: string): Promise<void> {
+  return request<void>(`/admin/users/${encodeURIComponent(userId)}`, {
+    method: 'DELETE'
+  });
 }
