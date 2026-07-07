@@ -1,8 +1,11 @@
-import type { UploadedPhotoResponse } from '../../api/client';
+import type { GarmentAutoTagResponse, UploadedPhotoResponse } from '../../api/client';
 import type { GarmentCategory } from '../../types';
 import { validateUploadImageFile } from '../uploads/imageFile';
 
 export type UploadQueueStatus = 'invalid' | 'queued' | 'processing' | 'processed' | 'failed';
+
+// Prefill classification lifecycle for a queue row, mirroring the eager background-removal status.
+export type AutoTagStatus = 'idle' | 'classifying' | 'done' | 'failed';
 
 // A processed photo can duplicate an existing wardrobe garment or an earlier item in the same batch.
 export type UploadDuplicateSource = 'wardrobe' | 'batch';
@@ -22,6 +25,13 @@ export interface UploadQueueItem {
   category: GarmentCategory;
   tags: string[];
   tagsEdited: boolean;
+  // Per-field freeze: once the user edits a field, auto-tag prefill must never overwrite it.
+  categoryEdited: boolean;
+  colorEdited: boolean;
+  seasonEdited: boolean;
+  // Model-suggested free tags, merged into the tag pool while tags are not user-edited.
+  autoTagTags: string[];
+  autoTagStatus: AutoTagStatus;
   suggestedTags: string[];
   existingTags: string[];
   primaryColor: string;
@@ -35,7 +45,7 @@ export interface UploadQueueItem {
   previewUrl?: string;
 }
 
-export type UploadQueueItemUpdates = Partial<Pick<UploadQueueItem, 'name' | 'nameEdited' | 'category' | 'tags' | 'tagsEdited' | 'primaryColor' | 'season'>>;
+export type UploadQueueItemUpdates = Partial<Pick<UploadQueueItem, 'name' | 'nameEdited' | 'category' | 'categoryEdited' | 'tags' | 'tagsEdited' | 'primaryColor' | 'colorEdited' | 'season' | 'seasonEdited'>>;
 
 export interface SuggestedTagInput {
   fileName: string;
@@ -77,6 +87,11 @@ export function createUploadQueueItem(file: File, defaults: UploadQueueDefaults,
     category: defaults.category,
     tags: suggestedTags,
     tagsEdited: false,
+    categoryEdited: false,
+    colorEdited: false,
+    seasonEdited: false,
+    autoTagTags: [],
+    autoTagStatus: 'idle',
     suggestedTags,
     existingTags: [...defaults.existingTags],
     primaryColor: defaults.color,
@@ -102,6 +117,7 @@ export function updateUploadQueueItem(item: UploadQueueItem, updates: Partial<Om
         category: next.category,
         color: next.primaryColor,
         season: next.season,
+        selectedTags: next.autoTagTags,
         existingTags: next.existingTags
       });
 
@@ -148,6 +164,67 @@ export function hasCreatableItems(items: UploadQueueItem[]): boolean {
 // A duplicate photo (of an existing garment or an earlier batch item) must not be created.
 export function isCreatableItem(item: UploadQueueItem): boolean {
   return (item.status === 'processed' || item.status === 'failed') && !item.duplicate;
+}
+
+/**
+ * Returns the processed items whose metadata should be auto-tagged now, given a concurrency
+ * `limit` and the ids already classifying. Pure selection (the caller owns the in-flight set),
+ * mirroring `selectQueueItemsToStart`. Duplicates and un-uploaded rows are skipped.
+ */
+export function selectQueueItemsToClassify(
+  items: UploadQueueItem[],
+  limit: number,
+  inFlightIds: ReadonlySet<string>
+): UploadQueueItem[] {
+  const availableSlots = limit - inFlightIds.size;
+  if (availableSlots <= 0) {
+    return [];
+  }
+
+  return items
+    .filter(
+      (item) =>
+        item.status === 'processed' &&
+        item.autoTagStatus === 'idle' &&
+        !item.duplicate &&
+        Boolean(item.uploadedPhoto) &&
+        !inFlightIds.has(item.id)
+    )
+    .slice(0, availableSlots);
+}
+
+/**
+ * Applies auto-tag prefill suggestions to a queue row. Suggestions only fill fields the user has
+ * NOT touched (category/color/season freeze flags) — user edits always win and are never
+ * overwritten. Model free-tags feed the tag suggestion pool, which is itself frozen once the user
+ * edits tags. An unavailable result is a no-op.
+ */
+export function applyAutoTagSuggestions(item: UploadQueueItem, suggestions: GarmentAutoTagResponse): UploadQueueItem {
+  if (!suggestions.isAvailable) {
+    return item;
+  }
+
+  const updates: Partial<Omit<UploadQueueItem, 'id' | 'file'>> = {};
+
+  if (!item.categoryEdited && suggestions.category && suggestions.category !== item.category) {
+    updates.category = suggestions.category;
+  }
+
+  if (!item.colorEdited) {
+    const color = suggestions.colors.find((entry) => entry.name.trim().length > 0);
+    if (color) {
+      updates.primaryColor = color.name.trim();
+    }
+  }
+
+  if (!item.seasonEdited && suggestions.seasons.length > 0) {
+    updates.season = uniqueTokens(suggestions.seasons.map((entry) => entry.value));
+  }
+
+  // Model free-tags feed the tag suggestion pool; it is ignored while tags are user-edited.
+  updates.autoTagTags = uniqueTokens(suggestions.tags.map((entry) => entry.value));
+
+  return updateUploadQueueItem(item, updates);
 }
 
 const NEAR_DUPLICATE_MAX_DISTANCE = 5;

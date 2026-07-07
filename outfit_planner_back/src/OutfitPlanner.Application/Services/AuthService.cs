@@ -16,6 +16,7 @@ public sealed class AuthService
     private readonly IPasswordHasher _passwordHasher;
     private readonly IAuthTokenService _tokens;
     private readonly IClock _clock;
+    private readonly RolePinningPolicy _rolePinning;
     private readonly TimeSpan _sessionLifetime = TimeSpan.FromDays(14);
     private readonly TimeSpan _emailVerificationLifetime = TimeSpan.FromHours(24);
     private readonly TimeSpan _passwordResetLifetime = TimeSpan.FromHours(1);
@@ -24,12 +25,14 @@ public sealed class AuthService
         IUserAccountRepository users,
         IPasswordHasher passwordHasher,
         IAuthTokenService tokens,
-        IClock clock)
+        IClock clock,
+        RolePinningPolicy rolePinning)
     {
         _users = users;
         _passwordHasher = passwordHasher;
         _tokens = tokens;
         _clock = clock;
+        _rolePinning = rolePinning;
     }
 
     public AuthResult RegisterWithPassword(string email, string password, string repeatPassword)
@@ -56,7 +59,10 @@ public sealed class AuthService
             _passwordHasher.HashPassword(cleanPassword),
             now,
             now,
-            now);
+            now)
+        {
+            Role = _rolePinning.PinnedRole(normalizedEmail) ?? UserRole.Free
+        };
 
         _users.AddUser(user);
         return CreateAuthResult(user, now);
@@ -72,7 +78,9 @@ public sealed class AuthService
         }
 
         var now = _clock.UtcNow;
-        var updated = user with { LastLoginAt = now, UpdatedAt = now };
+        // Fold the effective role into the login write so pinned accounts converge in every
+        // store, including the file-backed one that never runs SQL migrations.
+        var updated = user with { LastLoginAt = now, UpdatedAt = now, Role = _rolePinning.EffectiveRole(user) };
         _users.UpdateUser(updated);
         return CreateAuthResult(updated, now);
     }
@@ -90,7 +98,7 @@ public sealed class AuthService
             var user = _users.GetUserById(existingLogin.UserId)
                 ?? throw new ValidationException("Linked account no longer exists.");
             _users.UpdateExternalLogin(existingLogin with { Email = normalizedEmail, LastLoginAt = now });
-            var updated = user with { LastLoginAt = now, UpdatedAt = now };
+            var updated = user with { LastLoginAt = now, UpdatedAt = now, Role = _rolePinning.EffectiveRole(user) };
             _users.UpdateUser(updated);
             return CreateAuthResult(updated, now);
         }
@@ -106,7 +114,7 @@ public sealed class AuthService
         }
 
         _users.AddExternalLogin(new ExternalAuthLogin(provider, providerSubject, userForLogin.Id, normalizedEmail, now, now));
-        var updatedUser = userForLogin with { LastLoginAt = now, UpdatedAt = now };
+        var updatedUser = userForLogin with { LastLoginAt = now, UpdatedAt = now, Role = _rolePinning.EffectiveRole(userForLogin) };
         _users.UpdateUser(updatedUser);
         return CreateAuthResult(updatedUser, now);
     }
@@ -341,9 +349,9 @@ public sealed class AuthService
             now);
     }
 
-    private static PublicUser ToPublicUser(UserAccount user)
+    private PublicUser ToPublicUser(UserAccount user)
     {
-        return new PublicUser(user.Id, user.Email, user.DisplayName, user.AvatarUrl, user.Gender);
+        return new PublicUser(user.Id, user.Email, user.DisplayName, user.AvatarUrl, user.Gender, _rolePinning.EffectiveRole(user));
     }
 
     private static string NormalizeProvider(string provider)
@@ -431,7 +439,7 @@ public sealed record ExternalSignInCommand(
     bool EmailVerified,
     string? DisplayName);
 
-public sealed record PublicUser(string Id, string? Email, string Username, string? AvatarUrl, UserGender? Gender)
+public sealed record PublicUser(string Id, string? Email, string Username, string? AvatarUrl, UserGender? Gender, UserRole Role = UserRole.Free)
 {
     public string DisplayName => Username;
 }

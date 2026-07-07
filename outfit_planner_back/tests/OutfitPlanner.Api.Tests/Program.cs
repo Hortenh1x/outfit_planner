@@ -1,6 +1,7 @@
 using OutfitPlanner.Application.Abstractions;
 using OutfitPlanner.Application.Services;
 using OutfitPlanner.Domain;
+using OutfitPlanner.Infrastructure.AutoTagging;
 using OutfitPlanner.Infrastructure.Security;
 using OutfitPlanner.Infrastructure.Storage;
 using OutfitPlanner.Infrastructure.TryOn;
@@ -46,6 +47,12 @@ var tests = new List<(string Name, Action Test)>
     ("auth service signs in existing external accounts and auto-registers missing accounts", TestAuthServiceExternalLoginAutoRegisters),
     ("auth service revokes session tokens by stored hash", TestAuthServiceRevokesSessionByHash),
     ("auth service lists sessions revokes all sessions and cleans expired sessions", TestAuthServiceSessionHardening),
+    ("user roles default to free and pinned emails override stored roles", TestUserRolesDefaultToFreeAndPinnedEmailsOverride),
+    ("admin service lists searches filters and counts users", TestAdminServiceListsSearchesAndCountsUsers),
+    ("admin service changes roles with pinned and self guards", TestAdminServiceChangesRolesWithGuards),
+    ("admin service delete guards protect pinned and self accounts", TestAdminServiceDeleteGuards),
+    ("postgres schema contains account roles", TestPostgresSchemaContainsAccountRoles),
+    ("api exposes role-gated admin endpoints", TestApiExposesAdminEndpoints),
     ("api exposes secure auth endpoints and cookie settings", TestApiExposesSecureAuthEndpoints),
     ("api exposes privacy and auth hardening endpoints", TestApiExposesPrivacyAndAuthHardeningEndpoints),
     ("api exposes edit delete filtering and revoke endpoints", TestApiExposesEditDeleteFilterAndRevokeEndpoints),
@@ -60,6 +67,10 @@ var tests = new List<(string Name, Action Test)>
     ("wardrobe service persists and refreshes garment cutout measurement", TestWardrobeServicePersistsAndRefreshesCutoutMeasurement),
     ("wardrobe service filters sorts and paginates garments", TestWardrobeServiceFiltersSortsAndPaginatesGarments),
     ("outfit service updates gets filters and deletes outfits", TestOutfitServiceUpdatesFiltersAndDeletesOutfits),
+    ("outfit service persists composed figure state", TestOutfitServicePersistsComposedFigureState),
+    ("outfit service keeps person preview on metadata update", TestOutfitServiceKeepsPersonPreviewOnMetadataUpdate),
+    ("outfit items carry garment cutout measurements", TestOutfitItemsCarryGarmentCutoutMeasurements),
+    ("postgres schema declares outfit composed figure columns", TestPostgresSchemaContainsComposedFigureColumns),
     ("outfit service applies slot compatibility rules", TestOutfitSlotCompatibilityRules),
     ("outfit rules carry garment rotation onto outfit items", TestOutfitRulesPreservesGarmentRotation),
     ("schedule service can unschedule a planned date", TestScheduleServiceUnschedulesDate),
@@ -102,6 +113,9 @@ var tests = new List<(string Name, Action Test)>
     ("garment processing emits an immutable base cutout variant", TestImageProcessorEmitsBaseCutoutVariant),
     ("garment processing trims the cutout to its alpha bounding box and measures it", TestGarmentProcessingMeasuresAndTrimsCutout),
     ("cutout measurement is invariant to shooting distance and padding", TestMeasureGarmentCutoutIsScaleInvariant),
+    ("cutout trim ignores scattered background specks", TestCutoutTrimIgnoresScatteredBackgroundSpecks),
+    ("garment cutout crops past scattered background grain", TestGarmentCutoutCropsPastScatteredBackgroundGrain),
+    ("simple background removal preserves alpha on opaque source", TestSimpleBackgroundRemovalPreservesAlphaOnOpaqueSource),
     ("garment deskew straightens a tilted silhouette", TestGarmentDeskewStraightensTiltedSilhouette),
     ("garment deskew skips square and extreme tilts", TestGarmentDeskewSkipsSquareAndExtremeTilt),
     ("garment rotation render produces rotated variants", TestImageProcessorRendersRotatedGarmentVariants),
@@ -113,6 +127,14 @@ var tests = new List<(string Name, Action Test)>
     ("rembg server provider posts multipart file field", TestRembgServerProviderPostsMultipartFileField),
     ("api registers rembg server provider", TestApiRegistersRembgServerProvider),
     ("single garment extraction scaffold returns one cutout", TestSingleGarmentExtractionScaffoldReturnsOneCutout),
+    ("garment auto-tagger provider contracts exist", TestGarmentAutoTaggerContractsExist),
+    ("http garment auto-tagger parses classification response", TestHttpGarmentAutoTaggerParsesClassification),
+    ("http garment auto-tagger drops categories outside the enum", TestHttpGarmentAutoTaggerMapsUnknownCategoryToNull),
+    ("http garment auto-tagger surfaces provider errors", TestHttpGarmentAutoTaggerThrowsOnErrorStatus),
+    ("disabled garment auto-tagger returns empty suggestions", TestDisabledGarmentAutoTaggerReturnsEmpty),
+    ("auto garment auto-tagger routes by service health", TestAutoGarmentAutoTaggerRoutesByHealth),
+    ("garment auto-tag service resolves a clean cutout and never throws", TestGarmentAutoTagServiceResolvesCleanCutout),
+    ("api wires auto-tagging classify endpoint and defaults", TestApiWiresAutoTaggingClassifyEndpoint),
     ("photo upload service stores garment photo variants behind signed url", TestPhotoUploadStoresGarmentPhoto),
     ("stored photo urls refresh stale garment links to cutouts", TestStoredPhotoUrlRefresherRefreshesGarmentVariants),
     ("photo upload service stores body reference photo privately", TestPhotoUploadStoresBodyReferencePhoto),
@@ -646,7 +668,7 @@ static void TestPostgresSchemaContainsUserAccountProfileFields()
 static void TestAuthServiceRegistersEmailUsers()
 {
     var store = new InMemoryOutfitStore();
-    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), TestRolePinning());
 
     var result = auth.RegisterWithPassword("Ada@Example.COM", "abc12345", "abc12345");
 
@@ -661,7 +683,7 @@ static void TestAuthServiceRegistersEmailUsers()
 static void TestAuthServiceUpdatesAccountProfile()
 {
     var store = new InMemoryOutfitStore();
-    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), TestRolePinning());
     var result = auth.RegisterWithPassword("profile@example.com", "abc12345", "abc12345");
 
     var profile = auth.UpdateProfile(result.User.Id, "Dmytro Bolibok", UserGender.Male);
@@ -679,7 +701,7 @@ static void TestAuthServiceUpdatesAccountProfile()
 static void TestAuthServicePasswordPolicy()
 {
     var store = new InMemoryOutfitStore();
-    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), TestRolePinning());
 
     auth.RegisterWithPassword("short-valid@example.com", "abc12345", "abc12345");
 
@@ -697,7 +719,7 @@ static void TestAuthServicePasswordPolicy()
 static void TestAuthServiceRejectsDuplicateEmailRegistration()
 {
     var store = new InMemoryOutfitStore();
-    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), TestRolePinning());
 
     auth.RegisterWithPassword("ada@example.com", "abc12345", "abc12345");
 
@@ -709,7 +731,7 @@ static void TestAuthServiceRejectsDuplicateEmailRegistration()
 static void TestAuthServiceExternalLoginAutoRegisters()
 {
     var store = new InMemoryOutfitStore();
-    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), TestRolePinning());
 
     var first = auth.SignInWithExternalAccount(new ExternalSignInCommand(
         "google",
@@ -739,7 +761,7 @@ static void TestAuthServiceExternalLoginAutoRegisters()
 static void TestAuthServiceRevokesSessionByHash()
 {
     var store = new InMemoryOutfitStore();
-    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), TestRolePinning());
     var result = auth.RegisterWithPassword("session@example.com", "abc12345", "abc12345");
 
     auth.RevokeSession(result.SessionToken);
@@ -750,7 +772,7 @@ static void TestAuthServiceRevokesSessionByHash()
 static void TestAuthServiceSessionHardening()
 {
     var store = new InMemoryOutfitStore();
-    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock());
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), TestRolePinning());
     var first = auth.RegisterWithPassword("sessions@example.com", "abc12345", "abc12345");
     var second = auth.SignInWithPassword("sessions@example.com", "abc12345");
 
@@ -774,6 +796,179 @@ static void TestAuthServiceSessionHardening()
         null));
 
     AssertEqual(1, auth.CleanupExpiredSessions(), "expired session cleanup should remove persisted expired sessions.");
+}
+
+static RolePinningPolicy TestRolePinning()
+{
+    // Mirrors the production defaults: the two accounts whose roles are pinned by email.
+    return new RolePinningPolicy(new RolePinningOptions(
+        new[] { "dmytro.bolibok@gmail.com" },
+        new[] { "olya.shaydur@gmail.com" }));
+}
+
+static void TestUserRolesDefaultToFreeAndPinnedEmailsOverride()
+{
+    var store = new InMemoryOutfitStore();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), TestRolePinning());
+
+    var regular = auth.RegisterWithPassword("free@example.com", "abc12345", "abc12345");
+    AssertEqual(UserRole.Free, regular.User.Role, "new accounts should default to the Free role.");
+
+    var admin = auth.RegisterWithPassword("Dmytro.Bolibok@gmail.com", "abc12345", "abc12345");
+    AssertEqual(UserRole.Admin, admin.User.Role, "the pinned admin email should always resolve to the Admin role.");
+
+    var premium = auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345");
+    AssertEqual(UserRole.Premium, premium.User.Role, "the pinned premium email should always resolve to the Premium role.");
+
+    // A tampered stored role must not leak through: the effective role stays pinned, and the
+    // next sign-in converges the stored role back.
+    var stored = store.GetUserByNormalizedEmail("dmytro.bolibok@gmail.com")
+        ?? throw new InvalidOperationException("Pinned admin account was not stored.");
+    store.UpdateUser(stored with { Role = UserRole.Free });
+
+    var signedIn = auth.SignInWithPassword("dmytro.bolibok@gmail.com", "abc12345");
+
+    AssertEqual(UserRole.Admin, signedIn.User.Role, "pinned roles should override a tampered stored role.");
+    AssertEqual(UserRole.Admin, store.GetUserByNormalizedEmail("dmytro.bolibok@gmail.com")?.Role, "sign-in should converge the stored role back to the pinned role.");
+}
+
+static void TestAdminServiceListsSearchesAndCountsUsers()
+{
+    var store = new InMemoryOutfitStore();
+    var pinning = TestRolePinning();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), pinning);
+    var admin = new AdminService(store, store, pinning, new SystemClock());
+
+    var ada = auth.RegisterWithPassword("ada@example.com", "abc12345", "abc12345");
+    var grace = auth.RegisterWithPassword("grace@example.com", "abc12345", "abc12345");
+    store.CreateGarment(CreateGarment(ada.User.Id, "tee", GarmentCategory.Top));
+    store.CreateGarment(CreateGarment(ada.User.Id, "jeans", GarmentCategory.Bottom));
+    store.AddOutfit(new Outfit(
+        Guid.NewGuid(),
+        ada.User.Id,
+        "look",
+        Array.Empty<OutfitItem>(),
+        Array.Empty<string>(),
+        Array.Empty<string>(),
+        false,
+        false,
+        null,
+        null,
+        DateTimeOffset.UtcNow));
+
+    var page = admin.ListUsers(null, null, 0, 10);
+    AssertEqual(2, page.TotalCount, "admin listing should count all users.");
+    var adaRecord = page.Items.Single(item => item.User.Id == ada.User.Id);
+    AssertEqual(2, adaRecord.GarmentCount, "admin listing should count the user's garments.");
+    AssertEqual(1, adaRecord.OutfitCount, "admin listing should count the user's outfits.");
+    AssertTrue(adaRecord.ActiveSessionCount >= 1, "admin listing should count active sessions.");
+
+    var search = admin.ListUsers("grace", null, 0, 10);
+    AssertEqual(1, search.TotalCount, "admin search should filter by email.");
+    AssertEqual(grace.User.Id, search.Items.Single().User.Id, "admin search should return the matching user.");
+
+    store.UpdateUser((store.GetUserById(grace.User.Id)
+        ?? throw new InvalidOperationException("Second account was not stored.")) with { Role = UserRole.Premium });
+    var premiumOnly = admin.ListUsers(null, UserRole.Premium, 0, 10);
+    AssertEqual(1, premiumOnly.TotalCount, "admin role filter should match stored roles.");
+    AssertEqual(grace.User.Id, premiumOnly.Items.Single().User.Id, "admin role filter should return the premium user.");
+
+    var paged = admin.ListUsers(null, null, 1, 1);
+    AssertEqual(1, paged.Items.Count, "admin paging should respect the limit.");
+    AssertEqual(2, paged.TotalCount, "admin paging should report the unpaged total.");
+
+    var stats = admin.Stats();
+    AssertEqual(2, stats.TotalUsers, "admin stats should count users.");
+    AssertEqual(2, stats.TotalGarments, "admin stats should count garments.");
+    AssertEqual(1, stats.TotalOutfits, "admin stats should count outfits.");
+}
+
+static void TestAdminServiceChangesRolesWithGuards()
+{
+    var store = new InMemoryOutfitStore();
+    var pinning = TestRolePinning();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), pinning);
+    var admin = new AdminService(store, store, pinning, new SystemClock());
+
+    var actingAdmin = auth.RegisterWithPassword("dmytro.bolibok@gmail.com", "abc12345", "abc12345");
+    var member = auth.RegisterWithPassword("member@example.com", "abc12345", "abc12345");
+    var pinnedPremium = auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345");
+
+    var updated = admin.ChangeRole(actingAdmin.User.Id, member.User.Id, UserRole.Premium);
+    AssertEqual(UserRole.Premium, updated?.User.Role, "admin role changes should return the updated record.");
+    AssertEqual(UserRole.Premium, store.GetUserById(member.User.Id)?.Role, "admin role changes should persist the stored role.");
+
+    AssertTrue(admin.ChangeRole(actingAdmin.User.Id, "usr_missing", UserRole.Premium) is null, "changing a missing user's role should report not found.");
+    AssertThrows<InvalidOperationException>(
+        () => admin.ChangeRole(actingAdmin.User.Id, actingAdmin.User.Id, UserRole.Free),
+        "admins must not change their own role");
+    AssertThrows<InvalidOperationException>(
+        () => admin.ChangeRole(actingAdmin.User.Id, pinnedPremium.User.Id, UserRole.Free),
+        "pinned account roles must not be changeable");
+    var pinnedRecord = admin.GetUser(pinnedPremium.User.Id);
+    AssertTrue(pinnedRecord is not null && admin.EffectiveRole(pinnedRecord.User) == UserRole.Premium, "the pinned premium account should keep its role.");
+}
+
+static void TestAdminServiceDeleteGuards()
+{
+    var store = new InMemoryOutfitStore();
+    var pinning = TestRolePinning();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), pinning);
+    var admin = new AdminService(store, store, pinning, new SystemClock());
+
+    var actingAdmin = auth.RegisterWithPassword("dmytro.bolibok@gmail.com", "abc12345", "abc12345");
+    var member = auth.RegisterWithPassword("member@example.com", "abc12345", "abc12345");
+    var pinnedPremium = auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345");
+
+    AssertThrows<InvalidOperationException>(
+        () => admin.RequireDeletableUser(actingAdmin.User.Id, actingAdmin.User.Id),
+        "admins must not delete their own account from the admin panel");
+    AssertThrows<InvalidOperationException>(
+        () => admin.RequireDeletableUser(actingAdmin.User.Id, pinnedPremium.User.Id),
+        "pinned accounts must not be deletable from the admin panel");
+    AssertTrue(admin.RequireDeletableUser(actingAdmin.User.Id, member.User.Id) is not null, "regular accounts should be deletable by an admin.");
+    AssertTrue(admin.RequireDeletableUser(actingAdmin.User.Id, "usr_missing") is null, "deleting a missing user should report not found.");
+}
+
+static void TestPostgresSchemaContainsAccountRoles()
+{
+    var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "schema.sql"));
+    var schema = File.ReadAllText(schemaPath);
+
+    AssertTrue(schema.Contains("role text not null default 'Free'", StringComparison.OrdinalIgnoreCase), "users table should store the account role with a Free default.");
+    AssertTrue(schema.Contains("role in ('Free', 'Premium', 'Admin')", StringComparison.OrdinalIgnoreCase), "schema should constrain roles to Free, Premium, or Admin.");
+
+    var migrationPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "migrations", "011_account_roles.sql"));
+    var migration = File.ReadAllText(migrationPath);
+    AssertTrue(migration.Contains("dmytro.bolibok@gmail.com", StringComparison.OrdinalIgnoreCase), "migration should backfill the pinned admin account role.");
+    AssertTrue(migration.Contains("olya.shaydur@gmail.com", StringComparison.OrdinalIgnoreCase), "migration should backfill the pinned premium account role.");
+}
+
+static void TestApiExposesAdminEndpoints()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var program = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Program.cs"));
+    var contracts = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Contracts", "ApiContracts.cs"));
+
+    foreach (var route in new[]
+    {
+        "MapGet(\"/admin/stats\"",
+        "MapGet(\"/admin/users\"",
+        "MapGet(\"/admin/users/{userId}\"",
+        "MapPut(\"/admin/users/{userId}/role\"",
+        "MapPost(\"/admin/users/{userId}/sessions/revoke\"",
+        "MapPost(\"/admin/users/{userId}/purge-ai-outputs\"",
+        "MapGet(\"/admin/users/{userId}/export\"",
+        "MapDelete(\"/admin/users/{userId}\""
+    })
+    {
+        AssertTrue(program.Contains(route, StringComparison.Ordinal), $"api should expose {route}.");
+    }
+
+    AssertTrue(program.Contains("RequireAdmin(context)", StringComparison.Ordinal), "admin endpoints should be gated by the admin role.");
+    AssertTrue(program.Contains("CurrentUserRoleItemKey", StringComparison.Ordinal), "the session middleware should resolve the current user's role.");
+    AssertTrue(contracts.Contains("UserRole Role", StringComparison.Ordinal), "auth and admin responses should expose the account role.");
+    AssertTrue(contracts.Contains("bool RolePinned", StringComparison.Ordinal), "admin responses should mark pinned accounts.");
 }
 
 static void TestApiExposesSecureAuthEndpoints()
@@ -2078,6 +2273,108 @@ static void TestGarmentProcessingMeasuresAndTrimsCutout()
     AssertEqual(300, cutoutImage.Height, "the stored cutout should be trimmed to its alpha bounding box");
 }
 
+static void TestGarmentCutoutCropsPastScatteredBackgroundGrain()
+{
+    // End-to-end through the REAL SimpleBackgroundRemovalProvider (the default dev keyer): an
+    // 800x900 opaque tan floor, garment 300x360 centred, and 6 scattered dark grain streaks the
+    // corner-key cannot remove (far from tan) sitting near the frame edges. A naive min/max box
+    // would balloon to the full frame; the connected-component trim must crop to the garment.
+    //
+    // The source is encoded WITHOUT an alpha channel (ColorType.Rgb) on purpose: that is what every
+    // real (JPEG/opaque) photo becomes, and it is the exact condition that used to make the keyer's
+    // transparency get dropped on re-encode, leaving a full-frame opaque cutout.
+    const int CW = 800, CH = 900, GW = 300, GH = 360;
+    var gx0 = (CW - GW) / 2;
+    var gy0 = (CH - GH) / 2;
+    var streaks = new[] { (60, 120, 40, 4), (700, 200, 4, 50), (120, 760, 60, 4), (680, 720, 4, 40), (400, 60, 50, 4), (60, 450, 4, 60) };
+    bool InStreak(int x, int y)
+    {
+        foreach (var (sx, sy, sw, sh) in streaks)
+        {
+            if (x >= sx && x < sx + sw && y >= sy && y < sy + sh) return true;
+        }
+        return false;
+    }
+    using var src = new Image<Rgba32>(CW, CH);
+    var floor = new Rgba32(196, 178, 150, 255);
+    var garment = new Rgba32(30, 34, 52, 255);
+    var grain = new Rgba32(70, 55, 38, 255);
+    src.ProcessPixelRows(accessor =>
+    {
+        for (var y = 0; y < accessor.Height; y++)
+        {
+            var row = accessor.GetRowSpan(y);
+            for (var x = 0; x < row.Length; x++)
+            {
+                row[x] = (x >= gx0 && x < gx0 + GW && y >= gy0 && y < gy0 + GH)
+                    ? garment
+                    : InStreak(x, y) ? grain : floor;
+            }
+        }
+    });
+    using var ms = new MemoryStream();
+    src.Save(ms, new SixLabors.ImageSharp.Formats.Png.PngEncoder { ColorType = SixLabors.ImageSharp.Formats.Png.PngColorType.Rgb });
+    var bytes = ms.ToArray();
+
+    var processor = new ImageProcessor(new SimpleBackgroundRemovalProvider());
+    var processed = processor.ProcessGarmentPhoto(new IncomingPhoto("floor.png", "image/png", bytes.Length, new MemoryStream(bytes)));
+
+    // Garment 300x360 on 800x900 upscaled to max 1600 -> ~534x640. Full frame would be ~1422x1600.
+    var measurement = processed.CutoutMeasurement;
+    AssertTrue(measurement is not null, "the garment cutout should measure");
+    AssertTrue(
+        measurement!.WidthPx < 700 && measurement.HeightPx < 800,
+        $"scattered background grain must not balloon the cutout to the full frame (got {measurement.WidthPx}x{measurement.HeightPx}, garment is ~534x640)");
+    AssertTrue(
+        measurement.WidthPx > 400 && measurement.HeightPx > 500,
+        $"the cutout must still contain the whole garment, not crop into it (got {measurement.WidthPx}x{measurement.HeightPx})");
+    var aspect = measurement.HeightPx / (double)measurement.WidthPx;
+    AssertTrue(Math.Abs(aspect - (360.0 / 300.0)) < 0.05, $"the cropped garment should keep its 1.2 aspect (got {aspect:0.00})");
+}
+
+static void TestSimpleBackgroundRemovalPreservesAlphaOnOpaqueSource()
+{
+    // The bug this guards: SimpleBackgroundRemovalProvider loads the image, writes alpha=0 to the
+    // background, then re-encodes. When the SOURCE PNG had no alpha channel (every JPEG/opaque photo),
+    // a bare PngEncoder inherits the "no alpha" hint and drops the transparency that was just computed,
+    // so the cutout comes back fully opaque and the garment measures as the whole frame.
+    using var src = new Image<Rgba32>(200, 200);
+    src.ProcessPixelRows(a =>
+    {
+        for (var y = 0; y < a.Height; y++)
+        {
+            var r = a.GetRowSpan(y);
+            for (var x = 0; x < r.Length; x++)
+            {
+                r[x] = (x is >= 60 and < 140 && y is >= 60 and < 140)
+                    ? new Rgba32(20, 20, 20, 255)
+                    : new Rgba32(210, 210, 210, 255);
+            }
+        }
+    });
+    using var ms = new MemoryStream();
+    src.Save(ms, new SixLabors.ImageSharp.Formats.Png.PngEncoder { ColorType = SixLabors.ImageSharp.Formats.Png.PngColorType.Rgb });
+    var opaqueSource = ms.ToArray();
+
+    var result = new SimpleBackgroundRemovalProvider()
+        .RemoveBackground(new BackgroundRemovalRequest("photo.png", "image/png", opaqueSource));
+
+    using var keyed = Image.Load<Rgba32>(result.ImageBytes);
+    var transparent = 0;
+    keyed.ProcessPixelRows(a =>
+    {
+        for (var y = 0; y < a.Height; y++)
+        {
+            var r = a.GetRowSpan(y);
+            for (var x = 0; x < r.Length; x++)
+            {
+                if (r[x].A < 16) transparent++;
+            }
+        }
+    });
+    AssertTrue(transparent > 0, "background removal of an opaque-source image must keep the computed transparency (not re-encode it away)");
+}
+
 static void TestMeasureGarmentCutoutIsScaleInvariant()
 {
     // MeasureGarmentCutout is what the startup backfill runs on stored cutouts/originals.
@@ -2107,6 +2404,20 @@ static void TestMeasureGarmentCutoutIsScaleInvariant()
     AssertTrue(
         processor.MeasureGarmentCutout(TransparentPaddedRectanglePng(50, 50, 0, 0)) is null,
         "a fully transparent image should not measure");
+}
+
+static void TestCutoutTrimIgnoresScatteredBackgroundSpecks()
+{
+    var processor = new ImageProcessor(new RecordingBackgroundRemovalProvider(MinimalPngBytes()));
+
+    // A 200x300 garment centred on a 600x800 frame, with scattered opaque specks (leftover
+    // background the keyer missed) in the corners and mid-edges. A naive min/max bounding box
+    // would balloon out to the specks; the measurement must instead hug the garment mass.
+    var measurement = processor.MeasureGarmentCutout(GarmentWithScatteredSpecksPng(600, 800, 200, 300));
+
+    AssertTrue(measurement is not null, "a garment with stray specks should still measure");
+    AssertEqual(200, measurement!.WidthPx, "stray background specks must not inflate the measured width");
+    AssertEqual(300, measurement.HeightPx, "stray background specks must not inflate the measured height");
 }
 
 static void TestGarmentDeskewStraightensTiltedSilhouette()
@@ -2497,6 +2808,90 @@ static void TestPostgresSchemaContainsCutoutMeasurementColumns()
     {
         AssertTrue(schema.Contains(column, StringComparison.OrdinalIgnoreCase), $"schema.sql should include garment column {column}.");
         AssertTrue(migration.Contains(column, StringComparison.OrdinalIgnoreCase), $"migration 008 should add {column} so schema.sql and migrations stay in sync.");
+    }
+}
+
+static void TestOutfitServicePersistsComposedFigureState()
+{
+    var store = new InMemoryOutfitStore();
+    var wardrobe = new WardrobeService(store, store, new SystemClock());
+    var catalog = new StubHairstylePresetCatalog(
+        new HairstylePreset("male-short-1", UserGender.Male, "Short cut I", "male-short-1.svg", 1));
+    var service = new OutfitService(store, store, new SystemClock(), catalog);
+
+    var top = wardrobe.CreateGarment(CreateGarment("user-a", "linen shirt", GarmentCategory.Top));
+    var outfit = service.CreateOutfit("user-a", "city walk", new[] { top.Id }, "male-short-1", hairstyleVisible: false, UserGender.Male);
+    AssertEqual("male-short-1", outfit.HairstylePresetId, "create should persist the worn hairstyle preset");
+    AssertTrue(!outfit.HairstyleVisible, "create should persist hairstyle visibility");
+    AssertEqual(UserGender.Male, outfit.SilhouetteGender, "create should persist the silhouette gender");
+
+    var reloaded = service.GetOutfit("user-a", outfit.Id);
+    AssertEqual("male-short-1", reloaded!.HairstylePresetId, "composed state should round-trip through the store");
+
+    var untouched = service.UpdateOutfit("user-a", outfit.Id, new UpdateOutfitCommand(Name: "renamed"));
+    AssertEqual("male-short-1", untouched!.HairstylePresetId, "null hairstyle updates should leave the preset unchanged");
+    AssertTrue(!untouched.HairstyleVisible, "null visibility updates should leave visibility unchanged");
+
+    var shown = service.UpdateOutfit("user-a", outfit.Id, new UpdateOutfitCommand(HairstyleVisible: true, SilhouetteGender: UserGender.Female));
+    AssertTrue(shown!.HairstyleVisible, "hairstyle visibility should be updatable");
+    AssertEqual(UserGender.Female, shown.SilhouetteGender, "the silhouette gender should be updatable");
+
+    var cleared = service.UpdateOutfit("user-a", outfit.Id, new UpdateOutfitCommand(HairstylePresetId: ""));
+    AssertTrue(cleared!.HairstylePresetId is null, "an empty hairstyle preset id should clear the worn hairstyle");
+
+    AssertThrows<ValidationException>(
+        () => service.CreateOutfit("user-a", "bad", new[] { top.Id }, "unknown-style"),
+        "unknown hairstyle presets should be rejected");
+}
+
+static void TestOutfitServiceKeepsPersonPreviewOnMetadataUpdate()
+{
+    var store = new InMemoryOutfitStore();
+    var service = new OutfitService(store, store, new SystemClock());
+    var top = store.CreateGarment(CreateGarment("user-a", "white tee", GarmentCategory.Top));
+    var bottom = store.CreateGarment(CreateGarment("user-a", "blue jeans", GarmentCategory.Bottom));
+    var outfit = service.CreateOutfit("user-a", "look", new[] { top.Id });
+
+    // Simulate a generated try-on preview that a succeeded job saved onto the outfit.
+    store.UpdateOutfit(store.GetOutfitByUser("user-a", outfit.Id)! with { PersonPreviewUrl = "https://example.com/preview.jpg" });
+
+    // A metadata-only save that re-sends the same garment set (what the Builder does on rename/save)
+    // must keep the generated preview.
+    var renamed = service.UpdateOutfit("user-a", outfit.Id, new UpdateOutfitCommand(Name: "renamed", GarmentIds: new[] { top.Id }));
+    AssertEqual("https://example.com/preview.jpg", renamed!.PersonPreviewUrl, "a save with an unchanged garment set should keep the generated preview.");
+
+    // Changing the worn garments invalidates the stale preview.
+    var recomposed = service.UpdateOutfit("user-a", outfit.Id, new UpdateOutfitCommand(GarmentIds: new[] { top.Id, bottom.Id }));
+    AssertTrue(recomposed!.PersonPreviewUrl is null, "changing the worn garments should clear the stale generated preview.");
+}
+
+static void TestOutfitItemsCarryGarmentCutoutMeasurements()
+{
+    var store = new InMemoryOutfitStore();
+    var wardrobe = new WardrobeService(store, store, new SystemClock());
+    var service = new OutfitService(store, store, new SystemClock());
+
+    var top = wardrobe.CreateGarment(CreateGarment("user-a", "linen shirt", GarmentCategory.Top) with
+    {
+        CutoutWidthPx = 400,
+        CutoutHeightPx = 520
+    });
+    var outfit = service.CreateOutfit("user-a", "measured", new[] { top.Id });
+
+    AssertEqual(400, outfit.Items[0].CutoutWidthPx, "outfit items should carry the garment cutout width");
+    AssertEqual(520, outfit.Items[0].CutoutHeightPx, "outfit items should carry the garment cutout height");
+}
+
+static void TestPostgresSchemaContainsComposedFigureColumns()
+{
+    var basePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var schema = File.ReadAllText(Path.Combine(basePath, "database", "schema.sql"));
+    var migration = File.ReadAllText(Path.Combine(basePath, "database", "migrations", "010_outfit_composed_figure.sql"));
+
+    foreach (var column in new[] { "hairstyle_preset_id", "hairstyle_visible", "silhouette_gender" })
+    {
+        AssertTrue(schema.Contains(column, StringComparison.OrdinalIgnoreCase), $"schema.sql should include outfit column {column}.");
+        AssertTrue(migration.Contains(column, StringComparison.OrdinalIgnoreCase), $"migration 010 should add {column} so schema.sql and migrations stay in sync.");
     }
 }
 
@@ -3099,6 +3494,52 @@ static byte[] TransparentPaddedRectanglePng(int width, int height, int rectWidth
     return output.ToArray();
 }
 
+// An opaque garment rectangle on a transparent canvas, plus scattered 2x2 opaque specks in the
+// corners and mid-edges — simulating leftover background pixels an imperfect keyer misses.
+static byte[] GarmentWithScatteredSpecksPng(int width, int height, int rectWidth, int rectHeight)
+{
+    using var image = new Image<Rgba32>(width, height);
+    var startX = (width - rectWidth) / 2;
+    var startY = (height - rectHeight) / 2;
+    var garment = new Rgba32(30, 30, 35, 255);
+    var speck = new Rgba32(40, 44, 60, 255);
+    var speckCentres = new[]
+    {
+        (X: 1, Y: 1), (X: width - 2, Y: 1), (X: 1, Y: height - 2), (X: width - 2, Y: height - 2),
+        (X: width / 2, Y: 2), (X: 2, Y: height / 2), (X: width - 3, Y: height / 2)
+    };
+    image.ProcessPixelRows(accessor =>
+    {
+        for (var y = startY; y < startY + rectHeight; y++)
+        {
+            var row = accessor.GetRowSpan(y);
+            for (var x = startX; x < startX + rectWidth; x++)
+            {
+                row[x] = garment;
+            }
+        }
+
+        foreach (var (cx, cy) in speckCentres)
+        {
+            for (var dy = 0; dy <= 1; dy++)
+            {
+                var yy = cy + dy;
+                if (yy < 0 || yy >= accessor.Height) continue;
+                var row = accessor.GetRowSpan(yy);
+                for (var dx = 0; dx <= 1; dx++)
+                {
+                    var xx = cx + dx;
+                    if (xx >= 0 && xx < row.Length) row[xx] = speck;
+                }
+            }
+        }
+    });
+
+    using var output = new MemoryStream();
+    image.Save(output, new SixLabors.ImageSharp.Formats.Png.PngEncoder());
+    return output.ToArray();
+}
+
 static byte[] TiltedRectanglePng(int width, int height, int rectWidth, int rectHeight, double tiltDegrees)
 {
     using var image = new Image<Rgba32>(width, height);
@@ -3244,6 +3685,179 @@ static Outfit CreateOutfitWithItems(params OutfitItem[] items)
         null,
         null,
         DateTimeOffset.UtcNow);
+}
+
+static void TestGarmentAutoTaggerContractsExist()
+{
+    AssertTrue(typeof(IGarmentAutoTagger).IsInterface, "application should expose a garment auto-tagger port.");
+    AssertTrue(typeof(IGarmentCutoutFactory).IsInterface, "application should expose a garment cutout factory port.");
+    AssertTrue(typeof(HttpGarmentAutoTagger).GetInterfaces().Contains(typeof(IGarmentAutoTagger)), "http adapter should implement the auto-tagger port.");
+    AssertTrue(typeof(DisabledGarmentAutoTagger).GetInterfaces().Contains(typeof(IGarmentAutoTagger)), "disabled adapter should implement the auto-tagger port.");
+    AssertTrue(typeof(AutoGarmentAutoTagger).GetInterfaces().Contains(typeof(IGarmentAutoTagger)), "auto adapter should implement the auto-tagger port.");
+    AssertTrue(typeof(GarmentCutoutFactory).GetInterfaces().Contains(typeof(IGarmentCutoutFactory)), "cutout factory adapter should implement the factory port.");
+    AssertTrue(
+        typeof(GarmentAutoTagService).GetConstructors().Any(constructor => constructor.GetParameters().Any(parameter => parameter.ParameterType == typeof(IGarmentAutoTagger))),
+        "auto-tag service should accept a configured tagger.");
+}
+
+static void TestHttpGarmentAutoTaggerParsesClassification()
+{
+    var handler = new RecordingHttpProviderHandler();
+    handler.EnqueueJson(
+        HttpStatusCode.OK,
+        "{\"provider\":\"fashionclip\",\"category\":{\"value\":\"Dress\",\"confidence\":0.72},\"colors\":[{\"name\":\"navy\",\"hex\":\"#1f2a44\",\"confidence\":0.6}],\"seasons\":[{\"value\":\"summer\",\"confidence\":0.4}],\"tags\":[{\"value\":\"casual\",\"confidence\":0.33}]}");
+    var tagger = new HttpGarmentAutoTagger(
+        new HttpClient(handler),
+        new HttpGarmentAutoTaggerSettings("http://127.0.0.1:7100/classify", TimeSpan.FromSeconds(10)));
+
+    var result = tagger.Classify(new GarmentAutoTagRequest("cutout.png", "image/png", MinimalPngBytes(), new[] { "work", "favorite" }));
+
+    AssertTrue(result.IsAvailable, "http tagger should report availability on success.");
+    AssertTrue(result.Category == GarmentCategory.Dress, "http tagger should map the category label to the enum.");
+    AssertTrue(Math.Abs(result.CategoryConfidence - 0.72) < 1e-6, "http tagger should carry the category confidence.");
+    AssertEqual(1, result.Colors.Count, "http tagger should map colors.");
+    AssertEqual("navy", result.Colors[0].Name, "http tagger should map the color name.");
+    AssertEqual("#1f2a44", result.Colors[0].Hex, "http tagger should map the color hex.");
+    AssertEqual(1, result.Seasons.Count, "http tagger should map seasons.");
+    AssertEqual("summer", result.Seasons[0].Value, "http tagger should map the season value.");
+    AssertEqual(1, result.Tags.Count, "http tagger should map tags.");
+    AssertEqual("casual", result.Tags[0].Value, "http tagger should map the tag value.");
+    AssertEqual("/classify", handler.Requests[0].Path, "http tagger should post to the classify endpoint.");
+    AssertEqual(HttpMethod.Post, handler.Requests[0].Method, "http tagger should POST the image.");
+    AssertTrue(handler.Requests[0].Body.Contains("known_tags", StringComparison.Ordinal), "http tagger should send known tags as multipart fields.");
+    AssertTrue(handler.Requests[0].Body.Contains("work", StringComparison.Ordinal), "http tagger should include the user's known tag values.");
+    AssertTrue(handler.Requests[0].Body.Contains("cutout.png", StringComparison.Ordinal), "http tagger should send the image file part.");
+}
+
+static void TestHttpGarmentAutoTaggerMapsUnknownCategoryToNull()
+{
+    var handler = new RecordingHttpProviderHandler();
+    handler.EnqueueJson(
+        HttpStatusCode.OK,
+        "{\"provider\":\"fashionclip\",\"category\":{\"value\":\"Hat\",\"confidence\":0.9},\"colors\":[],\"seasons\":[],\"tags\":[]}");
+    var tagger = new HttpGarmentAutoTagger(
+        new HttpClient(handler),
+        new HttpGarmentAutoTaggerSettings("http://127.0.0.1:7100/classify", TimeSpan.FromSeconds(10)));
+
+    var result = tagger.Classify(new GarmentAutoTagRequest("cutout.png", "image/png", MinimalPngBytes(), Array.Empty<string>()));
+
+    AssertTrue(result.Category is null, "http tagger should drop a category outside the current enum (e.g. the retired Hat).");
+    AssertTrue(result.IsAvailable, "an empty-but-successful classification is still available.");
+}
+
+static void TestHttpGarmentAutoTaggerThrowsOnErrorStatus()
+{
+    var handler = new RecordingHttpProviderHandler();
+    handler.EnqueueJson(HttpStatusCode.InternalServerError, "{\"detail\":\"boom\"}");
+    var tagger = new HttpGarmentAutoTagger(
+        new HttpClient(handler),
+        new HttpGarmentAutoTaggerSettings("http://127.0.0.1:7100/classify", TimeSpan.FromSeconds(10)));
+
+    AssertThrows<InvalidOperationException>(
+        () => tagger.Classify(new GarmentAutoTagRequest("cutout.png", "image/png", MinimalPngBytes(), Array.Empty<string>())),
+        "http tagger should surface provider errors (the Auto wrapper and service catch them).");
+}
+
+static void TestDisabledGarmentAutoTaggerReturnsEmpty()
+{
+    var result = new DisabledGarmentAutoTagger().Classify(new GarmentAutoTagRequest("cutout.png", "image/png", MinimalPngBytes(), Array.Empty<string>()));
+
+    AssertFalse(result.IsAvailable, "disabled tagger should report unavailable.");
+    AssertTrue(result.Category is null, "disabled tagger should suggest no category.");
+    AssertEqual(0, result.Colors.Count, "disabled tagger should suggest no colors.");
+    AssertEqual(0, result.Seasons.Count, "disabled tagger should suggest no seasons.");
+    AssertEqual(0, result.Tags.Count, "disabled tagger should suggest no tags.");
+}
+
+static void TestAutoGarmentAutoTaggerRoutesByHealth()
+{
+    var suggestion = new GarmentAutoTagResult(
+        GarmentCategory.Top,
+        0.9,
+        Array.Empty<AutoTagColorSuggestion>(),
+        Array.Empty<AutoTagSuggestion>(),
+        Array.Empty<AutoTagSuggestion>(),
+        "recording-autotag");
+    var request = new GarmentAutoTagRequest("cutout.png", "image/png", MinimalPngBytes(), Array.Empty<string>());
+
+    var healthyTagger = new AutoGarmentAutoTagger(new RecordingGarmentAutoTagger(suggestion), new DisabledGarmentAutoTagger(), () => true);
+    var unhealthyPreferred = new RecordingGarmentAutoTagger(suggestion);
+    var unhealthyTagger = new AutoGarmentAutoTagger(unhealthyPreferred, new DisabledGarmentAutoTagger(), () => false);
+    var throwingTagger = new AutoGarmentAutoTagger(new RecordingGarmentAutoTagger(throwOnClassify: true), new DisabledGarmentAutoTagger(), () => true);
+
+    var healthy = healthyTagger.Classify(request);
+    var unhealthy = unhealthyTagger.Classify(request);
+    var recovered = throwingTagger.Classify(request);
+
+    AssertTrue(healthy.Category == GarmentCategory.Top, "auto tagger should use the service when healthy.");
+    AssertFalse(unhealthy.IsAvailable, "auto tagger should degrade to no-op when the service is unhealthy.");
+    AssertEqual(0, unhealthyPreferred.Calls, "auto tagger should not call the service when it is unhealthy.");
+    AssertFalse(recovered.IsAvailable, "auto tagger should degrade to no-op when the service throws mid-flight.");
+}
+
+static void TestGarmentAutoTagServiceResolvesCleanCutout()
+{
+    var cutoutBytes = new byte[] { 1, 2, 3 };
+    var originalBytes = new byte[] { 9, 9 };
+    var producedBytes = new byte[] { 4, 5, 6, 7 };
+    var suggestion = new GarmentAutoTagResult(
+        GarmentCategory.Dress,
+        0.8,
+        Array.Empty<AutoTagColorSuggestion>(),
+        Array.Empty<AutoTagSuggestion>(),
+        Array.Empty<AutoTagSuggestion>(),
+        "recording-autotag");
+
+    // Case A: an existing cutout is classified directly; the factory is never used.
+    var taggerA = new RecordingGarmentAutoTagger(suggestion);
+    var readerA = new StubGarmentImageReader(cutout: cutoutBytes, original: originalBytes);
+    var factoryA = new StubGarmentCutoutFactory(producedBytes);
+    var resultA = new GarmentAutoTagService(taggerA, readerA, readerA, factoryA).Classify("/api/storage/signed/garments/x.png?sig=1", new[] { "work" });
+    AssertTrue(resultA.Category == GarmentCategory.Dress, "service should return the tagger suggestions when a cutout exists.");
+    AssertTrue(ReferenceEquals(taggerA.LastRequest?.ImageBytes, cutoutBytes), "service should classify the existing cutout bytes.");
+    AssertEqual(0, factoryA.Calls, "service should not generate a cutout when one already exists.");
+    AssertEqual("work", taggerA.LastRequest?.KnownTags.Single(), "service should forward known tags to the tagger.");
+
+    // Case B: no cutout yet -> generate one from the stored original.
+    var taggerB = new RecordingGarmentAutoTagger(suggestion);
+    var readerB = new StubGarmentImageReader(cutout: null, original: originalBytes);
+    var factoryB = new StubGarmentCutoutFactory(producedBytes);
+    var resultB = new GarmentAutoTagService(taggerB, readerB, readerB, factoryB).Classify("/x.png", Array.Empty<string>());
+    AssertEqual(1, factoryB.Calls, "service should generate a cutout from the original when none exists.");
+    AssertTrue(ReferenceEquals(factoryB.LastInput, originalBytes), "service should feed the stored original to the cutout factory.");
+    AssertTrue(ReferenceEquals(taggerB.LastRequest?.ImageBytes, producedBytes), "service should classify the freshly generated cutout.");
+    AssertTrue(resultB.IsAvailable, "service should return the tagger result on success.");
+
+    // Case C: neither cutout nor original -> empty result, tagger never called.
+    var taggerC = new RecordingGarmentAutoTagger(suggestion);
+    var readerC = new StubGarmentImageReader(cutout: null, original: null);
+    var resultC = new GarmentAutoTagService(taggerC, readerC, readerC, new StubGarmentCutoutFactory(null)).Classify("/x.png", Array.Empty<string>());
+    AssertFalse(resultC.IsAvailable, "service should return an unavailable result when the image cannot be resolved.");
+    AssertEqual(0, taggerC.Calls, "service should not call the tagger when there is no image.");
+
+    // Case D: tagger throws -> service swallows into an empty result (never throws).
+    var taggerD = new RecordingGarmentAutoTagger(throwOnClassify: true);
+    var readerD = new StubGarmentImageReader(cutout: cutoutBytes, original: originalBytes);
+    var resultD = new GarmentAutoTagService(taggerD, readerD, readerD, new StubGarmentCutoutFactory(producedBytes)).Classify("/x.png", Array.Empty<string>());
+    AssertFalse(resultD.IsAvailable, "service should never throw; a tagger failure yields an empty result.");
+
+    // Case E: cutout generation fails -> fall back to the raw original.
+    var taggerE = new RecordingGarmentAutoTagger(suggestion);
+    var readerE = new StubGarmentImageReader(cutout: null, original: originalBytes);
+    new GarmentAutoTagService(taggerE, readerE, readerE, new StubGarmentCutoutFactory(null)).Classify("/x.png", Array.Empty<string>());
+    AssertTrue(ReferenceEquals(taggerE.LastRequest?.ImageBytes, originalBytes), "service should fall back to the original when a cutout cannot be produced.");
+}
+
+static void TestApiWiresAutoTaggingClassifyEndpoint()
+{
+    var program = File.ReadAllText(Path.Combine("outfit_planner_back", "src", "OutfitPlanner.Api", "Program.cs"));
+
+    AssertTrue(program.Contains("configuration[\"AutoTagging:Provider\"] ?? \"Auto\"", StringComparison.Ordinal), "API should default auto-tagging provider to auto.");
+    AssertTrue(program.Contains("\"auto\" => new AutoGarmentAutoTagger", StringComparison.Ordinal), "API should wire the auto garment auto-tagger.");
+    AssertTrue(program.Contains("/uploads/garment-photo/classify", StringComparison.Ordinal), "API should expose the garment classify endpoint.");
+    AssertTrue(program.Contains("AutoTagging:HttpServer:Endpoint", StringComparison.Ordinal), "API should read the auto-tagging endpoint configuration.");
+    AssertTrue(program.Contains("http://127.0.0.1:7100/classify", StringComparison.Ordinal), "API should default the auto-tagging endpoint to the local service.");
+    AssertTrue(program.Contains("AddSingleton<GarmentAutoTagService>", StringComparison.Ordinal), "API should register the auto-tag service.");
 }
 
 static void AssertEqual<T>(T expected, T actual, string message)
@@ -3398,6 +4012,73 @@ sealed class RecordingHttpProviderHandler : HttpMessageHandler
 }
 
 sealed record RecordedHttpProviderRequest(HttpMethod Method, string Path, AuthenticationHeaderValue? Authorization, string Body);
+
+sealed class RecordingGarmentAutoTagger : IGarmentAutoTagger
+{
+    private readonly GarmentAutoTagResult? _result;
+    private readonly bool _throw;
+
+    public RecordingGarmentAutoTagger(GarmentAutoTagResult? result = null, bool throwOnClassify = false)
+    {
+        _result = result;
+        _throw = throwOnClassify;
+    }
+
+    public string Name => "recording-autotag";
+
+    public int Calls { get; private set; }
+
+    public GarmentAutoTagRequest? LastRequest { get; private set; }
+
+    public GarmentAutoTagResult Classify(GarmentAutoTagRequest request)
+    {
+        Calls++;
+        LastRequest = request;
+        if (_throw)
+        {
+            throw new InvalidOperationException("tagger failure");
+        }
+
+        return _result ?? GarmentAutoTagResult.Empty(Name);
+    }
+}
+
+sealed class StubGarmentImageReader : IGarmentCutoutImageReader, IGarmentOriginalImageReader
+{
+    private readonly byte[]? _cutout;
+    private readonly byte[]? _original;
+
+    public StubGarmentImageReader(byte[]? cutout, byte[]? original)
+    {
+        _cutout = cutout;
+        _original = original;
+    }
+
+    public byte[]? ReadGarmentCutoutImageBytes(string garmentImageUrl) => _cutout;
+
+    public byte[]? ReadGarmentOriginalImageBytes(string garmentImageUrl) => _original;
+}
+
+sealed class StubGarmentCutoutFactory : IGarmentCutoutFactory
+{
+    private readonly byte[]? _cutout;
+
+    public StubGarmentCutoutFactory(byte[]? cutout)
+    {
+        _cutout = cutout;
+    }
+
+    public int Calls { get; private set; }
+
+    public byte[]? LastInput { get; private set; }
+
+    public byte[]? CreateCutout(byte[] originalImageBytes)
+    {
+        Calls++;
+        LastInput = originalImageBytes;
+        return _cutout;
+    }
+}
 
 sealed class CountingTryOnProvider : ITryOnProvider
 {
@@ -3577,6 +4258,31 @@ sealed class RecordingBackgroundRemovalHandler : HttpMessageHandler
                 }
             }
         };
+    }
+}
+
+sealed class StubHairstylePresetCatalog : IHairstylePresetCatalog
+{
+    private readonly IReadOnlyList<HairstylePreset> _presets;
+
+    public StubHairstylePresetCatalog(params HairstylePreset[] presets)
+    {
+        _presets = presets;
+    }
+
+    public IReadOnlyList<HairstylePreset> ListHairstylePresets(UserGender gender)
+    {
+        return _presets.Where(preset => preset.Gender == gender).ToList();
+    }
+
+    public HairstylePreset? FindHairstylePreset(string presetId)
+    {
+        return _presets.FirstOrDefault(preset => string.Equals(preset.Id, presetId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public StoredPhotoFile? GetHairstyleAssetFile(string assetFileName)
+    {
+        return null;
     }
 }
 

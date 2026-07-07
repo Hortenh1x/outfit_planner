@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FocusEvent as ReactFocusEvent, PointerEvent as ReactPointerEvent } from 'react';
-import { AlertTriangle, Loader2, Pencil, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, Pencil, Trash2 } from 'lucide-react';
 import type { GarmentItem } from '../../types';
 
 interface GarmentCardProps {
   garment: GarmentItem;
   needsBetterPhoto?: boolean;
   pendingAction?: string;
+  /** When set, a top-right checkmark toggles the garment in the quick-build selection. */
+  selected?: boolean;
+  onToggleSelect?: (garment: GarmentItem) => void;
+  /** When set, tapping the photo opens the enlarged preview. */
+  onEnlarge?: (garment: GarmentItem) => void;
   onDelete: (garment: GarmentItem) => void;
   onEdit: (garment: GarmentItem) => void;
 }
@@ -20,10 +25,21 @@ const MOVE_CANCEL_PX = 10;
  * actions remain in the accessibility tree at all times (hidden with opacity, not display), so
  * screen readers and keyboards can always reach them.
  */
-export function GarmentCard({ garment, needsBetterPhoto = false, pendingAction, onDelete, onEdit }: GarmentCardProps) {
+export function GarmentCard({
+  garment,
+  needsBetterPhoto = false,
+  pendingAction,
+  selected = false,
+  onToggleSelect,
+  onEnlarge,
+  onDelete,
+  onEdit
+}: GarmentCardProps) {
   const disabled = Boolean(pendingAction);
   const cardRef = useRef<HTMLElement>(null);
   const longPress = useRef<{ timer: number; x: number; y: number } | null>(null);
+  // A completed long-press reveals edit/delete on touch; it must not also fire the enlarge tap.
+  const longPressTriggered = useRef(false);
   const [revealed, setRevealed] = useState(false);
 
   function cancelLongPress() {
@@ -37,8 +53,12 @@ export function GarmentCard({ garment, needsBetterPhoto = false, pendingAction, 
     if (event.pointerType !== 'touch' || disabled) {
       return;
     }
+    longPressTriggered.current = false;
     const { clientX: x, clientY: y } = event;
-    const timer = window.setTimeout(() => setRevealed(true), LONG_PRESS_MS);
+    const timer = window.setTimeout(() => {
+      longPressTriggered.current = true;
+      setRevealed(true);
+    }, LONG_PRESS_MS);
     longPress.current = { timer, x, y };
   }
 
@@ -106,7 +126,40 @@ export function GarmentCard({ garment, needsBetterPhoto = false, pendingAction, 
       onBlur={handleBlur}
     >
       <div className="wardrobe-card-image">
-        <img src={garment.thumbnailUrl || garment.imageUrl} alt={garment.name} />
+        {onEnlarge ? (
+          <button
+            type="button"
+            className="wardrobe-card-enlarge"
+            aria-label={`Enlarge ${garment.name}`}
+            disabled={disabled}
+            onClick={() => {
+              if (longPressTriggered.current) {
+                return;
+              }
+              onEnlarge(garment);
+            }}
+          >
+            <img src={garment.thumbnailUrl || garment.imageUrl} alt={garment.name} />
+          </button>
+        ) : (
+          <img src={garment.thumbnailUrl || garment.imageUrl} alt={garment.name} />
+        )}
+        {onToggleSelect ? (
+          <button
+            type="button"
+            className="wardrobe-card-select"
+            aria-pressed={selected}
+            aria-label={selected ? `Deselect ${garment.name}` : `Select ${garment.name} for an outfit`}
+            disabled={disabled}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleSelect(garment);
+            }}
+          >
+            <Check size={16} aria-hidden="true" />
+          </button>
+        ) : null}
         {isRemovingBackground ? (
           <div className="wardrobe-card-removing" role="status" aria-label={`Removing background for ${garment.name}`}>
             <Loader2 size={16} className="upload-queue-spinner" aria-hidden="true" />

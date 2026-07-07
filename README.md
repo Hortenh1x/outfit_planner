@@ -12,14 +12,17 @@ The app is intentionally small, but it has a real backend/frontend split, signed
 - Wardrobe uses an editorial Obra/Crimson-inspired interface for catalog search, filters, edit, archive, bulk upload, drag-and-drop upload, mobile camera capture, clean photo guidance, local tag suggestions, and photo quality warnings. Garment cards show the photo only; Edit and Delete are revealed on hover, keyboard focus, or touch press-and-hold.
 - Private body reference photo uploads for try-on generation.
 - Outfit builder with slot compatibility rules instead of one-garment-per-category rules.
+- Composed-figure clothes-only Builder: a neutral gendered SVG silhouette wears the outfit fitted onto fixed body zones (garments anchored to the shoulder/waist/feet body lines and sized from their measured cutout so they sit on the body and layer correctly); every category is pickable from the Wardrobe pieces list, with top/bottom/shoes additionally cyclable directly on the figure (touch swipe + desktop arrows), and the composition (with the silhouette gender) is saved with the outfit so saved-outfit cards and the shared view render the exact same figure. (Hairstyle presets exist behind the scenes but are currently hidden from the product.)
 - Clothes-only and generated person preview modes.
 - Calendar planning with one outfit per user and day.
 - Share links for saved outfits.
 - Secure account registration and sign-in with email/password.
 - Google OAuth and Apple OIDC sign-in when provider credentials are configured.
 - Revocable server-side sessions with HttpOnly cookies, CSRF protection, rate-limited auth endpoints, email verification/password reset token storage, and session revoke-all support.
+- Free, Premium, and Admin account roles as the paywall foundation (roles gate no product features yet; [`PAYWALL_MODEL.md`](PAYWALL_MODEL.md) is the paywall proposal), with two email-pinned accounts whose roles can never change, and an admin panel that lists, inspects, and manages all users and their data.
 - Privacy endpoints for account export/delete, body photo deletion, and AI output purging.
 - Configurable garment background removal for uploaded item cutouts, with simple local fallback, `rembg`, and HTTP/API provider adapters.
+- Optional local garment auto-tagging that prefills category, colors, seasons, and tags on upload (FashionCLIP + k-means colors), with soft degradation when the service is off and user edits that are never overwritten.
 - Background AI try-on jobs with a Redis-backed queue in Docker and an in-memory queue fallback for local development.
 - Mock AI try-on by default, optional FASHN `tryon-max`, local VTON/CatVTON, Replicate, and Fal provider adapters.
 - Installable PWA shell with manifest metadata, static shell caching, offline fallback, and responsive mobile bottom navigation.
@@ -88,7 +91,7 @@ Photo uploads are private by default:
 
 - Uploads are validated server-side by image magic bytes, then decoded, auto-oriented, stripped of metadata, resized/compressed, and stored as object variants.
 - Garment uploads store original, thumbnail, processed cutout, optional segmentation mask, and perceptual hash. The upload response exposes variant URLs, and new wardrobe items use the processed cutout as their primary image.
-- Garment cutouts are trimmed to their alpha bounding box and measured (`cutoutWidthPx`/`cutoutHeightPx`, persisted in `garment_items` and exposed on the garment DTO and upload response). The absolute pixels depend on the shot, but height/width is invariant to shooting distance, so the frontend `computeRelativeSize` utility (`src/features/outfits/relativeSize.ts`) renders garments at per-category canonical relative sizes: Top/Bottom/Dress/Outerwear normalize by width (display height expresses garment length), Shoes/Bag/Accessory fit a fixed box by their larger side. Measurement refreshes on rotation re-render and async background removal; a startup `GarmentCutoutMeasurementBackfillWorker` measures existing garments best-effort (cutout variant first, then original).
+- Garment cutouts are trimmed to their garment's main connected opaque region and measured (`cutoutWidthPx`/`cutoutHeightPx`, persisted in `garment_items` and exposed on the garment DTO and upload response), so leftover background grain in a corner cannot inflate the measured garment while the whole garment is always kept. The absolute pixels depend on the shot, but height/width is invariant to shooting distance, so the frontend `computeRelativeSize` utility (`src/features/outfits/relativeSize.ts`) renders garments at per-category canonical relative sizes: Top/Bottom/Dress/Outerwear normalize by width (display height expresses garment length), Shoes/Bag/Accessory fit a fixed box by their larger side. Measurement refreshes on rotation re-render and async background removal; a startup `GarmentCutoutMeasurementBackfillWorker` measures existing garments best-effort (cutout variant first, then original).
 - Global hairstyle presets replace hat garments: `GET /api/hairstyles` lists presets filtered by the account's gender (empty until gender is set), and `GET /api/hairstyles/assets/{fileName}` serves the SVG assets anonymously. The presets live in `outfit_planner_back/assets/hairstyles` with `manifest.json` as the source of truth (only manifest-listed files are served). Assets are vendored from Open Peeps by Pablo Stanley (CC0 1.0, via the `@dicebear/open-peeps` npm package), curated to ~10 male and ~10 female styles in a single hair color, excluding afro variants and head-wear variants. Migration 009 deletes legacy Hat garments and rebuilds the category constraints.
 - Garment cutouts use `BackgroundRemoval__Provider`; the default `Auto` provider uses local `rembg` when the executable is available and otherwise falls back to the dependency-free `Simple` provider. `Rembg` can be selected explicitly for one CLI process per upload, `RembgServer` targets a long-running local `rembg s` server, and `Http`/provider aliases call an API that returns a transparent image. Garment extraction currently assumes one clothing item per upload through a single-item provider boundary; multi-item detection/separation is intentionally not active yet.
 - Body reference uploads store original, thumbnail, blurred private preview, and perceptual hash. Account avatars store private original and thumbnail variants. Public `/uploads/body-reference-photos/{fileName}` access is disabled; clients receive signed object URLs.
@@ -112,6 +115,7 @@ Authentication is cookie-backed:
 - Session cookie `outfit_session` is HttpOnly, SameSite=Lax, and Secure outside development.
 - CSRF cookie `outfit_csrf` is readable by the frontend and must be echoed as `X-CSRF-Token` on mutating authenticated API requests.
 - Account settings persist `username`, optional signed avatar URL, and `gender` (`Male` or `Female`) on the backend. AI try-on modes are unavailable until the authenticated user has selected a gender; clothes-only preview remains available.
+- Every account has a role (`Free` by default, `Premium`, or `Admin`) exposed as `role` on the session user. The effective role pins `dmytro.bolibok@gmail.com` to `Admin` and `olya.shaydur@gmail.com` to `Premium` by normalized email (configurable through `Roles__PinnedAdminEmails`/`Roles__PinnedPremiumEmails`; blank config keeps these defaults), and sign-in converges the stored role in every storage backend. Admins see the `/admin` panel; `/api/admin/*` routes return `403` for other roles, and pinned accounts can be neither re-roled nor deleted there.
 - Google and Apple sign-in start from backend challenge endpoints and complete through backend callbacks. If the external account is new, the API creates it automatically. If the provider returns a verified email that already exists, the external login is linked to that user.
 - All private `/api` routes require a valid session. `/api/health`, `/api/system/status`, `/api/auth/*`, `/api/storage/signed/*`, and `/api/share/{token}` remain public; signed storage access is protected by URL signature and expiry.
 
@@ -122,8 +126,9 @@ The frontend uses an editorial fashion/product visual system across authenticate
 - The canonical light palette and typography come from `design_references/light_theme` Crimson Plinth tokens; `design_references/dark_theme` is the dark orientation, with the same pink primary actions preserved in dark mode.
 - Wardrobe filtering should use category tabs as the single category control, keep search in the compact top control row, and expose existing tags through a writable tag combobox. On mobile, creation/planning rails come before browsing content, while the authenticated account shell sits below page content.
 - Wardrobe garment cards are image-only: the photo fills the card, and Edit and Delete are revealed only on hover (desktop), keyboard focus, or press-and-hold (touch), while functional status badges (background removing/failed, needs-better-photo) overlay the photo. The like and duplicate card actions and the Favorites filter were removed; the tag system (filters, editor, upload chips) is unchanged.
+- Wardrobe quick-build: each minimized card has a top-right selection checkmark and opens the full photo enlarged on tap (view-only dialog, closes on backdrop/close/Esc). Picking is at most one garment per category; a floating build bar appears while pieces are selected and carries the set into the Builder clothes-only screen through router state. The Builder wears the picked pieces (a picked dress is worn while the picked top/bottom are remembered), and any unpicked base Top/Bottom/Shoes fall back to the first item of their category, while Dress/Outerwear/Bag/Accessory join only when explicitly picked.
 - The Wardrobe upload queue removes backgrounds as soon as photos are selected (not on submit): each row processes in the background with a limited concurrency, shows the transparent cutout when ready, and submit only creates garments from the already-processed result. Upload-queue tags are edited as interactive chips — click a chip to rename it, hover/focus to reveal a trash delete, and add tags from the trailing input — replacing the old comma-separated tags field.
-- Builder controls prioritize body references and try-on generation before the save-outfit block. Selected saved outfits can be edited, deleted, or regenerated, and the latest generated try-on preview can be removed from the active outfit.
+- Builder controls prioritize body references and try-on generation before the save-outfit block. A generated try-on preview is saved onto the outfit by default and shown on its saved-outfit card; a metadata-only save (rename, tags, favorite) keeps it, and only changing the worn garments clears it. Clicking a saved-outfit card enlarges it in a view-only dialog (the generated preview, or the composed figure when there is none) with an `Open in builder` action; from there the selected outfit can be edited, deleted, or regenerated, and the latest generated try-on preview can be removed from the active outfit.
 - Calendar mobile layout puts Plan day before the calendar grid, selected current-day numbers must stay high-contrast, and planned outfits can be reassigned or removed from a date.
 - Do not extend the removed claymorphism system; lavender canvases, animated blobs, oversized rounded panels, recessed controls, convex purple gradients, and multi-layer neumorphic shadows are no longer part of the active frontend language.
 - Frontend composition is split across `outfit_planner_front/src/app`, route pages under `src/routes`, feature components under `src/features`, and reusable UI under `src/shared/ui`. `src/App.tsx` remains a compatibility export.
@@ -145,15 +150,14 @@ dotnet dev-certs https --trust
 dotnet dev-certs https -ep .aspnet\https\outfit-planner-dev.pfx -p outfit-dev-cert
 ```
 
-Development containers with hot reload:
+Local dev stack with `rembg` background removal:
 
 ```powershell
-docker compose -f docker-compose.dev.yml up --build
+docker compose -f docker-compose.dev.yml -f docker-compose.rembg.dev.yml up -d
 ```
 
-Development containers with self-host add-ons (real AI background removal via `rembg`, plus
-FASHN/Google/Apple credentials wired from `.env`) — this is also the command that runs the
-publicly-hosted dev stack behind a Cloudflare Tunnel, see [`DEPLOY-CLOUDFLARE.md`](DEPLOY-CLOUDFLARE.md):
+Publicly-hosted dev stack with `rembg` (adds real AI background removal plus FASHN/Google/Apple
+credentials wired from `.env`, behind a Cloudflare Tunnel, see [`DEPLOY-CLOUDFLARE.md`](DEPLOY-CLOUDFLARE.md)):
 
 ```powershell
 docker compose -f docker-compose.dev.yml -f docker-compose.selfhost.override.yml up -d
@@ -168,83 +172,11 @@ Open:
 - MinIO API: `http://localhost:9000`
 - MinIO console: `http://localhost:9001`
 
-Production-style containers:
+## Google/Apple OAuth Setup
 
-Place production TLS files at `.secrets/tls/fullchain.pem` and `.secrets/tls/privkey.pem`, then run:
+Google and Apple sign-in are enabled only when their provider credentials are configured (see the Configuration table). The browser-facing origin is `https://localhost:5173`.
 
-```powershell
-docker compose up --build
-```
-
-The production compose file builds the API and static frontend images. Only nginx publishes host ports `80` and `443`; it redirects HTTP to HTTPS, serves the React app, and proxies API/upload requests to the API container over the internal Docker network. PostgreSQL, Redis, MinIO, and the API do not publish host ports in the production compose file.
-
-## Local Backend Development
-
-Run the API with in-memory storage:
-
-```powershell
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
-```
-
-The default `launchSettings.json` profile runs the API at `https://localhost:5001`.
-
-For local OAuth testing, keep the default HTTPS URL and set the public origin if needed:
-
-```powershell
-$env:Authentication__PublicOrigin = "https://localhost:5173"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
-```
-
-Run PostgreSQL and MinIO only:
-
-```powershell
-docker compose -f docker-compose.dev.yml up -d postgres redis minio
-```
-
-Run the API against the compose PostgreSQL service:
-
-```powershell
-$env:ConnectionStrings__Postgres = "Host=localhost;Port=5433;Database=outfit_planner;Username=outfit;Password=outfit;GSS Encryption Mode=Disable"
-$env:ConnectionStrings__Redis = "localhost:6379"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
-```
-
-For PostgreSQL plus local OAuth testing, use the same connection strings; the API still runs at `https://localhost:5001` by default.
-
-The API writes uploaded files below its content root:
-
-```text
-outfit_planner_back/src/OutfitPlanner.Api/storage/
-```
-
-This folder is local runtime state and should not be committed.
-
-## Local Frontend Development
-
-Install dependencies:
-
-```powershell
-cd outfit_planner_front
-npm ci
-```
-
-Run Vite:
-
-```powershell
-npm run dev
-```
-
-Open `https://localhost:5173`. During Vite development, the browser calls `/api` and `/uploads`; Vite proxies those requests to `https://localhost:5001` unless `VITE_DEV_API_TARGET` is set.
-
-Run Vite over HTTP only when you explicitly need it:
-
-```powershell
-npm run dev:http
-```
-
-Stop any existing Vite process on port `5173` before switching modes. On the first HTTPS run, approve the Windows certificate prompt from `mkcert`; this installs a local development CA so the browser can trust `https://localhost:5173`.
-
-Open `https://localhost:5173`. The HTTPS dev server uses a local development certificate through `vite-plugin-mkcert` and forwards the browser-facing HTTPS scheme and host to the API. In Google Cloud Console, add this exact Authorized JavaScript origin for local development:
+In Google Cloud Console, add this exact Authorized JavaScript origin:
 
 ```text
 https://localhost:5173
@@ -257,21 +189,6 @@ https://localhost:5173/api/auth/external/google/callback
 ```
 
 The provider callback path is only for Google/Apple to return to the API. After the provider callback succeeds, the API redirects internally to `/api/auth/external/{provider}/complete` to issue app cookies and then returns to the requested app route.
-
-To target a different local API:
-
-```powershell
-$env:VITE_DEV_API_TARGET = "https://localhost:5001"
-npm run dev
-```
-
-Generate frontend API types from the backend OpenAPI document:
-
-```powershell
-npm run generate:api
-```
-
-`npm test` and `npm run build` run this generation step first. Generated OpenAPI and TypeScript schema files are local build artifacts and are not committed.
 
 ## Configuration
 
@@ -303,6 +220,12 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `BackgroundRemoval__Http__ApiKeyPrefix` | empty | Prefix prepended to the API key header value. `CloudflareImages` defaults to `Bearer `. |
 | `BackgroundRemoval__Http__ImageFieldName` | `image_file` | Multipart field name for the uploaded image. |
 | `BackgroundRemoval__Http__TimeoutSeconds` | `120` | HTTP background-removal timeout. |
+| `AutoTagging__Provider` | `Auto` | Use `Auto`, `Disabled`, or `HttpServer` for garment metadata prefill. `Auto` uses the local auto-tag service when its `/health` endpoint is reachable and otherwise disables prefill; `Disabled` turns suggestions off; unknown values disable. |
+| `AutoTagging__HttpServer__Endpoint` | `http://127.0.0.1:7100/classify` | Local auto-tag service classify endpoint. |
+| `AutoTagging__HttpServer__HealthEndpoint` | derived from Endpoint | Health-probe URL used by `Auto` routing; defaults to the Endpoint origin's `/health`. |
+| `AutoTagging__HttpServer__TimeoutSeconds` | `60` | HTTP timeout for a classification request. |
+| `AutoTagging__HttpServer__HealthCacheSeconds` | `15` | How long a health-probe result is cached before re-checking. |
+| `AutoTagging__HttpServer__HealthTimeoutSeconds` | `3` | HTTP timeout for the health probe. |
 | `TryOn__Provider` | `Mock` | Use `Mock`, `Fashn`, `CompositeFashn`, `LocalVton`, `LocalCatVton`, `SelfHostedCatVton`, `GeneralImageEdit`, `Replicate`, or `Fal`. Unknown values use the mock provider. |
 | `Fashn__ApiKey` | empty | Required before the FASHN provider makes network calls. |
 | `Fashn__BaseUrl` | `https://api.fashn.ai/v1/` | FASHN API base URL. |
@@ -339,6 +262,8 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `Authentication__Google__ClientSecret` | empty | Google OAuth client secret. |
 | `Authentication__Apple__ClientId` | empty | Enables Apple OIDC when paired with `Authentication__Apple__ClientSecret`. |
 | `Authentication__Apple__ClientSecret` | empty | Apple OIDC client secret JWT generated from Apple developer credentials. |
+| `Roles__PinnedAdminEmails` | `dmytro.bolibok@gmail.com` | Comma-separated emails whose accounts are always `Admin`. Blank keeps the default pin. |
+| `Roles__PinnedPremiumEmails` | `olya.shaydur@gmail.com` | Comma-separated emails whose accounts are always `Premium`. Blank keeps the default pin. |
 
 Frontend configuration:
 
@@ -355,61 +280,44 @@ Garment photo uploads always create original, thumbnail, processed cutout, and s
 
 The extraction layer currently assumes exactly one garment per upload. `SingleGarmentExtractionProvider` is a placeholder boundary around background removal so a future detector can return multiple candidates without changing the lower-level image variant pipeline.
 
-Local `rembg` with the recommended long-running server:
-
-```powershell
-python tools\rembg_server.py --host 127.0.0.1 --port 7000 --model birefnet-general-lite
-```
-
-The wrapper prints the ONNX Runtime path, providers, and device before starting `rembg s`; for GPU execution, providers must include `CUDAExecutionProvider` and the device should be `GPU`. It also sends one prewarm request for the selected model, so the slow model load happens at server startup instead of the first garment upload. You can still run `rembg.exe s --host 127.0.0.1 --port 7000 --no-ui` directly, but the wrapper is easier to diagnose on Windows because it preloads CUDA/cuDNN DLLs installed through pip packages.
-
-Run the API in another PowerShell session:
-
-```powershell
-$env:BackgroundRemoval__Provider = "RembgServer"
-$env:BackgroundRemoval__RembgServer__Endpoint = "http://127.0.0.1:7000/api/remove"
-$env:BackgroundRemoval__RembgServer__ModelName = "birefnet-general-lite"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
-```
-
-The older CLI-per-upload path still works, but it starts Python and loads the model for every garment upload:
-
-```powershell
-# Install rembg separately so the `rembg` executable is available in PATH.
-# With BackgroundRemoval__Provider unset, Auto will use rembg when `where rembg` succeeds.
-$env:BackgroundRemoval__Rembg__ExecutablePath = "rembg"
-$env:BackgroundRemoval__Rembg__ModelName = "birefnet-general"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
-```
-
-If the full model is too slow on CPU, use:
-
-```powershell
-$env:BackgroundRemoval__Rembg__ModelName = "birefnet-general-lite"
-```
-
-Production HTTP provider:
-
-```powershell
-$env:BackgroundRemoval__Provider = "Http"
-$env:BackgroundRemoval__Http__Endpoint = "https://background-removal.example.com/remove"
-$env:BackgroundRemoval__Http__ApiKey = "YOUR_API_KEY"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
-```
+The dev stacks above run `rembg` as a container and point the API at it through `BackgroundRemoval__Provider=RembgServer` (see `docker-compose.rembg.dev.yml` and `docker-compose.selfhost.override.yml`), so no separate `rembg` process is needed. All `BackgroundRemoval__*` settings — including the `Http`/API providers for production — are listed in the Configuration table.
 
 `CloudflareImages`, `PhotoRoom`, `RemoveBg`, and `Clipdrop` are HTTP aliases with provider-specific config sections such as `BackgroundRemoval__CloudflareImages__Endpoint`. For the cheapest Cloudflare path, point `CloudflareImages` at a small Worker/API endpoint that accepts multipart field `image_file`, uses Cloudflare image foreground segmentation, and returns transparent image bytes.
+
+## Garment Auto-Tagging
+
+Uploaded garment photos can be auto-classified into prefill suggestions — category, dominant colors, seasons, and tags — so the wardrobe upload queue fills metadata for you. Suggestions are hints only: you can always override them, and any field you edit is frozen and never overwritten (the per-field freeze generalizes the existing tag freeze).
+
+Classification runs on a separate, local Python service and is orchestrated by the frontend after each row's photo is processed (concurrency-limited, and aborted if the row is removed), mirroring the eager background-removal flow. It never blocks the upload endpoints. The backend `POST /api/uploads/garment-photo/classify` endpoint reads the already-uploaded photo, prefers an existing transparent cutout (generating one from the original when none exists yet), and forwards a clean cutout to the service. Everything runs locally; images are never sent to an external API.
+
+### Models and licenses
+
+- **Category + tags:** [FashionCLIP](https://huggingface.co/patrickjohncyh/fashion-clip) (`patrickjohncyh/fashion-clip`, **MIT**) — a CLIP ViT-B/32 fine-tuned on ~800K fashion products, used zero-shot. Base checkpoint [`laion/CLIP-ViT-B-32-laion2B-s34B-b79K`](https://huggingface.co/laion/CLIP-ViT-B-32-laion2B-s34B-b79K) (**MIT**). Downloaded once from Hugging Face on first run (~600 MB).
+- **Colors:** no ML — k-means (scikit-learn) over the garment's non-transparent pixels, mapped to the nearest named color.
+- **Seasons:** a soft category heuristic (low confidence).
+
+Fields below their confidence threshold are omitted, so weak guesses are never pushed. The retired `Hat` category is not classified, and hairstyle presets are not garments and are never auto-tagged.
+
+### Running the service
+
+Use a virtual environment (required on PEP 668 systems such as Arch and recent Debian/Ubuntu). Install `torch` separately for your CUDA build (GPU is used automatically when available, otherwise CPU), then the rest of the dependencies:
+
+```bash
+python -m venv .venv-autotag && source .venv-autotag/bin/activate
+pip install torch --index-url https://download.pytorch.org/whl/cu124   # match your CUDA; omit the index for a CPU build
+pip install -r tools/requirements-autotag.txt
+python tools/autotag_server.py --host 127.0.0.1 --port 7100
+```
+
+On Arch you can instead reuse a system-installed `python-pytorch-cuda` by creating the venv with `--system-site-packages`.
+
+Then run the API with the default `AutoTagging__Provider=Auto`. If the service is not running, `Auto` finds its `/health` endpoint unreachable and disables prefill: uploads behave exactly as before with manual metadata entry, and no errors surface. Set `AutoTagging__Provider=Disabled` to turn prefill off explicitly, or `HttpServer` to always target the service. Backend tests mock the tagger, so the model is not required to run them.
 
 ## Optional Try-On Providers
 
 The backend uses the mock try-on provider by default. The mock returns deterministic demo output and does not spend real provider credits. Paid, uncached provider work runs from the hosted background worker after `POST /api/outfits/{outfitId}/try-on` has returned an accepted job resource.
 
-Enable the FASHN scaffold:
-
-```powershell
-$env:TryOn__Provider = "Fashn"
-$env:Fashn__ApiKey = "YOUR_FASHN_API_KEY"
-dotnet run --project outfit_planner_back\src\OutfitPlanner.Api\OutfitPlanner.Api.csproj
-```
+The FASHN scaffold is enabled by setting `TryOn__Provider=Fashn` and `Fashn__ApiKey`; the publicly-hosted dev stack wires these plus the other `Fashn__*` options from `.env` (all keys are in the Configuration table).
 
 The Builder asks the API for a try-on cost estimate before generation. The API classifies `Top`, `Bottom`, `Dress`, and `Outerwear` as body try-on items; `Shoes`, `Bag`, and `Accessory` are visual-only and are excluded from normal AI modes. Hairstyle presets are not garments and never reach try-on providers. AI try-on estimates and starts are blocked until the current account has `gender` set.
 
@@ -422,15 +330,7 @@ Try-on modes:
 
 Generation requests must echo the server-estimated mode, credits, and cache key. The backend recomputes the estimate and rejects stale or mismatched confirmations. Successful generated jobs are cached by body reference, included garment IDs, provider, mode, and provider settings, so repeat requests can reuse existing outputs without calling AI.
 
-Local/dev provider adapters can target a local HTTP service:
-
-```powershell
-$env:TryOn__Provider = "LocalVton"
-$env:TryOn__LocalVton__BaseUrl = "http://localhost:7860/"
-$env:TryOn__LocalVton__Endpoint = "/try-on"
-```
-
-`LocalCatVton`, `SelfHostedCatVton`, `CompositeFashn`, `GeneralImageEdit`, `Replicate`, and `Fal` use the same JSON adapter shape. API-key-backed adapters require their matching `TryOn__...__ApiKey` setting.
+Local/dev provider adapters (`LocalVton`, `LocalCatVton`, `SelfHostedCatVton`, `CompositeFashn`, `GeneralImageEdit`, `Replicate`, and `Fal`) target an HTTP service through their `TryOn__...__BaseUrl`/`Endpoint` settings and share the same JSON adapter shape. API-key-backed adapters require their matching `TryOn__...__ApiKey` setting (see the Configuration table).
 
 ## API Overview
 
@@ -460,6 +360,14 @@ Private routes require the `outfit_session` cookie. Mutating private routes also
 | `PATCH` | `/account/profile` | Update account `username` and `gender`. |
 | `POST` | `/account/avatar` | Upload and persist the current account avatar through private signed object storage. |
 | `DELETE` | `/account` | Delete the current account and clear auth cookies. |
+| `GET` | `/admin/stats` | Admin-only totals for users, garments, outfits, and try-on jobs. |
+| `GET` | `/admin/users?q=&role=&offset=&limit=` | Admin-only paged/searchable user list with per-user data counts. |
+| `GET` | `/admin/users/{userId}` | Admin-only single user view. |
+| `PUT` | `/admin/users/{userId}/role` | Admin-only role change. Pinned accounts and your own account are rejected with `409`. |
+| `POST` | `/admin/users/{userId}/sessions/revoke` | Admin-only revocation of all sessions of a user. |
+| `POST` | `/admin/users/{userId}/purge-ai-outputs` | Admin-only purge of a user's AI outputs. |
+| `GET` | `/admin/users/{userId}/export` | Admin-only export of a user's data with a sanitized account record. |
+| `DELETE` | `/admin/users/{userId}` | Admin-only account deletion (pinned accounts and self are rejected with `409`). |
 | `GET` | `/body-reference-photos` | List body reference photos for the current user. |
 | `POST` | `/body-reference-photos` | Register an already uploaded body reference photo URL. |
 | `DELETE` | `/body-reference-photos/{photoId}` | Delete a body reference photo and its stored file when local. |
@@ -532,6 +440,7 @@ curl.exe -k https://localhost:5001/api/health
 ## Current Boundaries
 
 - Google and Apple auth require provider credentials. Email/password auth works without external secrets.
+- Account roles exist as the paywall foundation but gate no product features yet; the paywall itself (credits, caps, billing) is only a proposal in [`PAYWALL_MODEL.md`](PAYWALL_MODEL.md).
 - Password registration requires at least 8 characters, at least one letter, and at least one digit.
 - Uploaded files default to local object storage; S3-compatible MinIO can be enabled with object storage configuration.
 - PostgreSQL schema changes are applied through DbUp migrations at startup.

@@ -39,7 +39,8 @@ public sealed class InMemoryOutfitStore :
     IOutfitScheduleRepository,
     ITryOnJobRepository,
     IShareLinkRepository,
-    IUserAccountRepository
+    IUserAccountRepository,
+    IAdminUserRepository
 {
     private readonly object _lock = new();
     private readonly Dictionary<string, UserAccount> _users = new(StringComparer.Ordinal);
@@ -509,6 +510,73 @@ public sealed class InMemoryOutfitStore :
         {
             return _users.Values.FirstOrDefault(user => string.Equals(user.NormalizedEmail, normalizedEmail, StringComparison.OrdinalIgnoreCase));
         }
+    }
+
+    public IReadOnlyList<AdminUserRecord> ListUsers(AdminUserQuery query, DateTimeOffset now)
+    {
+        lock (_lock)
+        {
+            return FilterUsers(query)
+                .OrderByDescending(user => user.CreatedAt)
+                .ThenBy(user => user.Id, StringComparer.Ordinal)
+                .Skip(query.Offset)
+                .Take(query.Limit)
+                .Select(user => BuildAdminUserRecord(user, now))
+                .ToList();
+        }
+    }
+
+    public int CountUsers(AdminUserQuery query)
+    {
+        lock (_lock)
+        {
+            return FilterUsers(query).Count();
+        }
+    }
+
+    public AdminUserRecord? GetUserRecord(string userId, DateTimeOffset now)
+    {
+        lock (_lock)
+        {
+            return _users.TryGetValue(userId, out var user) ? BuildAdminUserRecord(user, now) : null;
+        }
+    }
+
+    public AdminUserStats GetStats()
+    {
+        lock (_lock)
+        {
+            return new AdminUserStats(_users.Count, _garments.Count, _outfits.Count, _tryOnJobs.Count);
+        }
+    }
+
+    private IEnumerable<UserAccount> FilterUsers(AdminUserQuery query)
+    {
+        var users = _users.Values.AsEnumerable();
+        if (query.Search is { } search)
+        {
+            users = users.Where(user =>
+                (user.Email?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false)
+                || user.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (query.Role is { } role)
+        {
+            users = users.Where(user => user.Role == role);
+        }
+
+        return users;
+    }
+
+    private AdminUserRecord BuildAdminUserRecord(UserAccount user, DateTimeOffset now)
+    {
+        return new AdminUserRecord(
+            user,
+            _garments.Values.Count(item => item.UserId == user.Id),
+            _outfits.Values.Count(item => item.UserId == user.Id),
+            _tryOnJobs.Values.Count(item => item.UserId == user.Id),
+            _bodyPhotos.Values.Count(item => item.UserId == user.Id),
+            _authSessions.Values.Count(session => session.UserId == user.Id && session.RevokedAt is null && session.ExpiresAt > now));
     }
 
     public void AddExternalLogin(ExternalAuthLogin login)

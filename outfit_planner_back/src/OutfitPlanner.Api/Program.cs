@@ -4,6 +4,7 @@ using OutfitPlanner.Api;
 using OutfitPlanner.Api.Authentication;
 using OutfitPlanner.Api.Contracts;
 using OutfitPlanner.Domain;
+using OutfitPlanner.Infrastructure.AutoTagging;
 using OutfitPlanner.Infrastructure.Diagnostics;
 using OutfitPlanner.Infrastructure.Security;
 using OutfitPlanner.Infrastructure.Storage;
@@ -31,6 +32,7 @@ const string SessionCookieName = "outfit_session";
 const string CsrfCookieName = "outfit_csrf";
 const string ExternalAuthCookieScheme = "outfit_external";
 const string CurrentUserItemKey = "outfit.current_user_id";
+const string CurrentUserRoleItemKey = "outfit.current_user_role";
 const string CsrfHeaderName = "X-CSRF-Token";
 
 LoadDotEnvConfigurationAliases(builder.Configuration, builder.Environment.ContentRootPath, args);
@@ -152,6 +154,9 @@ builder.Services.AddSingleton<IClock, OutfitPlanner.Infrastructure.Security.Syst
 builder.Services.AddSingleton<IShareTokenGenerator, SecureShareTokenGenerator>();
 builder.Services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
 builder.Services.AddSingleton<IAuthTokenService, SecureAuthTokenService>();
+// Role pins ("always admin/premium" accounts) resolve by normalized email at read time; the
+// defaults apply when the Roles__Pinned*Emails settings are unset.
+builder.Services.AddSingleton(new RolePinningPolicy(LoadRolePinningOptions(builder.Configuration)));
 var authenticationBuilder = builder.Services.AddAuthentication();
 var externalAuthPublicOrigin = NormalizePublicOrigin(builder.Configuration["Authentication:PublicOrigin"]);
 var publicOrigin = NormalizePublicOrigin(builder.Configuration["PublicOrigin"]) ?? externalAuthPublicOrigin;
@@ -251,6 +256,7 @@ builder.Services.AddHttpClient("composite-fashn");
 builder.Services.AddHttpClient("self-hosted-catvton");
 builder.Services.AddHttpClient("general-image-edit");
 builder.Services.AddHttpClient("background-removal");
+builder.Services.AddHttpClient("auto-tagging");
 builder.Services.AddHttpClient("try-on-output-storage");
 builder.Services.AddSingleton<ITryOnProvider>(provider => CreateTryOnProvider(provider, builder.Configuration));
 var redisConnectionString = builder.Configuration["ConnectionStrings:Redis"] ?? builder.Configuration.GetConnectionString("Redis");
@@ -305,6 +311,11 @@ builder.Services.AddSingleton<IGarmentImageRotator>(provider => provider.GetRequ
 builder.Services.AddSingleton<IGarmentOriginalImageReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IGarmentCutoutImageReader>(provider => provider.GetRequiredService<LocalPhotoStorage>());
 builder.Services.AddSingleton<IGarmentBackgroundRemover>(provider => provider.GetRequiredService<LocalPhotoStorage>());
+// Garment auto-tagging (prefill suggestions). Cutout factory reuses the existing extraction
+// pipeline; the tagger is provider-selected and degrades to no-op when the local service is off.
+builder.Services.AddSingleton<IGarmentCutoutFactory>(provider => new GarmentCutoutFactory(provider.GetRequiredService<IGarmentExtractionProvider>()));
+builder.Services.AddSingleton<IGarmentAutoTagger>(provider => CreateGarmentAutoTagger(provider, builder.Configuration));
+builder.Services.AddSingleton<GarmentAutoTagService>();
 builder.Services.AddSingleton<IBackgroundRemovalJobRepository, OutfitPlanner.Infrastructure.BackgroundRemoval.InMemoryBackgroundRemovalJobRepository>();
 builder.Services.AddSingleton<IBackgroundRemovalJobProcessor, BackgroundRemovalJobProcessor>();
 // Global hairstyle presets vendored under assets/hairstyles (copied to the output directory at
@@ -332,6 +343,7 @@ if (storageProvider == "Postgres")
     builder.Services.AddSingleton<ITryOnJobRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
     builder.Services.AddSingleton<IShareLinkRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
     builder.Services.AddSingleton<IUserAccountRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
+    builder.Services.AddSingleton<IAdminUserRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
 }
 else
 {
@@ -343,6 +355,7 @@ else
     builder.Services.AddSingleton<ITryOnJobRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
     builder.Services.AddSingleton<IShareLinkRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
     builder.Services.AddSingleton<IUserAccountRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
+    builder.Services.AddSingleton<IAdminUserRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
 }
 builder.Services.AddSingleton<WardrobeService>();
 builder.Services.AddSingleton<PhotoUploadService>();
@@ -352,6 +365,7 @@ builder.Services.AddSingleton<TryOnCostEstimator>();
 builder.Services.AddSingleton<TryOnService>();
 builder.Services.AddSingleton<ShareService>();
 builder.Services.AddSingleton<AuthService>();
+builder.Services.AddSingleton<AdminService>();
 builder.Services.AddSingleton<PostgresConnectionProbe>();
 builder.Services.AddHostedService<TryOnBackgroundWorker>();
 builder.Services.AddHostedService<GarmentPerceptualHashBackfillWorker>();
@@ -463,6 +477,7 @@ app.Use(async (context, next) =>
     }
 
     context.Items[CurrentUserItemKey] = session.User.Id;
+    context.Items[CurrentUserRoleItemKey] = session.User.Role;
     await next(context);
 });
 
@@ -474,7 +489,7 @@ if (app.Environment.IsDevelopment() || app.Environment.IsEnvironment("Test"))
 
 api.MapGet("/health", () => Results.Ok(new { status = "ok", service = "outfit-planner-api" }));
 
-api.MapGet("/system/status", async (PostgresConnectionProbe postgres, IBackgroundRemovalProvider backgroundRemoval, CancellationToken cancellationToken) =>
+api.MapGet("/system/status", async (PostgresConnectionProbe postgres, IBackgroundRemovalProvider backgroundRemoval, IGarmentAutoTagger autoTagger, CancellationToken cancellationToken) =>
 {
     var postgresStatus = await postgres.CheckAsync(cancellationToken);
     return Results.Ok(new
@@ -484,7 +499,9 @@ api.MapGet("/system/status", async (PostgresConnectionProbe postgres, IBackgroun
         postgres = postgresStatus,
         aiProvider = builder.Configuration["TryOn:Provider"] ?? "Mock",
         backgroundRemovalProvider = backgroundRemoval.Name,
-        backgroundRemovalConfiguredProvider = builder.Configuration["BackgroundRemoval:Provider"] ?? "Auto"
+        backgroundRemovalConfiguredProvider = builder.Configuration["BackgroundRemoval:Provider"] ?? "Auto",
+        autoTaggingProvider = autoTagger.Name,
+        autoTaggingConfiguredProvider = builder.Configuration["AutoTagging:Provider"] ?? "Auto"
     });
 });
 
@@ -771,42 +788,192 @@ api.MapDelete("/account", (
     HttpContext context) =>
 {
     var userId = CurrentUser(context);
-
-    // Best-effort: erase the user's stored binaries before the cascade removes the rows that hold
-    // their object keys. A storage failure must not block account deletion (right to erasure).
-    try
-    {
-        tryOn.PurgeAiOutputs(userId);
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "Account deletion: failed to purge AI outputs for the deleted account.");
-    }
-
-    try
-    {
-        wardrobe.PurgeUserStoredPhotos(userId);
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "Account deletion: failed to purge stored garment/body photos for the deleted account.");
-    }
-
-    try
-    {
-        if (users.GetUserById(userId)?.AvatarObjectKey is { } avatarObjectKey)
-        {
-            photoDeletion.DeleteAvatarPhoto(avatarObjectKey);
-        }
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "Account deletion: failed to purge the stored avatar for the deleted account.");
-    }
-
+    PurgeAccountData(userId, users, wardrobe, tryOn, photoDeletion, logger);
     var deleted = users.DeleteUserById(userId);
     ClearAuthCookies(context, app.Environment);
     return deleted ? Results.NoContent() : Results.NotFound();
+});
+
+// Admin panel endpoints. Session middleware has already authenticated the caller; every
+// handler additionally requires the effective Admin role resolved for this request.
+api.MapGet("/admin/stats", (AdminService admin, HttpContext context) =>
+{
+    if (RequireAdmin(context) is { } forbidden)
+    {
+        return forbidden;
+    }
+
+    var stats = admin.Stats();
+    return Results.Ok(new AdminStatsResponse(stats.TotalUsers, stats.TotalGarments, stats.TotalOutfits, stats.TotalTryOnJobs));
+})
+    .Produces<AdminStatsResponse>(StatusCodes.Status200OK);
+
+api.MapGet("/admin/users", (
+    string? q,
+    UserRole? role,
+    int? offset,
+    int? limit,
+    AdminService admin,
+    IStoredPhotoUrlRefresher photoUrls,
+    HttpContext context) =>
+{
+    if (RequireAdmin(context) is { } forbidden)
+    {
+        return forbidden;
+    }
+
+    var page = admin.ListUsers(q, role, offset ?? 0, limit ?? AdminService.DefaultPageSize);
+    return Results.Ok(new AdminUsersPageResponse(
+        page.Items.Select(record => ToAdminUserResponse(record, admin, photoUrls, context.Request)).ToArray(),
+        page.TotalCount,
+        page.Offset,
+        page.Limit));
+})
+    .Produces<AdminUsersPageResponse>(StatusCodes.Status200OK);
+
+api.MapGet("/admin/users/{userId}", (string userId, AdminService admin, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
+{
+    if (RequireAdmin(context) is { } forbidden)
+    {
+        return forbidden;
+    }
+
+    var record = admin.GetUser(userId);
+    return record is null
+        ? Results.NotFound()
+        : Results.Ok(ToAdminUserResponse(record, admin, photoUrls, context.Request));
+})
+    .Produces<AdminUserResponse>(StatusCodes.Status200OK);
+
+api.MapPut("/admin/users/{userId}/role", (
+    string userId,
+    UpdateUserRoleRequest request,
+    AdminService admin,
+    IStoredPhotoUrlRefresher photoUrls,
+    HttpContext context) =>
+{
+    if (RequireAdmin(context) is { } forbidden)
+    {
+        return forbidden;
+    }
+
+    try
+    {
+        var record = admin.ChangeRole(CurrentUser(context), userId, request.Role);
+        return record is null
+            ? Results.NotFound()
+            : Results.Ok(ToAdminUserResponse(record, admin, photoUrls, context.Request));
+    }
+    catch (ValidationException ex)
+    {
+        // Pinned targets and self-changes are business conflicts, not malformed input.
+        return Results.Conflict(new { error = ex.Message });
+    }
+})
+    .Produces<AdminUserResponse>(StatusCodes.Status200OK);
+
+api.MapPost("/admin/users/{userId}/sessions/revoke", (
+    string userId,
+    IUserAccountRepository users,
+    IClock clock,
+    HttpContext context) =>
+{
+    if (RequireAdmin(context) is { } forbidden)
+    {
+        return forbidden;
+    }
+
+    if (users.GetUserById(userId) is null)
+    {
+        return Results.NotFound();
+    }
+
+    users.RevokeAuthSessionsByUser(userId, clock.UtcNow);
+    return Results.Ok(new { status = "sessions-revoked" });
+});
+
+api.MapPost("/admin/users/{userId}/purge-ai-outputs", (
+    string userId,
+    IUserAccountRepository users,
+    TryOnService tryOn,
+    HttpContext context) =>
+{
+    if (RequireAdmin(context) is { } forbidden)
+    {
+        return forbidden;
+    }
+
+    if (users.GetUserById(userId) is null)
+    {
+        return Results.NotFound();
+    }
+
+    return Results.Ok(new { purged = tryOn.PurgeAiOutputs(userId) });
+});
+
+api.MapGet("/admin/users/{userId}/export", (
+    string userId,
+    AdminService admin,
+    IGarmentRepository garments,
+    IOutfitRepository outfits,
+    IBodyReferencePhotoRepository bodyPhotos,
+    ITryOnJobRepository tryOnJobs,
+    IStoredPhotoUrlRefresher photoUrls,
+    HttpContext context) =>
+{
+    if (RequireAdmin(context) is { } forbidden)
+    {
+        return forbidden;
+    }
+
+    var record = admin.GetUser(userId);
+    if (record is null)
+    {
+        return Results.NotFound();
+    }
+
+    // Same shape as the self-service /account/export, but the account record is the sanitized
+    // admin DTO (no password hash / avatar object key).
+    return Results.Ok(new
+    {
+        user = ToAdminUserResponse(record, admin, photoUrls, context.Request),
+        garments = garments.ListGarmentsByUser(userId),
+        outfits = outfits.ListOutfitsByUser(userId),
+        bodyReferencePhotos = bodyPhotos.ListBodyReferencePhotosByUser(userId),
+        tryOnJobs = tryOnJobs.ListTryOnJobsByUser(userId)
+    });
+});
+
+api.MapDelete("/admin/users/{userId}", (
+    string userId,
+    AdminService admin,
+    IUserAccountRepository users,
+    WardrobeService wardrobe,
+    TryOnService tryOn,
+    IStoredPhotoDeletion photoDeletion,
+    ILogger<Program> logger,
+    HttpContext context) =>
+{
+    if (RequireAdmin(context) is { } forbidden)
+    {
+        return forbidden;
+    }
+
+    try
+    {
+        var target = admin.RequireDeletableUser(CurrentUser(context), userId);
+        if (target is null)
+        {
+            return Results.NotFound();
+        }
+
+        PurgeAccountData(target.Id, users, wardrobe, tryOn, photoDeletion, logger);
+        return users.DeleteUserById(target.Id) ? Results.NoContent() : Results.NotFound();
+    }
+    catch (ValidationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
 });
 
 api.MapPost("/body-reference-photos", (CreateBodyReferencePhotoRequest request, WardrobeService wardrobe, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
@@ -884,6 +1051,34 @@ api.MapPost("/uploads/garment-original", async (HttpRequest request, PhotoUpload
 {
     return await UploadPhoto(request, logger, "garment", cancellationToken, photo => photos.UploadGarmentOriginal(photo));
 });
+
+// Auto-tag suggestions for a freshly uploaded garment photo. Client-orchestrated after the
+// row's cutout/original is ready (concurrency-limited + abortable, like eager removal). Does
+// NOT block the upload endpoints. Always returns 200: an unavailable/disabled tagger yields
+// IsAvailable=false with empty suggestions, so prefill silently no-ops and manual entry works.
+api.MapPost("/uploads/garment-photo/classify", (ClassifyGarmentPhotoRequest request, GarmentAutoTagService autoTagger, ILogger<Program> logger, HttpContext context) =>
+{
+    if (string.IsNullOrWhiteSpace(request.ImageUrl))
+    {
+        return Results.BadRequest(new { error = "imageUrl is required." });
+    }
+
+    var result = autoTagger.Classify(request.ImageUrl, request.KnownTags ?? Array.Empty<string>());
+    if (!result.IsAvailable)
+    {
+        logger.LogDebug("Auto-tagging unavailable for trace {TraceId} (provider {Provider}).", context.TraceIdentifier, result.ProviderName);
+    }
+
+    return Results.Ok(new GarmentAutoTagResponse(
+        result.IsAvailable,
+        result.ProviderName,
+        result.Category,
+        result.CategoryConfidence,
+        result.Colors.Select(color => new AutoTagColorResponse(color.Name, color.Hex, color.Confidence)).ToArray(),
+        result.Seasons.Select(season => new AutoTagSuggestionResponse(season.Value, season.Confidence)).ToArray(),
+        result.Tags.Select(tag => new AutoTagSuggestionResponse(tag.Value, tag.Confidence)).ToArray()));
+})
+    .Produces<GarmentAutoTagResponse>(StatusCodes.Status200OK);
 
 api.MapPost("/uploads/body-reference-photo", async (HttpRequest request, PhotoUploadService photos, ILogger<Program> logger, CancellationToken cancellationToken) =>
 {
@@ -994,6 +1189,7 @@ api.MapGet("/hairstyles/assets/{fileName}", (string fileName, IHairstylePresetCa
 api.MapGet("/outfits", (
     OutfitService outfits,
     IStoredPhotoUrlRefresher photoUrls,
+    IHairstylePresetCatalog hairstyles,
     HttpContext context,
     string? q,
     string? occasion,
@@ -1003,24 +1199,30 @@ api.MapGet("/outfits", (
     int? offset,
     int? limit) =>
     Results.Ok(outfits.ListOutfits(CurrentUser(context), new OutfitQuery(q, occasion, favorite, archived, sort, offset, limit))
-        .Select(outfit => ToOutfitResponse(outfit, photoUrls, context.Request))
+        .Select(outfit => ToOutfitResponse(outfit, photoUrls, hairstyles, context.Request))
         .ToArray()))
     .Produces<IReadOnlyList<Outfit>>(StatusCodes.Status200OK);
 
-api.MapGet("/outfits/{outfitId:guid}", (Guid outfitId, OutfitService outfits, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
+api.MapGet("/outfits/{outfitId:guid}", (Guid outfitId, OutfitService outfits, IStoredPhotoUrlRefresher photoUrls, IHairstylePresetCatalog hairstyles, HttpContext context) =>
 {
     var outfit = outfits.GetOutfit(CurrentUser(context), outfitId);
-    return outfit is null ? Results.NotFound() : Results.Ok(ToOutfitResponse(outfit, photoUrls, context.Request));
+    return outfit is null ? Results.NotFound() : Results.Ok(ToOutfitResponse(outfit, photoUrls, hairstyles, context.Request));
 })
     .Produces<Outfit>(StatusCodes.Status200OK)
     .Produces(StatusCodes.Status404NotFound);
 
-api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
+api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, IStoredPhotoUrlRefresher photoUrls, IHairstylePresetCatalog hairstyles, HttpContext context) =>
 {
     try
     {
-        var outfit = outfits.CreateOutfit(CurrentUser(context), request.Name, request.GarmentIds);
-        return Results.Created($"/api/outfits/{outfit.Id}", ToOutfitResponse(outfit, photoUrls, context.Request));
+        var outfit = outfits.CreateOutfit(
+            CurrentUser(context),
+            request.Name,
+            request.GarmentIds,
+            request.HairstylePresetId,
+            request.HairstyleVisible ?? true,
+            request.SilhouetteGender);
+        return Results.Created($"/api/outfits/{outfit.Id}", ToOutfitResponse(outfit, photoUrls, hairstyles, context.Request));
     }
     catch (ValidationException ex)
     {
@@ -1029,7 +1231,7 @@ api.MapPost("/outfits", (CreateOutfitRequest request, OutfitService outfits, ISt
 })
     .Produces<Outfit>(StatusCodes.Status201Created);
 
-api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest request, OutfitService outfits, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
+api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest request, OutfitService outfits, IStoredPhotoUrlRefresher photoUrls, IHairstylePresetCatalog hairstyles, HttpContext context) =>
 {
     try
     {
@@ -1039,8 +1241,11 @@ api.MapPatch("/outfits/{outfitId:guid}", (Guid outfitId, UpdateOutfitRequest req
             request.Tags,
             request.Occasion,
             request.IsFavorite,
-            request.IsArchived));
-        return outfit is null ? Results.NotFound() : Results.Ok(ToOutfitResponse(outfit, photoUrls, context.Request));
+            request.IsArchived,
+            request.HairstylePresetId,
+            request.HairstyleVisible,
+            request.SilhouetteGender));
+        return outfit is null ? Results.NotFound() : Results.Ok(ToOutfitResponse(outfit, photoUrls, hairstyles, context.Request));
     }
     catch (ValidationException ex)
     {
@@ -1178,10 +1383,10 @@ api.MapPost("/outfits/{outfitId:guid}/share", (Guid outfitId, ShareService share
 })
     .Produces<ShareLinkResponse>(StatusCodes.Status200OK);
 
-api.MapGet("/share/{token}", (string token, ShareService share, IStoredPhotoUrlRefresher photoUrls, HttpContext context) =>
+api.MapGet("/share/{token}", (string token, ShareService share, IStoredPhotoUrlRefresher photoUrls, IHairstylePresetCatalog hairstyles, HttpContext context) =>
 {
     var outfit = share.GetSharedOutfit(token);
-    var responseOutfit = outfit is null ? null : ToOutfitResponse(outfit, photoUrls, context.Request);
+    var responseOutfit = outfit is null ? null : ToOutfitResponse(outfit, photoUrls, hairstyles, context.Request);
     return outfit is null
         ? Results.NotFound()
         : Results.Ok(new SharedOutfitResponse(
@@ -1194,7 +1399,11 @@ api.MapGet("/share/{token}", (string token, ShareService share, IStoredPhotoUrlR
             responseOutfit.IsArchived,
             responseOutfit.ClothesOnlyPreviewUrl,
             responseOutfit.PersonPreviewUrl,
-            responseOutfit.CreatedAt));
+            responseOutfit.CreatedAt,
+            responseOutfit.HairstylePresetId,
+            responseOutfit.HairstyleVisible,
+            responseOutfit.SilhouetteGender,
+            responseOutfit.HairstyleAssetUrl));
 })
     .Produces<SharedOutfitResponse>(StatusCodes.Status200OK)
     .Produces(StatusCodes.Status404NotFound);
@@ -1339,14 +1548,28 @@ static GarmentItem ToGarmentResponse(GarmentItem garment, IStoredPhotoUrlRefresh
     };
 }
 
-static Outfit ToOutfitResponse(Outfit outfit, IStoredPhotoUrlRefresher photoUrls, HttpRequest request)
+static Outfit ToOutfitResponse(Outfit outfit, IStoredPhotoUrlRefresher photoUrls, IHairstylePresetCatalog hairstyles, HttpRequest request)
 {
     return outfit with
     {
         Items = outfit.Items
             .Select(item => ToOutfitItemResponse(item, photoUrls, request))
-            .ToArray()
+            .ToArray(),
+        HairstyleAssetUrl = ResolveHairstyleAssetUrl(outfit.HairstylePresetId, hairstyles, request)
     };
+}
+
+// Resolves the worn preset's public asset URL so cards and the anonymous shared view can render
+// the hairstyle without calling the (authenticated) preset listing.
+static string? ResolveHairstyleAssetUrl(string? hairstylePresetId, IHairstylePresetCatalog hairstyles, HttpRequest request)
+{
+    if (string.IsNullOrWhiteSpace(hairstylePresetId) || hairstyles.FindHairstylePreset(hairstylePresetId) is not { } preset)
+    {
+        return null;
+    }
+
+    var assetPath = $"/api/hairstyles/assets/{Uri.EscapeDataString(preset.AssetFileName)}";
+    return PublicUploadUrl(request, assetPath) ?? assetPath;
 }
 
 static OutfitItem ToOutfitItemResponse(OutfitItem item, IStoredPhotoUrlRefresher photoUrls, HttpRequest request)
@@ -1535,6 +1758,78 @@ static RembgBackgroundRemovalProvider CreateRembgBackgroundRemovalProvider(IConf
             BackgroundRemovalOptionalSetting(configuration, "Rembg", "ModelHome")));
 }
 
+// Garment auto-tagging provider selection, mirroring background removal. Default "Auto" uses
+// the local Python service when its /health endpoint is reachable and otherwise degrades to a
+// no-op Disabled tagger, so uploads never depend on the service being up.
+static IGarmentAutoTagger CreateGarmentAutoTagger(IServiceProvider provider, IConfiguration configuration)
+{
+    var configured = (configuration["AutoTagging:Provider"] ?? "Auto").Trim().ToLowerInvariant();
+    return configured switch
+    {
+        "disabled" or "off" or "none" => new DisabledGarmentAutoTagger(),
+        "httpserver" or "http-server" or "http" or "server" => CreateHttpGarmentAutoTagger(provider, configuration),
+        "auto" => new AutoGarmentAutoTagger(
+            CreateHttpGarmentAutoTagger(provider, configuration),
+            new DisabledGarmentAutoTagger(),
+            CreateAutoTagHealthProbe(provider, configuration).IsHealthy),
+        _ => new DisabledGarmentAutoTagger()
+    };
+}
+
+static HttpGarmentAutoTagger CreateHttpGarmentAutoTagger(IServiceProvider provider, IConfiguration configuration)
+{
+    return new HttpGarmentAutoTagger(
+        provider.GetRequiredService<IHttpClientFactory>().CreateClient("auto-tagging"),
+        new HttpGarmentAutoTaggerSettings(
+            AutoTaggingClassifyEndpoint(configuration),
+            TimeSpan.FromSeconds(AutoTaggingIntSetting(configuration, "TimeoutSeconds", 60))));
+}
+
+static GarmentAutoTagHealthProbe CreateAutoTagHealthProbe(IServiceProvider provider, IConfiguration configuration)
+{
+    var client = provider.GetRequiredService<IHttpClientFactory>().CreateClient("auto-tagging");
+    client.Timeout = TimeSpan.FromSeconds(AutoTaggingIntSetting(configuration, "HealthTimeoutSeconds", 3));
+    return new GarmentAutoTagHealthProbe(
+        client,
+        AutoTaggingHealthEndpoint(configuration),
+        TimeSpan.FromSeconds(AutoTaggingIntSetting(configuration, "HealthCacheSeconds", 15)));
+}
+
+static string AutoTaggingClassifyEndpoint(IConfiguration configuration)
+{
+    return (configuration["AutoTagging:HttpServer:Endpoint"] ?? "http://127.0.0.1:7100/classify").Trim();
+}
+
+static string AutoTaggingHealthEndpoint(IConfiguration configuration)
+{
+    var configured = configuration["AutoTagging:HttpServer:HealthEndpoint"];
+    return string.IsNullOrWhiteSpace(configured)
+        ? DeriveAutoTagHealthEndpoint(AutoTaggingClassifyEndpoint(configuration))
+        : configured.Trim();
+}
+
+static string DeriveAutoTagHealthEndpoint(string classifyEndpoint)
+{
+    if (string.IsNullOrWhiteSpace(classifyEndpoint))
+    {
+        return string.Empty;
+    }
+
+    const string classifySuffix = "/classify";
+    if (classifyEndpoint.EndsWith(classifySuffix, StringComparison.OrdinalIgnoreCase))
+    {
+        return string.Concat(classifyEndpoint.AsSpan(0, classifyEndpoint.Length - classifySuffix.Length), "/health");
+    }
+
+    return Uri.TryCreate(classifyEndpoint, UriKind.Absolute, out var uri) ? new Uri(uri, "/health").ToString() : string.Empty;
+}
+
+static int AutoTaggingIntSetting(IConfiguration configuration, string key, int fallback)
+{
+    var value = configuration[$"AutoTagging:HttpServer:{key}"] ?? configuration[$"AutoTagging:{key}"];
+    return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : fallback;
+}
+
 static bool IsExecutableAvailable(string executablePath)
 {
     if (string.IsNullOrWhiteSpace(executablePath))
@@ -1661,6 +1956,109 @@ static string CurrentUser(HttpContext context)
         : throw new InvalidOperationException("Authenticated user was not resolved for this request.");
 }
 
+static UserRole CurrentUserRole(HttpContext context)
+{
+    return context.Items.TryGetValue(CurrentUserRoleItemKey, out var role) && role is UserRole value
+        ? value
+        : throw new InvalidOperationException("Authenticated user role was not resolved for this request.");
+}
+
+// Null means the caller may proceed; otherwise the 403 result to return as-is.
+static IResult? RequireAdmin(HttpContext context)
+{
+    return CurrentUserRole(context) == UserRole.Admin
+        ? null
+        : Results.Json(new { error = "Admin role is required." }, statusCode: StatusCodes.Status403Forbidden);
+}
+
+static RolePinningOptions LoadRolePinningOptions(IConfiguration configuration)
+{
+    return new RolePinningOptions(
+        SplitPinnedEmails(configuration["Roles:PinnedAdminEmails"], "dmytro.bolibok@gmail.com"),
+        SplitPinnedEmails(configuration["Roles:PinnedPremiumEmails"], "olya.shaydur@gmail.com"));
+
+    // Unset/blank config keeps the built-in pins, so the "always admin/premium" accounts
+    // cannot be silently unpinned by an empty environment variable.
+    static IReadOnlyList<string> SplitPinnedEmails(string? configured, string fallback)
+    {
+        var source = string.IsNullOrWhiteSpace(configured) ? fallback : configured;
+        return source.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+}
+
+// Best-effort: erase the user's stored binaries before the cascade removes the rows that hold
+// their object keys. A storage failure must not block account deletion (right to erasure).
+// Shared by the self-service DELETE /account and the admin panel delete.
+static void PurgeAccountData(
+    string userId,
+    IUserAccountRepository users,
+    WardrobeService wardrobe,
+    TryOnService tryOn,
+    IStoredPhotoDeletion photoDeletion,
+    ILogger logger)
+{
+    try
+    {
+        tryOn.PurgeAiOutputs(userId);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Account deletion: failed to purge AI outputs for the deleted account.");
+    }
+
+    try
+    {
+        wardrobe.PurgeUserStoredPhotos(userId);
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Account deletion: failed to purge stored garment/body photos for the deleted account.");
+    }
+
+    try
+    {
+        if (users.GetUserById(userId)?.AvatarObjectKey is { } avatarObjectKey)
+        {
+            photoDeletion.DeleteAvatarPhoto(avatarObjectKey);
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Account deletion: failed to purge the stored avatar for the deleted account.");
+    }
+}
+
+static AdminUserResponse ToAdminUserResponse(AdminUserRecord record, AdminService admin, IStoredPhotoUrlRefresher? photoUrls = null, HttpRequest? request = null)
+{
+    var user = record.User;
+    var avatarUrl = user.AvatarUrl;
+    if (!string.IsNullOrWhiteSpace(avatarUrl) && photoUrls is not null)
+    {
+        avatarUrl = photoUrls.RefreshAvatarUrl(avatarUrl);
+        if (request is not null)
+        {
+            avatarUrl = PublicUploadUrl(request, avatarUrl) ?? avatarUrl;
+        }
+    }
+
+    return new AdminUserResponse(
+        user.Id,
+        user.Email,
+        user.DisplayName,
+        user.Gender,
+        admin.EffectiveRole(user),
+        admin.IsPinned(user),
+        user.CreatedAt,
+        user.LastLoginAt,
+        user.EmailVerifiedAt,
+        record.GarmentCount,
+        record.OutfitCount,
+        record.TryOnJobCount,
+        record.BodyReferencePhotoCount,
+        record.ActiveSessionCount,
+        avatarUrl);
+}
+
 static TryOnEstimateResponse ToTryOnEstimateResponse(TryOnCostEstimate estimate)
 {
     return new TryOnEstimateResponse(
@@ -1779,7 +2177,7 @@ static AuthUserResponse ToAuthUserResponse(PublicUser user, IStoredPhotoUrlRefre
         }
     }
 
-    return new AuthUserResponse(user.Id, user.Email, user.DisplayName, user.Username, avatarUrl, user.Gender);
+    return new AuthUserResponse(user.Id, user.Email, user.DisplayName, user.Username, avatarUrl, user.Gender, user.Role);
 }
 
 static bool TryNormalizeExternalProvider(string provider, out string normalizedProvider)

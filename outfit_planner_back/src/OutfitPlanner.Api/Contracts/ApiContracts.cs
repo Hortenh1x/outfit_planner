@@ -53,7 +53,13 @@ public sealed record UpdateGarmentRequest(
     string? LaundryStatus,
     double? RotationDegrees = null);
 
-public sealed record CreateOutfitRequest(string Name, IReadOnlyList<Guid> GarmentIds);
+public sealed record CreateOutfitRequest(
+    string Name,
+    IReadOnlyList<Guid> GarmentIds,
+    // Composed-figure state; null keeps legacy behavior (no hairstyle, default silhouette).
+    string? HairstylePresetId = null,
+    bool? HairstyleVisible = null,
+    UserGender? SilhouetteGender = null);
 
 public sealed record UpdateOutfitRequest(
     string? Name,
@@ -61,7 +67,11 @@ public sealed record UpdateOutfitRequest(
     IReadOnlyList<string>? Tags,
     IReadOnlyList<string>? Occasion,
     bool? IsFavorite,
-    bool? IsArchived);
+    bool? IsArchived,
+    // Null leaves the worn hairstyle unchanged; an empty string clears it.
+    string? HairstylePresetId = null,
+    bool? HairstyleVisible = null,
+    UserGender? SilhouetteGender = null);
 
 public sealed record ScheduleOutfitRequest(DateOnly Date, Guid OutfitId);
 
@@ -113,7 +123,12 @@ public sealed record SharedOutfitResponse(
     bool IsArchived,
     string? ClothesOnlyPreviewUrl,
     string? PersonPreviewUrl,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    // Composed-figure state so the shared view reconstructs exactly what the Builder shows.
+    string? HairstylePresetId = null,
+    bool HairstyleVisible = true,
+    UserGender? SilhouetteGender = null,
+    string? HairstyleAssetUrl = null);
 
 public sealed record UploadedPhotoResponse(
     string FileName,
@@ -128,6 +143,25 @@ public sealed record UploadedPhotoResponse(
     // Alpha-bounding-box size of the processed cutout; null on the original-only fast path.
     int? CutoutWidthPx = null,
     int? CutoutHeightPx = null);
+
+// Garment auto-tagging: the client sends the upload-response image URL plus the account's
+// known tags; the server classifies a clean cutout into prefill suggestions. All fields are
+// suggestions the user can override; an unavailable tagger returns IsAvailable=false with
+// empty suggestions and the upload flow is unchanged.
+public sealed record ClassifyGarmentPhotoRequest(string ImageUrl, IReadOnlyList<string>? KnownTags);
+
+public sealed record AutoTagColorResponse(string Name, string Hex, double Confidence);
+
+public sealed record AutoTagSuggestionResponse(string Value, double Confidence);
+
+public sealed record GarmentAutoTagResponse(
+    bool IsAvailable,
+    string Provider,
+    GarmentCategory? Category,
+    double CategoryConfidence,
+    IReadOnlyList<AutoTagColorResponse> Colors,
+    IReadOnlyList<AutoTagSuggestionResponse> Seasons,
+    IReadOnlyList<AutoTagSuggestionResponse> Tags);
 
 public sealed record HairstylePresetResponse(
     string Id,
@@ -156,7 +190,43 @@ public sealed record AuthUserResponse(
     string DisplayName,
     string Username,
     string? AvatarUrl,
-    UserGender? Gender);
+    UserGender? Gender,
+    // Effective role (pinned-by-email overrides applied): the paywall foundation.
+    UserRole Role);
+
+public sealed record UpdateUserRoleRequest(UserRole Role);
+
+// Admin-facing account view. Role is the effective role; RolePinned marks the accounts whose
+// role is pinned by email and cannot be changed or deleted from the panel. Sensitive fields
+// (password hash, avatar object key) are intentionally absent.
+public sealed record AdminUserResponse(
+    string Id,
+    string? Email,
+    string Username,
+    UserGender? Gender,
+    UserRole Role,
+    bool RolePinned,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset? LastLoginAt,
+    DateTimeOffset? EmailVerifiedAt,
+    int GarmentCount,
+    int OutfitCount,
+    int TryOnJobCount,
+    int BodyReferencePhotoCount,
+    int ActiveSessionCount,
+    string? AvatarUrl);
+
+public sealed record AdminUsersPageResponse(
+    IReadOnlyList<AdminUserResponse> Items,
+    int TotalCount,
+    int Offset,
+    int Limit);
+
+public sealed record AdminStatsResponse(
+    int TotalUsers,
+    int TotalGarments,
+    int TotalOutfits,
+    int TotalTryOnJobs);
 
 public sealed record AuthSessionResponse(AuthUserResponse User, DateTimeOffset ExpiresAt);
 

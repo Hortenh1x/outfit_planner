@@ -37,6 +37,13 @@ public sealed class ManifestHairstylePresetCatalog : IHairstylePresetCatalog
             .ToList();
     }
 
+    public HairstylePreset? FindHairstylePreset(string presetId)
+    {
+        return string.IsNullOrWhiteSpace(presetId)
+            ? null
+            : _presets.Value.FirstOrDefault(preset => string.Equals(preset.Id, presetId, StringComparison.OrdinalIgnoreCase));
+    }
+
     public StoredPhotoFile? GetHairstyleAssetFile(string assetFileName)
     {
         if (string.IsNullOrWhiteSpace(assetFileName))

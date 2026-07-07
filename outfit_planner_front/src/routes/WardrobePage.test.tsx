@@ -1,9 +1,15 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WardrobePage } from './WardrobePage';
+
+/** Renders the router state handed to /builder so the quick-build handoff can be asserted. */
+function BuilderStateProbe() {
+  const location = useLocation();
+  return <div data-testid="builder-state">{JSON.stringify(location.state)}</div>;
+}
 
 const garmentsResponse = [
   {
@@ -359,6 +365,78 @@ describe('WardrobePage', () => {
     // The trash control removes just that tag.
     await userEvent.click(within(rowTags).getByRole('button', { name: /remove tag formal/i }));
     expect(within(rowTags).queryByText('formal')).not.toBeInTheDocument();
+  });
+
+  it('opens an enlarged preview of a garment photo and closes it', async () => {
+    mockWardrobeFetch();
+
+    renderWardrobe();
+
+    await screen.findByRole('img', { name: /black silk cami/i });
+    await userEvent.click(screen.getByRole('button', { name: /enlarge black silk cami/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /preview black silk cami/i });
+    // The enlarged view uses the full-size image, not the card thumbnail.
+    expect(within(dialog).getByRole('img', { name: /black silk cami/i })).toHaveAttribute(
+      'src',
+      '/uploads/black-silk-cami.png'
+    );
+
+    await userEvent.click(within(dialog).getByRole('button', { name: /close preview/i }));
+    expect(screen.queryByRole('dialog', { name: /preview black silk cami/i })).not.toBeInTheDocument();
+  });
+
+  it('selects garments (one per category) and hands the build set to the Builder', async () => {
+    const garments = [
+      garmentsResponse[0],
+      { ...garmentsResponse[0], id: 'garment-1b', name: 'White tee' },
+      garmentsResponse[1]
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? 'GET';
+        if (url.startsWith('/api/garments') && method === 'GET') {
+          return jsonResponse(garments);
+        }
+        return jsonResponse([]);
+      })
+    );
+
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/wardrobe']}>
+          <Routes>
+            <Route path="/wardrobe" element={<WardrobePage />} />
+            <Route path="/builder" element={<BuilderStateProbe />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    await screen.findByRole('img', { name: /black silk cami/i });
+    // No selection bar until something is picked.
+    expect(screen.queryByRole('region', { name: /outfit selection/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /select black silk cami for an outfit/i }));
+    const bar = await screen.findByRole('region', { name: /outfit selection/i });
+    expect(within(bar).getByText(/1 selected/i)).toBeInTheDocument();
+
+    // Picking another Top replaces within the category: still one selected.
+    await userEvent.click(screen.getByRole('button', { name: /select white tee for an outfit/i }));
+    expect(within(bar).getByText(/1 selected/i)).toBeInTheDocument();
+
+    // A different category adds to the set.
+    await userEvent.click(screen.getByRole('button', { name: /select wool blazer for an outfit/i }));
+    expect(within(bar).getByText(/2 selected/i)).toBeInTheDocument();
+
+    await userEvent.click(within(bar).getByRole('button', { name: /build/i }));
+
+    const probe = await screen.findByTestId('builder-state');
+    expect(JSON.parse(probe.textContent || '{}')).toEqual({
+      wardrobeCompose: { Top: 'garment-1b', Outerwear: 'garment-2' }
+    });
   });
 });
 

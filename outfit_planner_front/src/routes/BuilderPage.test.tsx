@@ -39,9 +39,9 @@ describe('BuilderPage', () => {
       if (url.endsWith('/garments') && init?.method === 'POST') {
         return jsonResponse({
           id: 'garment-1',
-          name: 'linen shirt',
-          category: 'Top',
-          bodyZone: 'Torso',
+          name: 'linen dress',
+          category: 'Dress',
+          bodyZone: 'FullBody',
           imageUrl: 'http://localhost:5000/uploads/garments/linen-shirt.png',
           thumbnailUrl: 'http://localhost:5000/uploads/garments/linen-shirt.png',
           tags: []
@@ -53,13 +53,18 @@ describe('BuilderPage', () => {
 
     renderBuilder();
 
-    const addTopInput = await screen.findByLabelText(/add a top in wardrobe/i);
-    expect(addTopInput).toHaveAttribute('type', 'file');
-    expect(screen.getByLabelText(/add a bottom in wardrobe/i)).toHaveAttribute('type', 'file');
+    // Every category — top/bottom/shoes included — offers a quick-add slot in the list; top,
+    // bottom, and shoes are additionally cyclable directly on the figure.
+    const addDressInput = await screen.findByLabelText(/add a dress in wardrobe/i);
+    expect(addDressInput).toHaveAttribute('type', 'file');
+    expect(screen.getByLabelText(/add a outerwear in wardrobe/i)).toHaveAttribute('type', 'file');
     expect(screen.getByLabelText(/add body photo/i)).toHaveAttribute('type', 'file');
+    expect(screen.getByLabelText(/add a top in wardrobe/i)).toHaveAttribute('type', 'file');
+    expect(screen.getByLabelText(/add a bottom in wardrobe/i)).toHaveAttribute('type', 'file');
+    expect(screen.getByLabelText(/add a shoes in wardrobe/i)).toHaveAttribute('type', 'file');
     expect(screen.queryByRole('button', { name: /^add$/i })).not.toBeInTheDocument();
 
-    await userEvent.upload(addTopInput, new File(['shirt'], 'linen shirt.png', { type: 'image/png' }));
+    await userEvent.upload(addDressInput, new File(['dress'], 'linen dress.png', { type: 'image/png' }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/uploads/garment-photo'), expect.anything());
@@ -68,8 +73,8 @@ describe('BuilderPage', () => {
 
     const createCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/garments') && init?.method === 'POST');
     expect(JSON.parse(createCall?.[1]?.body as string)).toMatchObject({
-      name: 'linen shirt',
-      category: 'Top',
+      name: 'linen dress',
+      category: 'Dress',
       imageUrl: 'http://localhost:5000/api/storage/signed/garments/processed-cutout/linen-shirt.png?expires=1&signature=cutout',
       thumbnailUrl: 'http://localhost:5000/api/storage/signed/garments/processed-cutout/linen-shirt.png?expires=1&signature=cutout',
       tags: []
@@ -185,9 +190,9 @@ describe('BuilderPage', () => {
 
     renderBuilder();
 
-    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    // The first top is worn automatically, so the outfit is non-empty without any clicks.
     expect(await screen.findByText(/set gender in account settings/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /generate preview/i })).toBeDisabled();
+    await waitFor(() => expect(screen.getByRole('button', { name: /generate preview/i })).toBeDisabled());
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/try-on/estimate'))).toBe(false);
   });
 
@@ -286,7 +291,7 @@ describe('BuilderPage', () => {
 
     renderBuilder();
 
-    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    // The white tee is worn automatically; the bag is still picked from the side list.
     await userEvent.click(await screen.findByRole('button', { name: /leather bag/i }));
     await userEvent.click(screen.getByRole('button', { name: /generate preview/i }));
 
@@ -382,13 +387,14 @@ describe('BuilderPage', () => {
 
     const builder = renderBuilder();
 
-    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    // The first top dresses the figure automatically, so generation is ready right away.
+    expect(await screen.findByRole('img', { name: /white tee/i })).toBeInTheDocument();
     const tryOnModeSelector = builder.container.querySelector('.tryon-mode-selector');
     expect(tryOnModeSelector).not.toBeNull();
     await userEvent.click(within(tryOnModeSelector as HTMLElement).getByRole('button', { name: /clothes only/i }));
 
     const generateButton = screen.getByRole('button', { name: /generate preview/i });
-    expect(generateButton).toBeEnabled();
+    await waitFor(() => expect(generateButton).toBeEnabled());
     await userEvent.click(generateButton);
 
     expect(await screen.findByText((_, element) => element?.textContent === 'Free')).toBeInTheDocument();
@@ -493,7 +499,7 @@ describe('BuilderPage', () => {
 
     renderBuilder();
 
-    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    expect(await screen.findByRole('img', { name: /white tee/i })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: /generate preview/i })).toBeEnabled());
     await userEvent.click(screen.getByRole('button', { name: /generate preview/i }));
     await userEvent.click(await screen.findByRole('button', { name: /confirm generation/i }));
@@ -550,10 +556,13 @@ describe('BuilderPage', () => {
 
     renderBuilder();
 
-    await userEvent.click(await screen.findByRole('button', { name: /saved outfit/i }));
+    // Clicking a saved outfit enlarges it; "Open in builder" loads it as the active outfit.
+    await userEvent.click(await screen.findByRole('button', { name: /enlarge saved outfit/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /open in builder/i }));
     expect(screen.getByRole('button', { name: /share/i })).not.toBeDisabled();
 
-    await userEvent.click(await screen.findByRole('button', { name: /black tee/i }));
+    // Cycling the worn top on the figure changes the draft away from the saved outfit.
+    await userEvent.click(await screen.findByRole('button', { name: /next top/i }));
 
     expect(screen.getByRole('button', { name: /share/i })).toBeDisabled();
   });
@@ -601,23 +610,34 @@ describe('BuilderPage', () => {
       return jsonResponse([]);
     });
 
-    renderBuilder();
+    const builder = renderBuilder();
 
-    await userEvent.click(await screen.findByRole('button', { name: /fashn preview/i }));
+    // Clicking a saved outfit enlarges it in a view-only dialog showing the generated preview.
+    await userEvent.click(await screen.findByRole('button', { name: /enlarge fashn preview/i }));
+    const dialog = screen.getByRole('dialog', { name: /preview fashn preview/i });
+    expect(within(dialog).getByRole('img')).toHaveAttribute('src', 'https://example.com/fashn-output.jpg');
+
+    // "Open in builder" loads it into the Builder on its generated person preview.
+    await userEvent.click(within(dialog).getByRole('button', { name: /open in builder/i }));
 
     expect(screen.getByRole('img', { name: /generated try-on preview/i })).toHaveAttribute('src', 'https://example.com/fashn-output.jpg');
-    expect(screen.getByRole('button', { name: /white tee/i })).toHaveClass('selected');
     expect(screen.getByDisplayValue('FASHN preview')).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /delete preview/i }));
 
     expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/outfits\/outfit-1\/try-on-preview$/), expect.objectContaining({ method: 'DELETE' }));
     expect(screen.queryByRole('img', { name: /generated try-on preview/i })).not.toBeInTheDocument();
+
+    // Back in clothes mode the saved top is worn on the composed figure.
+    const stage = builder.container.querySelector('.composed-stage');
+    expect(stage).not.toBeNull();
+    expect(within(stage as HTMLElement).getByRole('img', { name: /white tee/i })).toBeInTheDocument();
   });
 
-  it('toggles a garment selection off when its piece is clicked again', async () => {
+  it('enlarges a saved generated preview on click without loading it into the builder', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
+
       if (url.endsWith('/garments')) {
         return jsonResponse([
           {
@@ -633,17 +653,116 @@ describe('BuilderPage', () => {
         ]);
       }
 
+      if (url.endsWith('/outfits')) {
+        return jsonResponse([
+          {
+            id: 'outfit-1',
+            name: 'FASHN preview',
+            items: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png' }],
+            tags: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            clothesOnlyPreviewUrl: '/generated/clothes-only/top-1.png',
+            personPreviewUrl: 'https://example.com/fashn-output.jpg',
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
       return jsonResponse([]);
     });
 
     renderBuilder();
 
-    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
-    expect(screen.getByRole('button', { name: /white tee/i })).toHaveClass('selected');
+    // The saved-outfit card shows the generated preview thumbnail, not just the composed figure.
+    const card = await screen.findByRole('button', { name: /enlarge fashn preview/i });
+    expect(card.querySelector('.saved-outfit-card-preview img')).toHaveAttribute('src', 'https://example.com/fashn-output.jpg');
+
+    await userEvent.click(card);
+
+    const dialog = screen.getByRole('dialog', { name: /preview fashn preview/i });
+    expect(within(dialog).getByRole('img')).toHaveAttribute('src', 'https://example.com/fashn-output.jpg');
+    // Enlarging alone must not load the outfit into the Builder (the name input keeps its default).
+    expect(screen.getByLabelText(/outfit name/i)).toHaveValue('Today');
+
+    await userEvent.click(within(dialog).getByRole('button', { name: /close preview/i }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('toggles a side piece off when its list entry is clicked again', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'bag-1',
+            name: 'leather bag',
+            category: 'Bag',
+            bodyZone: 'Accessory',
+            imageUrl: 'http://localhost:5000/uploads/garments/bag.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/bag.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderBuilder();
+
+    // Exact-name query: once worn, the figure adds a "Remove leather bag" button too.
+    await userEvent.click(await screen.findByRole('button', { name: 'leather bag' }));
+    expect(screen.getByRole('button', { name: 'leather bag' })).toHaveClass('selected');
 
     // Clicking the already-selected piece clears the slot.
-    await userEvent.click(screen.getByRole('button', { name: /white tee/i }));
-    expect(screen.getByRole('button', { name: /white tee/i })).not.toHaveClass('selected');
+    await userEvent.click(screen.getByRole('button', { name: 'leather bag' }));
+    expect(screen.getByRole('button', { name: 'leather bag' })).not.toHaveClass('selected');
+  });
+
+  it('wears a top picked from the wardrobe list', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/white.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          },
+          {
+            id: 'top-2',
+            name: 'black tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/black.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/black.png',
+            tags: [],
+            createdAt: '2026-06-09T12:00:00Z'
+          }
+        ]);
+      }
+
+      return jsonResponse([]);
+    });
+
+    renderBuilder();
+
+    // The first top is worn by default; picking another from the list swaps the worn top.
+    const whiteTee = await screen.findByRole('button', { name: 'white tee' });
+    expect(whiteTee).toHaveClass('selected');
+
+    await userEvent.click(screen.getByRole('button', { name: 'black tee' }));
+    expect(screen.getByRole('button', { name: 'black tee' })).toHaveClass('selected');
+    expect(screen.getByRole('button', { name: 'white tee' })).not.toHaveClass('selected');
   });
 
   it('updates and deletes the selected saved outfit', async () => {
@@ -714,12 +833,17 @@ describe('BuilderPage', () => {
       return jsonResponse([]);
     });
 
-    renderBuilder();
+    const builder = renderBuilder();
 
-    await userEvent.click(await screen.findByRole('button', { name: /fashn preview/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /enlarge fashn preview/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /open in builder/i }));
     await userEvent.clear(screen.getByLabelText(/outfit name/i));
     await userEvent.type(screen.getByLabelText(/outfit name/i), 'Updated preview');
-    await userEvent.click(await screen.findByRole('button', { name: /black tee/i }));
+    // The outfit opens on its person preview; switch back to the clothes figure to edit it,
+    // then swap the worn top to the black tee via the on-figure carousel arrow.
+    const modeToggle = builder.container.querySelector('.mode-toggle');
+    await userEvent.click(within(modeToggle as HTMLElement).getByRole('button', { name: /clothes only/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /next top/i }));
     await userEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     const updateCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/outfits/outfit-1') && init?.method === 'PATCH');
@@ -802,7 +926,8 @@ describe('BuilderPage', () => {
 
     renderBuilder();
 
-    await userEvent.click(await screen.findByRole('button', { name: /white tee/i }));
+    expect(await screen.findByRole('img', { name: /white tee/i })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: /generate preview/i })).toBeEnabled());
     await userEvent.click(screen.getByRole('button', { name: /generate preview/i }));
     await userEvent.click(await screen.findByRole('button', { name: /confirm generation/i }));
     expect(await screen.findByRole('img', { name: /generated try-on preview/i })).toHaveAttribute('src', 'https://example.com/fashn-output.jpg');
@@ -854,11 +979,83 @@ describe('BuilderPage', () => {
 
     const builder = renderBuilder();
 
-    await userEvent.click(await screen.findByRole('button', { name: /clothes draft/i }));
+    // The draft has no generated preview, so its enlarge dialog shows the composed figure; loading
+    // it into the Builder must not treat the synthetic clothes-only url as a person image.
+    await userEvent.click(await screen.findByRole('button', { name: /enlarge clothes draft/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /open in builder/i }));
 
     expect(screen.queryByRole('img', { name: /generated try-on preview/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('img', { name: /white tee/i })).toHaveAttribute('src', 'http://localhost:5000/uploads/garments/white.png');
+    const stage = builder.container.querySelector('.composed-stage');
+    expect(stage).not.toBeNull();
+    expect(within(stage as HTMLElement).getByRole('img', { name: /white tee/i })).toHaveAttribute('src', 'http://localhost:5000/uploads/garments/white.png');
     expect(within(builder.container.querySelector('.mode-toggle') as HTMLElement).getByRole('button', { name: /clothes only/i })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('applies a quick-build selection handed over from the Wardrobe tab', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/garments')) {
+        return jsonResponse([
+          {
+            id: 'top-1',
+            userId: 'user-a',
+            name: 'white tee',
+            category: 'Top',
+            bodyZone: 'Torso',
+            imageUrl: 'http://localhost:5000/uploads/garments/white.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/white.png',
+            tags: [],
+            secondaryColors: [],
+            season: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            laundryStatus: 'clean',
+            createdAt: '2026-06-21T12:00:00Z'
+          },
+          {
+            id: 'coat-1',
+            userId: 'user-a',
+            name: 'trench coat',
+            category: 'Outerwear',
+            bodyZone: 'OuterLayer',
+            imageUrl: 'http://localhost:5000/uploads/garments/trench.png',
+            thumbnailUrl: 'http://localhost:5000/uploads/garments/trench.png',
+            tags: [],
+            secondaryColors: [],
+            season: [],
+            occasion: [],
+            isFavorite: false,
+            isArchived: false,
+            laundryStatus: 'clean',
+            createdAt: '2026-06-21T12:00:00Z'
+          }
+        ]);
+      }
+
+      return jsonResponse([]);
+    });
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const builder = render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter
+          initialEntries={[{ pathname: '/builder', state: { wardrobeCompose: { Top: 'top-1', Outerwear: 'coat-1' } } }]}
+        >
+          <BuilderPage />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    // The handed-over pieces dress the composed figure with no manual picking.
+    const stage = await waitFor(() => {
+      const el = builder.container.querySelector('.composed-stage');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    expect(await within(stage).findByRole('img', { name: /white tee/i })).toBeInTheDocument();
+    expect(within(stage).getByRole('img', { name: /trench coat/i })).toBeInTheDocument();
   });
 });
 

@@ -1,6 +1,8 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './AppShell';
+import { RequireAdmin } from './RequireAdmin';
 import { RequireAuth } from './RequireAuth';
+import { AdminPage } from '../routes/AdminPage';
 import { AuthPage } from '../routes/AuthPage';
 import { BuilderPage } from '../routes/BuilderPage';
 import { CalendarPage } from '../routes/CalendarPage';
@@ -19,6 +21,9 @@ export default function App() {
           <Route path="/wardrobe" element={<WardrobePage />} />
           <Route path="/builder" element={<BuilderPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
+          <Route element={<RequireAdmin />}>
+            <Route path="/admin" element={<AdminPage />} />
+          </Route>
         </Route>
       </Route>
     </Routes>

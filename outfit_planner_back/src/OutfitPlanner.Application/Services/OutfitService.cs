@@ -11,15 +11,23 @@ public sealed class OutfitService
     private readonly IGarmentRepository _garments;
     private readonly IOutfitRepository _outfits;
     private readonly IClock _clock;
+    private readonly IHairstylePresetCatalog? _hairstyles;
 
-    public OutfitService(IGarmentRepository garments, IOutfitRepository outfits, IClock clock)
+    public OutfitService(IGarmentRepository garments, IOutfitRepository outfits, IClock clock, IHairstylePresetCatalog? hairstyles = null)
     {
         _garments = garments;
         _outfits = outfits;
         _clock = clock;
+        _hairstyles = hairstyles;
     }
 
-    public Outfit CreateOutfit(string userId, string name, IEnumerable<Guid> garmentIds)
+    public Outfit CreateOutfit(
+        string userId,
+        string name,
+        IEnumerable<Guid> garmentIds,
+        string? hairstylePresetId = null,
+        bool hairstyleVisible = true,
+        UserGender? silhouetteGender = null)
     {
         var normalizedUserId = InputGuard.NormalizeUserId(userId);
         var selectedIds = garmentIds.Distinct().ToList();
@@ -39,7 +47,12 @@ public sealed class OutfitService
             false,
             BuildClothesOnlyPreview(outfitItems),
             null,
-            _clock.UtcNow);
+            _clock.UtcNow)
+        {
+            HairstylePresetId = ValidateHairstylePresetId(hairstylePresetId),
+            HairstyleVisible = hairstyleVisible,
+            SilhouetteGender = silhouetteGender
+        };
 
         _outfits.AddOutfit(outfit);
         return outfit;
@@ -81,7 +94,16 @@ public sealed class OutfitService
 
             items = OutfitRules.BuildItems(selectedGarments);
             clothesOnlyPreviewUrl = BuildClothesOnlyPreview(items);
-            personPreviewUrl = null;
+            // A generated person preview is saved on the outfit by default. Only drop it when the
+            // worn garments actually change (the old render no longer matches the outfit); a
+            // metadata-only save that re-sends the same garment set — as the Builder always does on
+            // rename/save — must keep the preview instead of silently discarding it.
+            var previousGarmentIds = existing.Items.Select(item => item.GarmentId).ToHashSet();
+            var nextGarmentIds = items.Select(item => item.GarmentId).ToHashSet();
+            if (!previousGarmentIds.SetEquals(nextGarmentIds))
+            {
+                personPreviewUrl = null;
+            }
         }
 
         var updated = existing with
@@ -93,11 +115,36 @@ public sealed class OutfitService
             IsFavorite = command.IsFavorite ?? existing.IsFavorite,
             IsArchived = command.IsArchived ?? existing.IsArchived,
             ClothesOnlyPreviewUrl = clothesOnlyPreviewUrl,
-            PersonPreviewUrl = personPreviewUrl
+            PersonPreviewUrl = personPreviewUrl,
+            // Null leaves the worn hairstyle unchanged; empty/whitespace clears it.
+            HairstylePresetId = command.HairstylePresetId is null
+                ? existing.HairstylePresetId
+                : ValidateHairstylePresetId(command.HairstylePresetId),
+            HairstyleVisible = command.HairstyleVisible ?? existing.HairstyleVisible,
+            SilhouetteGender = command.SilhouetteGender ?? existing.SilhouetteGender
         };
 
         _outfits.UpdateOutfit(updated);
         return updated;
+    }
+
+    // Normalizes and validates a worn hairstyle preset id: empty input clears the hairstyle,
+    // and (when the catalog is wired) unknown ids are rejected instead of persisting dangling
+    // references that composed rendering could never resolve.
+    private string? ValidateHairstylePresetId(string? hairstylePresetId)
+    {
+        var normalized = string.IsNullOrWhiteSpace(hairstylePresetId) ? null : hairstylePresetId.Trim();
+        if (normalized is null || _hairstyles is null)
+        {
+            return normalized;
+        }
+
+        if (_hairstyles.FindHairstylePreset(normalized) is null)
+        {
+            throw new ValidationException($"Hairstyle preset '{normalized}' was not found.");
+        }
+
+        return normalized;
     }
 
     public bool DeleteOutfit(string userId, Guid outfitId)

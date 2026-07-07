@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { ApiError, getSharedOutfit } from '../api/client';
+import { ComposedOutfitFigure, composedPiecesFromOutfitItems, defaultFigureWidth } from '../features/outfits/ComposedOutfitFigure';
 import { EmptyPreview } from '../shared/ui/EmptyPreview';
 import { PageHeader } from '../shared/ui/PageHeader';
 
@@ -38,21 +39,40 @@ export function SharePage() {
     return <p className="status">Shared outfit not found.</p>;
   }
 
+  const outfit = query.data;
+  const pieces = composedPiecesFromOutfitItems(outfit.items);
+  const hasComposedPieces = outfit.items.length > 0;
+
   return (
     <section className="shared-view">
       <PageHeader
         eyebrow="Shared outfit"
-        title={query.data.name}
+        title={outfit.name}
         text="A tactile snapshot from Outfit Planner, ready to preview without opening the private workspace."
       />
       <div className="preview-canvas shared-canvas">
-        <div className="person-preview">
-          {query.data.personPreviewUrl ?? query.data.clothesOnlyPreviewUrl ? (
-            <img src={query.data.personPreviewUrl ?? query.data.clothesOnlyPreviewUrl ?? ''} alt={query.data.name} />
-          ) : (
-            <EmptyPreview />
-          )}
-        </div>
+        {hasComposedPieces ? (
+          <div className="composed-stage">
+            <ComposedOutfitFigure
+              gender={outfit.silhouetteGender ?? 'Female'}
+              top={pieces.top}
+              bottom={pieces.bottom}
+              dress={pieces.dress}
+              shoes={pieces.shoes}
+              outerwear={pieces.outerwear}
+              bag={pieces.bag}
+              accessories={pieces.accessories}
+              width={defaultFigureWidth()}
+            />
+          </div>
+        ) : (
+          <EmptyPreview />
+        )}
+        {outfit.personPreviewUrl ? (
+          <div className="person-preview">
+            <img src={outfit.personPreviewUrl} alt={`${outfit.name} try-on preview`} />
+          </div>
+        ) : null}
       </div>
     </section>
   );

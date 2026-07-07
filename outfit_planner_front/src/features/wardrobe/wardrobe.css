@@ -1184,3 +1184,165 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Quick-build: tap the photo to enlarge, tick the corner to select for an outfit. */
+.wardrobe-card-enlarge {
+  background: transparent;
+  border: 0;
+  cursor: zoom-in;
+  display: block;
+  height: 100%;
+  padding: 0;
+  width: 100%;
+}
+
+.wardrobe-card-select {
+  align-items: center;
+  background: color-mix(in srgb, var(--editorial-panel) 78%, transparent);
+  border: 1.5px solid var(--editorial-hairline-strong);
+  border-radius: 999px;
+  color: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  height: 26px;
+  inset: 8px 8px auto auto;
+  justify-content: center;
+  min-height: 26px;
+  padding: 0;
+  position: absolute;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+  width: 26px;
+  z-index: 2;
+}
+
+.wardrobe-card-select:hover {
+  border-color: var(--editorial-accent);
+}
+
+.wardrobe-card-select[aria-pressed='true'] {
+  background: var(--editorial-accent);
+  border-color: var(--editorial-accent);
+  color: #fff;
+}
+
+/* Enlarged garment preview, mirroring the account avatar preview overlay. */
+.wardrobe-preview {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 96;
+}
+
+.wardrobe-preview-frame {
+  align-items: center;
+  background: var(--editorial-panel);
+  border: 1px solid var(--editorial-hairline);
+  border-radius: var(--radius-panel);
+  display: flex;
+  justify-content: center;
+  max-height: 88vh;
+  max-width: min(92vw, 520px);
+  padding: 18px;
+  position: relative;
+}
+
+.wardrobe-preview-frame img {
+  max-height: calc(88vh - 36px);
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.wardrobe-preview-close {
+  align-items: center;
+  background: var(--editorial-panel);
+  border: 1px solid var(--editorial-hairline-strong);
+  border-radius: 999px;
+  color: var(--editorial-ink);
+  cursor: pointer;
+  display: inline-flex;
+  height: 34px;
+  inset: 8px 8px auto auto;
+  justify-content: center;
+  position: absolute;
+  width: 34px;
+}
+
+.wardrobe-preview-close:hover {
+  background: var(--editorial-panel-muted);
+}
+
+/* Floating selection/build bar, shown while garments are picked. */
+.wardrobe-build-bar {
+  align-items: center;
+  background: var(--editorial-panel);
+  border: 1px solid var(--editorial-hairline-strong);
+  border-radius: 999px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
+  display: flex;
+  gap: 16px;
+  left: 50%;
+  padding: 8px 10px 8px 20px;
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 90;
+}
+
+.wardrobe-build-count {
+  color: var(--editorial-ink);
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.wardrobe-build-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.wardrobe-build-clear,
+.wardrobe-build-go {
+  align-items: center;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 850;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 16px;
+}
+
+.wardrobe-build-clear {
+  background: transparent;
+  border: 1px solid var(--editorial-hairline-strong);
+  color: var(--editorial-muted);
+}
+
+.wardrobe-build-clear:hover {
+  color: var(--editorial-ink);
+}
+
+.wardrobe-build-go {
+  background: var(--editorial-accent);
+  border: 1px solid var(--editorial-accent-strong);
+  color: #fff;
+}
+
+.wardrobe-build-go:hover {
+  background: var(--editorial-accent-strong);
+  border-color: var(--editorial-accent-edge);
+}
+
+/* Keep the build bar clear of the fixed mobile bottom navigation. */
+@media (max-width: 920px) {
+  .wardrobe-build-bar {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
+  }
+}

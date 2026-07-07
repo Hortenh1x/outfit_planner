@@ -127,7 +127,10 @@ public sealed class SimpleBackgroundRemovalProvider : IBackgroundRemovalProvider
     private static byte[] EncodePng(Image image)
     {
         using var output = new MemoryStream();
-        image.Save(output, new PngEncoder());
+        // Force an alpha-bearing colour type: this provider's whole job is to introduce transparency,
+        // and without an explicit colour type the encoder inherits the (opaque) source PNG's "no alpha"
+        // hint and silently drops the alpha channel we just wrote, undoing the cutout.
+        image.Save(output, new PngEncoder { ColorType = PngColorType.RgbWithAlpha });
         return output.ToArray();
     }
 }

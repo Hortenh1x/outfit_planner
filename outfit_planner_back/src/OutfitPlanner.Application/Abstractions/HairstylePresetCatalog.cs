@@ -8,6 +8,10 @@ public interface IHairstylePresetCatalog
     // there is no per-user hairstyle data.
     IReadOnlyList<HairstylePreset> ListHairstylePresets(UserGender gender);
 
+    // Looks a preset up by id across genders (outfits reference presets by id). Null when the
+    // id is unknown.
+    HairstylePreset? FindHairstylePreset(string presetId);
+
     // Resolves a preset asset file for serving. Only files listed in the preset manifest are
     // resolvable, so arbitrary path input never reaches the file system. Null when unknown.
     StoredPhotoFile? GetHairstyleAssetFile(string assetFileName);

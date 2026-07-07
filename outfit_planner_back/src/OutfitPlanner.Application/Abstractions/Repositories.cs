@@ -64,6 +64,29 @@ public interface IShareLinkRepository
     bool RevokeShareLinkByUser(string userId, string token, DateTimeOffset revokedAt);
 }
 
+public sealed record AdminUserQuery(string? Search, UserRole? Role, int Offset, int Limit);
+
+public sealed record AdminUserRecord(
+    UserAccount User,
+    int GarmentCount,
+    int OutfitCount,
+    int TryOnJobCount,
+    int BodyReferencePhotoCount,
+    int ActiveSessionCount);
+
+public sealed record AdminUserStats(int TotalUsers, int TotalGarments, int TotalOutfits, int TotalTryOnJobs);
+
+// Cross-user reads for the admin panel. Search matches email or display name; the role
+// filter matches the stored role (pinned accounts converge on sign-in, so stored equals
+// effective in practice).
+public interface IAdminUserRepository
+{
+    IReadOnlyList<AdminUserRecord> ListUsers(AdminUserQuery query, DateTimeOffset now);
+    int CountUsers(AdminUserQuery query);
+    AdminUserRecord? GetUserRecord(string userId, DateTimeOffset now);
+    AdminUserStats GetStats();
+}
+
 public interface IUserAccountRepository
 {
     void AddUser(UserAccount user);
