@@ -14,17 +14,20 @@ public sealed class AdminService
     private readonly IUserAccountRepository _users;
     private readonly RolePinningPolicy _rolePinning;
     private readonly IClock _clock;
+    private readonly ICreditLedgerRepository? _creditLedger;
 
     public AdminService(
         IAdminUserRepository adminUsers,
         IUserAccountRepository users,
         RolePinningPolicy rolePinning,
-        IClock clock)
+        IClock clock,
+        ICreditLedgerRepository? creditLedger = null)
     {
         _adminUsers = adminUsers;
         _users = users;
         _rolePinning = rolePinning;
         _clock = clock;
+        _creditLedger = creditLedger;
     }
 
     public AdminUsersPage ListUsers(string? search, UserRole? role, int offset, int limit)
@@ -95,6 +98,18 @@ public sealed class AdminService
         }
 
         return target;
+    }
+
+    // Raw ledger balance for the admin panel — intentionally read-only (no lazy grants),
+    // so listing users never writes; null for unlimited (Admin) accounts.
+    public int? RawCreditBalance(UserAccount user)
+    {
+        if (_creditLedger is null || _rolePinning.EffectiveRole(user) == UserRole.Admin)
+        {
+            return null;
+        }
+
+        return _creditLedger.GetCreditBalance(user.Id, _clock.UtcNow);
     }
 
     public UserRole EffectiveRole(UserAccount user)

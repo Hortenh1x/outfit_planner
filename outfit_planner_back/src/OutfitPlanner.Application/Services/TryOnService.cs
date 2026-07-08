@@ -16,6 +16,8 @@ public sealed class TryOnService
     private readonly IStoredPhotoUrlRefresher? _photoUrls;
     private readonly ITryOnOutputStorage? _tryOnOutputStorage;
     private readonly IUserAccountRepository? _users;
+    private readonly EntitlementService? _entitlements;
+    private readonly CreditLedgerService? _credits;
     private readonly TimeSpan _outputRetention = TimeSpan.FromDays(30);
     private const string NoBodyReferenceIdentity = "body:none";
 
@@ -29,7 +31,9 @@ public sealed class TryOnService
         IClock clock,
         IStoredPhotoUrlRefresher? photoUrls = null,
         ITryOnOutputStorage? tryOnOutputStorage = null,
-        IUserAccountRepository? users = null)
+        IUserAccountRepository? users = null,
+        EntitlementService? entitlements = null,
+        CreditLedgerService? credits = null)
     {
         _bodyPhotos = bodyPhotos;
         _outfits = outfits;
@@ -41,6 +45,8 @@ public sealed class TryOnService
         _photoUrls = photoUrls;
         _tryOnOutputStorage = tryOnOutputStorage;
         _users = users ?? bodyPhotos as IUserAccountRepository;
+        _entitlements = entitlements;
+        _credits = credits;
     }
 
     public TryOnCostEstimate Estimate(string userId, Guid outfitId, TryOnMode mode, string? bodyReferencePhotoUrl, Guid? sourceBodyPhotoId)
@@ -51,13 +57,16 @@ public sealed class TryOnService
             ?? throw new ValidationException("Outfit was not found."));
         var bodyIdentity = BodyReferenceIdentity(normalizedUserId, sourceBodyPhotoId, normalizedBodyPhotoUrl);
         var userGender = UserGenderFor(normalizedUserId);
+        // Tier-effective capabilities: a Free account under a 4k FASHN configuration
+        // estimates (and caches) at 1k pricing.
+        var capabilities = EffectiveCapabilities(normalizedUserId);
         var cacheProbe = _estimator.Estimate(outfit, new TryOnEstimateInput(
             mode,
             _provider.Name,
             bodyIdentity,
-            _provider.Capabilities.SettingsHash,
+            capabilities.SettingsHash,
             hasCachedResult: false,
-            creditsPerRun: _provider.Capabilities.CreditsPerRun,
+            creditsPerRun: capabilities.CreditsPerRun,
             userGender: userGender));
         var cached = _jobs.FindSucceededTryOnJobByCacheKey(normalizedUserId, cacheProbe.CacheKey);
 
@@ -65,11 +74,13 @@ public sealed class TryOnService
             mode,
             _provider.Name,
             bodyIdentity,
-            _provider.Capabilities.SettingsHash,
+            capabilities.SettingsHash,
             hasCachedResult: cached is not null,
-            creditsPerRun: _provider.Capabilities.CreditsPerRun,
+            creditsPerRun: capabilities.CreditsPerRun,
             userGender: userGender));
-        return ApplyUserProfileAvailability(ApplyProviderAvailability(estimate), normalizedUserId);
+        return ApplyEntitlementAvailability(
+            ApplyUserProfileAvailability(ApplyProviderAvailability(estimate), normalizedUserId),
+            normalizedUserId);
     }
 
     public async Task<TryOnJob> StartAsync(
@@ -133,7 +144,7 @@ public sealed class TryOnService
             TryOnMode = tryOnMode,
             ConfirmedCredits = estimate.EstimatedCredits,
             CacheKey = estimate.CacheKey,
-            ProviderSettingsHash = _provider.Capabilities.SettingsHash
+            ProviderSettingsHash = EffectiveCapabilities(normalizedUserId).SettingsHash
         };
 
         if (!estimate.RequiresAi)
@@ -176,8 +187,16 @@ public sealed class TryOnService
             return cacheHit;
         }
 
+        // Paid, uncached generation: debit the account's AI credits before queueing so an
+        // insufficient balance never reaches the provider. Failed jobs are refunded by the
+        // worker; cache hits and free previews return above without ever debiting.
+        if (_credits is not null && _users?.GetUserById(normalizedUserId) is { } payingUser)
+        {
+            _credits.DebitForJob(payingUser, started.Id, estimate.EstimatedCredits);
+        }
+
         _jobs.AddTryOnJob(started);
-        await _queue.EnqueueAsync(started.Id, cancellationToken);
+        await _queue.EnqueueAsync(started.Id, IsPriorityQueueUser(normalizedUserId), cancellationToken);
         return started;
     }
 
@@ -198,6 +217,7 @@ public sealed class TryOnService
                 Error = "Outfit was not found.",
                 UpdatedAt = _clock.UtcNow
             });
+            _credits?.RefundJob(queued.UserId, queued.Id);
             return;
         }
 
@@ -214,13 +234,14 @@ public sealed class TryOnService
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var capabilities = EffectiveCapabilities(queued.UserId);
             var estimate = _estimator.Estimate(outfit, new TryOnEstimateInput(
                 queued.TryOnMode,
                 queued.ProviderName ?? _provider.Name,
                 BodyReferenceIdentity(queued.UserId, queued.SourceBodyPhotoId, bodyReferencePhotoUrl),
-                queued.ProviderSettingsHash ?? _provider.Capabilities.SettingsHash,
+                queued.ProviderSettingsHash ?? capabilities.SettingsHash,
                 hasCachedResult: false,
-                creditsPerRun: _provider.Capabilities.CreditsPerRun,
+                creditsPerRun: capabilities.CreditsPerRun,
                 userGender: UserGenderFor(queued.UserId)));
             if (estimate.RequiresAi && _users?.GetUserById(queued.UserId) is { Gender: null })
             {
@@ -244,9 +265,10 @@ public sealed class TryOnService
                 bodyTryOnItems,
                 visualOnlyItems,
                 new TryOnGenerationSettings(
-                    _provider.Capabilities.ModelName,
-                    _provider.Capabilities.ProviderMode,
-                    _provider.Capabilities.SettingsHash))
+                    capabilities.ModelName,
+                    capabilities.ProviderMode,
+                    capabilities.SettingsHash,
+                    EffectiveResolutionCap(queued.UserId)))
             {
                 UserGender = UserGenderFor(queued.UserId)
             });
@@ -277,6 +299,7 @@ public sealed class TryOnService
                 UpdatedAt = _clock.UtcNow
             };
             _jobs.UpdateTryOnJob(failed);
+            _credits?.RefundJob(queued.UserId, queued.Id);
         }
 
         return;
@@ -378,6 +401,66 @@ public sealed class TryOnService
             Summary = message,
             Warnings = estimate.Warnings.Concat(new[] { message }).ToArray()
         };
+    }
+
+    // Paywall gate: modes outside the account's plan stay visible in the UI but are not
+    // startable; RequiresUpgrade lets the frontend offer an upgrade instead of an error.
+    private TryOnCostEstimate ApplyEntitlementAvailability(TryOnCostEstimate estimate, string userId)
+    {
+        if (!estimate.RequiresAi || _entitlements is null)
+        {
+            return estimate;
+        }
+
+        var limits = TryLimitsFor(userId);
+        if (limits is null || limits.AllowedAiModes.Contains(estimate.Mode))
+        {
+            return estimate;
+        }
+
+        var message = $"{estimate.Mode} is not included in your plan. Upgrade to Premium to use it.";
+        return estimate with
+        {
+            IsAvailable = false,
+            RequiresUpgrade = true,
+            Summary = message,
+            Warnings = estimate.Warnings.Concat(new[] { message }).ToArray()
+        };
+    }
+
+    private TryOnProviderCapabilities EffectiveCapabilities(string userId)
+    {
+        var cap = EffectiveResolutionCap(userId);
+        return cap is null ? _provider.Capabilities : _provider.CapabilitiesFor(cap);
+    }
+
+    private string? EffectiveResolutionCap(string userId)
+    {
+        return TryLimitsFor(userId)?.MaxTryOnResolution;
+    }
+
+    private bool IsPriorityQueueUser(string userId)
+    {
+        return TryLimitsFor(userId)?.PriorityQueue ?? false;
+    }
+
+    private PlanLimits? TryLimitsFor(string userId)
+    {
+        if (_entitlements is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return _entitlements.LimitsFor(userId);
+        }
+        catch (ValidationException)
+        {
+            // Accounts missing from the store (tests, race with deletion) fall back to the
+            // ungated provider defaults rather than failing the whole estimate.
+            return null;
+        }
     }
 
     private TryOnCostEstimate ApplyProviderAvailability(TryOnCostEstimate estimate)

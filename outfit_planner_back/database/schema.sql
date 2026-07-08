@@ -345,3 +345,19 @@ on auth_email_verification_tokens (user_id);
 
 create index if not exists ix_auth_password_reset_tokens_user_id
 on auth_password_reset_tokens (user_id);
+
+create table if not exists account_credit_ledger (
+    id uuid primary key,
+    user_id text not null references users(id) on delete cascade,
+    delta integer not null,
+    reason text not null check (reason in ('TrialGrant', 'SubscriptionGrant', 'TopUp', 'TryOnSpend', 'Refund', 'AdminAdjustment')),
+    try_on_job_id uuid,
+    expires_at timestamptz,
+    created_at timestamptz not null default now()
+);
+
+create index if not exists ix_account_credit_ledger_user_id
+on account_credit_ledger (user_id);
+
+create index if not exists ix_account_credit_ledger_job
+on account_credit_ledger (try_on_job_id) where try_on_job_id is not null;

@@ -4,7 +4,9 @@ namespace OutfitPlanner.Application.Abstractions;
 
 public sealed record TryOnGeneration(string ProviderJobId, string OutputImageUrl);
 
-public sealed record TryOnGenerationSettings(string ModelName, string Mode, string SettingsHash);
+// Resolution is the tier-effective output resolution (null keeps the provider's configured
+// one); providers that price by resolution must honor it in the actual generation call.
+public sealed record TryOnGenerationSettings(string ModelName, string Mode, string SettingsHash, string? Resolution = null);
 
 public sealed record TryOnProviderRequest(
     string UserId,
@@ -46,6 +48,10 @@ public interface ITryOnProvider
             TryOnMode.SequentialOutfitTryOn,
             TryOnMode.ExperimentalCompositeTryOn
         });
+
+    // Capabilities repriced under a tier resolution cap ("1k" under a "4k" configuration).
+    // Providers that do not price by resolution keep their default capabilities.
+    TryOnProviderCapabilities CapabilitiesFor(string? maxResolution) => Capabilities;
 
     TryOnGeneration Generate(TryOnProviderRequest request);
 

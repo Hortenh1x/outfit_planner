@@ -12,7 +12,8 @@ public sealed class PostgresOutfitStore :
     ITryOnJobRepository,
     IShareLinkRepository,
     IUserAccountRepository,
-    IAdminUserRepository
+    IAdminUserRepository,
+    ICreditLedgerRepository
 {
     public static readonly IReadOnlyList<string> RequiredTables = new[]
     {
@@ -25,7 +26,8 @@ public sealed class PostgresOutfitStore :
         "outfit_items",
         "scheduled_outfits",
         "try_on_jobs",
-        "share_links"
+        "share_links",
+        "account_credit_ledger"
     };
 
     private readonly NpgsqlDataSource _dataSource;
@@ -880,6 +882,92 @@ public sealed class PostgresOutfitStore :
             Convert.ToInt32(reader.GetInt64(16)),
             Convert.ToInt32(reader.GetInt64(17)),
             Convert.ToInt32(reader.GetInt64(18)));
+    }
+
+    public void AddCreditEntry(CreditLedgerEntry entry)
+    {
+        using var command = _dataSource.CreateCommand("""
+            insert into account_credit_ledger (id, user_id, delta, reason, try_on_job_id, expires_at, created_at)
+            values (@id, @user_id, @delta, @reason, @try_on_job_id, @expires_at, @created_at)
+            """);
+        command.Parameters.AddWithValue("id", entry.Id);
+        command.Parameters.AddWithValue("user_id", entry.UserId);
+        command.Parameters.AddWithValue("delta", entry.Delta);
+        command.Parameters.AddWithValue("reason", entry.Reason.ToString());
+        command.Parameters.AddWithValue("try_on_job_id", DbValue(entry.TryOnJobId));
+        command.Parameters.AddWithValue("expires_at", DbValue(entry.ExpiresAt));
+        command.Parameters.AddWithValue("created_at", entry.CreatedAt);
+        command.ExecuteNonQuery();
+    }
+
+    public IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByUser(string userId)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select id, user_id, delta, reason, try_on_job_id, expires_at, created_at
+            from account_credit_ledger
+            where user_id = @user_id
+            order by created_at desc, id
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        return ReadCreditEntries(command);
+    }
+
+    public int GetCreditBalance(string userId, DateTimeOffset now)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select coalesce(sum(delta), 0)
+            from account_credit_ledger
+            where user_id = @user_id and (expires_at is null or expires_at > @now)
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("now", now);
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    public bool HasCreditEntryWithReasonSince(string userId, CreditLedgerReason reason, DateTimeOffset since)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select exists (
+                select 1
+                from account_credit_ledger
+                where user_id = @user_id and reason = @reason and created_at >= @since
+            )
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("reason", reason.ToString());
+        command.Parameters.AddWithValue("since", since);
+        return command.ExecuteScalar() is true;
+    }
+
+    public IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByJob(Guid tryOnJobId)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select id, user_id, delta, reason, try_on_job_id, expires_at, created_at
+            from account_credit_ledger
+            where try_on_job_id = @try_on_job_id
+            order by created_at, id
+            """);
+        command.Parameters.AddWithValue("try_on_job_id", tryOnJobId);
+        return ReadCreditEntries(command);
+    }
+
+    private static IReadOnlyList<CreditLedgerEntry> ReadCreditEntries(NpgsqlCommand command)
+    {
+        using var reader = command.ExecuteReader();
+        var entries = new List<CreditLedgerEntry>();
+        while (reader.Read())
+        {
+            entries.Add(new CreditLedgerEntry(
+                reader.GetGuid(0),
+                reader.GetString(1),
+                reader.GetInt32(2),
+                Enum.Parse<CreditLedgerReason>(reader.GetString(3)),
+                reader.IsDBNull(4) ? null : reader.GetGuid(4),
+                reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5),
+                reader.GetFieldValue<DateTimeOffset>(6)));
+        }
+
+        return entries;
     }
 
     public void AddExternalLogin(ExternalAuthLogin login)

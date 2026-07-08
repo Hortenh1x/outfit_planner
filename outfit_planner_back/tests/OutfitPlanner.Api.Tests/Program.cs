@@ -53,6 +53,13 @@ var tests = new List<(string Name, Action Test)>
     ("admin service delete guards protect pinned and self accounts", TestAdminServiceDeleteGuards),
     ("postgres schema contains account roles", TestPostgresSchemaContainsAccountRoles),
     ("api exposes role-gated admin endpoints", TestApiExposesAdminEndpoints),
+    ("credit ledger grants debits and refunds with admin bypass", TestCreditLedgerGrantsDebitsAndRefunds),
+    ("entitlement caps block creation at plan limits", TestEntitlementCapsBlockCreation),
+    ("try-on estimate applies plan modes and resolution pricing", TestTryOnEstimateAppliesPlanModesAndResolution),
+    ("try-on start debits credits and failures refund", TestStartTryOnDebitsCreditsCacheHitsAndRefunds),
+    ("try-on queue prioritizes premium jobs", TestTryOnQueuePrioritizesPremiumJobs),
+    ("postgres schema contains account credit ledger", TestPostgresSchemaContainsCreditLedger),
+    ("api exposes paywall endpoints", TestApiExposesPaywallEndpoints),
     ("api exposes secure auth endpoints and cookie settings", TestApiExposesSecureAuthEndpoints),
     ("api exposes privacy and auth hardening endpoints", TestApiExposesPrivacyAndAuthHardeningEndpoints),
     ("api exposes edit delete filtering and revoke endpoints", TestApiExposesEditDeleteFilterAndRevokeEndpoints),
@@ -969,6 +976,227 @@ static void TestApiExposesAdminEndpoints()
     AssertTrue(program.Contains("CurrentUserRoleItemKey", StringComparison.Ordinal), "the session middleware should resolve the current user's role.");
     AssertTrue(contracts.Contains("UserRole Role", StringComparison.Ordinal), "auth and admin responses should expose the account role.");
     AssertTrue(contracts.Contains("bool RolePinned", StringComparison.Ordinal), "admin responses should mark pinned accounts.");
+}
+
+static void TestCreditLedgerGrantsDebitsAndRefunds()
+{
+    var store = new InMemoryOutfitStore();
+    var pinning = TestRolePinning();
+    var clock = new SystemClock();
+    var credits = new CreditLedgerService(store, PlanCatalog.Default, pinning, clock);
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), clock, pinning);
+
+    var freeUser = store.GetUserById(auth.RegisterWithPassword("credits-free@example.com", "abc12345", "abc12345").User.Id)
+        ?? throw new InvalidOperationException("Free account was not stored.");
+    AssertEqual(6, credits.GetBalance(freeUser).Balance, "free accounts should receive the one-time trial grant on first read.");
+    AssertEqual(6, credits.GetBalance(freeUser).Balance, "the trial grant must not be duplicated.");
+
+    var jobId = Guid.NewGuid();
+    credits.DebitForJob(freeUser, jobId, 2);
+    AssertEqual(4, credits.GetBalance(freeUser).Balance, "debits should reduce the balance.");
+    AssertThrows<InvalidOperationException>(
+        () => credits.DebitForJob(freeUser, Guid.NewGuid(), 100),
+        "insufficient balance must reject the debit");
+
+    credits.RefundJob(freeUser.Id, jobId);
+    credits.RefundJob(freeUser.Id, jobId);
+    AssertEqual(6, credits.GetBalance(freeUser).Balance, "a failed job should be refunded exactly once.");
+
+    var premiumUser = store.GetUserById(auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345").User.Id)
+        ?? throw new InvalidOperationException("Premium account was not stored.");
+    AssertEqual(100, credits.GetBalance(premiumUser).Balance, "premium accounts should receive the monthly allowance.");
+    AssertEqual(100, credits.GetBalance(premiumUser).Balance, "the monthly grant must not be duplicated within the month.");
+
+    var adminUser = store.GetUserById(auth.RegisterWithPassword("dmytro.bolibok@gmail.com", "abc12345", "abc12345").User.Id)
+        ?? throw new InvalidOperationException("Admin account was not stored.");
+    AssertTrue(credits.GetBalance(adminUser).Unlimited, "admin accounts should have unlimited credits.");
+    AssertEqual(0, store.ListCreditEntriesByUser(adminUser.Id).Count, "admin accounts should not receive ledger grants.");
+    credits.DebitForJob(adminUser, Guid.NewGuid(), 5);
+    AssertEqual(0, store.ListCreditEntriesByUser(adminUser.Id).Count, "admin debits should be a no-op.");
+
+    AssertEqual(10, credits.AdminAdjust(freeUser, 4), "admin adjustments should apply to the balance.");
+    AssertThrows<InvalidOperationException>(() => credits.AdminAdjust(freeUser, 0), "zero adjustments must be rejected");
+}
+
+static void TestEntitlementCapsBlockCreation()
+{
+    var store = new InMemoryOutfitStore();
+    var pinning = TestRolePinning();
+    var clock = new SystemClock();
+    var catalog = new PlanCatalog(
+        PlanCatalog.Default.For(UserRole.Free) with { MaxGarments = 1, MaxOutfits = 1, MaxBodyReferencePhotos = 1 },
+        PlanCatalog.Default.For(UserRole.Premium),
+        PlanCatalog.Default.For(UserRole.Admin));
+    var credits = new CreditLedgerService(store, catalog, pinning, clock);
+    var entitlements = new EntitlementService(store, store, store, store, catalog, pinning, credits);
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), clock, pinning);
+    var wardrobe = new WardrobeService(store, store, clock, entitlements: entitlements);
+    var outfits = new OutfitService(store, store, clock, entitlements: entitlements);
+
+    var free = auth.RegisterWithPassword("caps@example.com", "abc12345", "abc12345");
+    var garment = wardrobe.CreateGarment(CreateGarment(free.User.Id, "tee", GarmentCategory.Top));
+    AssertThrows<InvalidOperationException>(
+        () => wardrobe.CreateGarment(CreateGarment(free.User.Id, "second tee", GarmentCategory.Top)),
+        "the garment cap must block creation at the plan limit");
+
+    outfits.CreateOutfit(free.User.Id, "look", new[] { garment.Id });
+    AssertThrows<InvalidOperationException>(
+        () => outfits.CreateOutfit(free.User.Id, "look-2", new[] { garment.Id }),
+        "the outfit cap must block creation at the plan limit");
+
+    wardrobe.CreateBodyReferencePhoto(free.User.Id, "https://example.com/body.png");
+    AssertThrows<InvalidOperationException>(
+        () => wardrobe.CreateBodyReferencePhoto(free.User.Id, "https://example.com/body-2.png"),
+        "the body reference photo cap must block creation at the plan limit");
+
+    // The pinned premium account has no garment/outfit caps.
+    var premium = auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345");
+    wardrobe.CreateGarment(CreateGarment(premium.User.Id, "premium tee", GarmentCategory.Top));
+    wardrobe.CreateGarment(CreateGarment(premium.User.Id, "premium jeans", GarmentCategory.Bottom));
+    AssertEqual(2, store.ListGarmentsByUser(premium.User.Id).Count, "premium accounts should not hit the free garment cap.");
+}
+
+static void TestTryOnEstimateAppliesPlanModesAndResolution()
+{
+    var store = new InMemoryOutfitStore();
+    var pinning = TestRolePinning();
+    var clock = new SystemClock();
+    var catalog = PlanCatalog.Default;
+    var credits = new CreditLedgerService(store, catalog, pinning, clock);
+    var entitlements = new EntitlementService(store, store, store, store, catalog, pinning, credits);
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), clock, pinning);
+
+    var free = auth.RegisterWithPassword("tier-free@example.com", "abc12345", "abc12345");
+    var premium = auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345");
+    auth.UpdateProfile(free.User.Id, "Free User", UserGender.Female);
+    auth.UpdateProfile(premium.User.Id, "Olya", UserGender.Female);
+
+    var outfitService = new OutfitService(store, store, clock);
+    var freeTop = store.CreateGarment(CreateGarment(free.User.Id, "tee", GarmentCategory.Top));
+    var freeBottom = store.CreateGarment(CreateGarment(free.User.Id, "jeans", GarmentCategory.Bottom));
+    var freePair = outfitService.CreateOutfit(free.User.Id, "casual", new[] { freeTop.Id, freeBottom.Id });
+    var freeSingle = outfitService.CreateOutfit(free.User.Id, "one piece", new[] { freeTop.Id });
+    var premiumTop = store.CreateGarment(CreateGarment(premium.User.Id, "silk top", GarmentCategory.Top));
+    var premiumBottom = store.CreateGarment(CreateGarment(premium.User.Id, "skirt", GarmentCategory.Bottom));
+    var premiumPair = outfitService.CreateOutfit(premium.User.Id, "evening", new[] { premiumTop.Id, premiumBottom.Id });
+
+    // FASHN tryon-max quality configured at 4k: 5 credits per run, repriced to 2 under a 1k cap.
+    var provider = new FashnTryOnProvider(new HttpClient(), new FashnTryOnSettings(
+        "test-key", "tryon-max", "quality", 1, TimeSpan.Zero, 1, "png", false, true, "auto", null, Resolution: "4k"));
+    AssertEqual(5, provider.Capabilities.CreditsPerRun, "the 4k configuration should price 5 credits per run.");
+    AssertEqual(2, provider.CapabilitiesFor("1k").CreditsPerRun, "the 1k cap should reprice to 2 credits per run.");
+    AssertTrue(provider.CapabilitiesFor("1k").SettingsHash != provider.Capabilities.SettingsHash, "the 1k cap must change the settings hash so tiers cache separately.");
+
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), clock, entitlements: entitlements, credits: credits);
+
+    var gated = service.Estimate(free.User.Id, freePair.Id, TryOnMode.SequentialOutfitTryOn, "https://example.com/p.jpg", null);
+    AssertTrue(!gated.IsAvailable, "sequential try-on must be unavailable on the free plan.");
+    AssertTrue(gated.RequiresUpgrade, "the plan gate should be marked as an upgrade opportunity.");
+
+    var freeEstimate = service.Estimate(free.User.Id, freeSingle.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/p.jpg", null);
+    AssertTrue(freeEstimate.IsAvailable, "single garment try-on should stay available on the free plan.");
+    AssertEqual(2, freeEstimate.EstimatedCredits, "free accounts should be priced at the 1k resolution cap.");
+
+    var premiumEstimate = service.Estimate(premium.User.Id, premiumPair.Id, TryOnMode.SequentialOutfitTryOn, "https://example.com/p.jpg", null);
+    AssertTrue(premiumEstimate.IsAvailable && !premiumEstimate.RequiresUpgrade, "sequential try-on should be available on the premium plan.");
+    AssertEqual(10, premiumEstimate.EstimatedCredits, "premium accounts should be priced at the configured 4k resolution per garment run.");
+}
+
+static void TestStartTryOnDebitsCreditsCacheHitsAndRefunds()
+{
+    var store = new InMemoryOutfitStore();
+    var pinning = TestRolePinning();
+    var clock = new SystemClock();
+    var catalog = PlanCatalog.Default;
+    var credits = new CreditLedgerService(store, catalog, pinning, clock);
+    var entitlements = new EntitlementService(store, store, store, store, catalog, pinning, credits);
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), clock, pinning);
+
+    var free = auth.RegisterWithPassword("spender@example.com", "abc12345", "abc12345");
+    auth.UpdateProfile(free.User.Id, "Spender", UserGender.Female);
+    var freeUser = store.GetUserById(free.User.Id) ?? throw new InvalidOperationException("Account was not stored.");
+    var outfitService = new OutfitService(store, store, clock);
+    var top = store.CreateGarment(CreateGarment(free.User.Id, "tee", GarmentCategory.Top));
+    var outfit = outfitService.CreateOutfit(free.User.Id, "casual", new[] { top.Id });
+
+    var queue = new RecordingTryOnJobQueue();
+    var provider = new CountingTryOnProvider();
+    var service = new TryOnService(store, store, store, queue, provider, new TryOnCostEstimator(), clock, entitlements: entitlements, credits: credits);
+
+    var estimate = service.Estimate(free.User.Id, outfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/p.jpg", null);
+    var job = service.StartAsync(free.User.Id, outfit.Id, "https://example.com/p.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, estimate.EstimatedCredits, estimate.CacheKey)
+        .GetAwaiter().GetResult();
+    AssertEqual(5, credits.GetBalance(freeUser).Balance, "a paid start should debit the estimated credits before queueing.");
+    AssertEqual(0, queue.PriorityEnqueued.Count, "free accounts should use the normal queue.");
+
+    service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
+    AssertEqual(TryOnStatus.Succeeded, service.GetJob(free.User.Id, job.Id)?.Status, "the queued job should succeed through the provider.");
+    AssertEqual(5, credits.GetBalance(freeUser).Balance, "successful jobs keep their debit.");
+
+    var cachedEstimate = service.Estimate(free.User.Id, outfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/p.jpg", null);
+    AssertTrue(cachedEstimate.HasCachedResult, "the repeat estimate should see the cached result.");
+    var cacheHit = service.StartAsync(free.User.Id, outfit.Id, "https://example.com/p.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, cachedEstimate.EstimatedCredits, cachedEstimate.CacheKey)
+        .GetAwaiter().GetResult();
+    AssertTrue(cacheHit.ServedFromCache, "the repeat start should be served from cache.");
+    AssertEqual(5, credits.GetBalance(freeUser).Balance, "cache hits must not debit credits.");
+
+    // A failing provider refunds the debit when the worker marks the job failed.
+    var failingService = new TryOnService(store, store, store, queue, new ThrowingTryOnProvider(), new TryOnCostEstimator(), clock, entitlements: entitlements, credits: credits);
+    var bottom = store.CreateGarment(CreateGarment(free.User.Id, "jeans", GarmentCategory.Bottom));
+    var failingOutfit = outfitService.CreateOutfit(free.User.Id, "risky", new[] { bottom.Id });
+    var failingEstimate = failingService.Estimate(free.User.Id, failingOutfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/p.jpg", null);
+    var failingJob = failingService.StartAsync(free.User.Id, failingOutfit.Id, "https://example.com/p.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, failingEstimate.EstimatedCredits, failingEstimate.CacheKey)
+        .GetAwaiter().GetResult();
+    AssertEqual(4, credits.GetBalance(freeUser).Balance, "the failing job should debit on start.");
+    failingService.ProcessQueuedJobAsync(failingJob.Id).GetAwaiter().GetResult();
+    AssertEqual(TryOnStatus.Failed, failingService.GetJob(free.User.Id, failingJob.Id)?.Status, "the provider failure should fail the job.");
+    AssertEqual(5, credits.GetBalance(freeUser).Balance, "failed jobs must refund their debit.");
+
+    // Premium jobs ride the priority queue.
+    var premium = auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345");
+    auth.UpdateProfile(premium.User.Id, "Olya", UserGender.Female);
+    var premiumTop = store.CreateGarment(CreateGarment(premium.User.Id, "silk top", GarmentCategory.Top));
+    var premiumOutfit = outfitService.CreateOutfit(premium.User.Id, "evening", new[] { premiumTop.Id });
+    var premiumEstimate = service.Estimate(premium.User.Id, premiumOutfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/p.jpg", null);
+    service.StartAsync(premium.User.Id, premiumOutfit.Id, "https://example.com/p.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, premiumEstimate.EstimatedCredits, premiumEstimate.CacheKey)
+        .GetAwaiter().GetResult();
+    AssertEqual(1, queue.PriorityEnqueued.Count, "premium jobs should enter the priority queue.");
+}
+
+static void TestTryOnQueuePrioritizesPremiumJobs()
+{
+    var queue = new InMemoryTryOnJobQueue();
+    var normal = Guid.NewGuid();
+    var priority = Guid.NewGuid();
+    queue.EnqueueAsync(normal).AsTask().GetAwaiter().GetResult();
+    queue.EnqueueAsync(priority, priority: true).AsTask().GetAwaiter().GetResult();
+
+    AssertEqual(priority, queue.DequeueAsync(CancellationToken.None).GetAwaiter().GetResult(), "priority jobs should dequeue before earlier normal jobs.");
+    AssertEqual(normal, queue.DequeueAsync(CancellationToken.None).GetAwaiter().GetResult(), "normal jobs should dequeue after the priority queue drains.");
+}
+
+static void TestPostgresSchemaContainsCreditLedger()
+{
+    var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "schema.sql"));
+    var schema = File.ReadAllText(schemaPath);
+    AssertTrue(schema.Contains("create table if not exists account_credit_ledger", StringComparison.OrdinalIgnoreCase), "schema should declare the AI-credit ledger table.");
+    AssertTrue(schema.Contains("'TrialGrant', 'SubscriptionGrant', 'TopUp', 'TryOnSpend', 'Refund', 'AdminAdjustment'", StringComparison.OrdinalIgnoreCase), "the ledger should constrain its reasons.");
+
+    var migrationPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "migrations", "012_account_credit_ledger.sql"));
+    AssertTrue(File.Exists(migrationPath), "migration 012 should create the credit ledger.");
+}
+
+static void TestApiExposesPaywallEndpoints()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var program = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Program.cs"));
+    var contracts = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Contracts", "ApiContracts.cs"));
+
+    AssertTrue(program.Contains("MapGet(\"/account/entitlements\"", StringComparison.Ordinal), "api should expose the account entitlements endpoint.");
+    AssertTrue(program.Contains("MapPost(\"/admin/users/{userId}/credits\"", StringComparison.Ordinal), "api should expose the admin credit adjustment endpoint.");
+    AssertTrue(program.Contains("LoadPlanCatalog", StringComparison.Ordinal), "api should build the plan catalog from configuration.");
+    AssertTrue(contracts.Contains("AccountEntitlementsResponse", StringComparison.Ordinal), "contracts should document the entitlements response.");
+    AssertTrue(contracts.Contains("RequiresUpgrade", StringComparison.Ordinal), "the try-on estimate should carry the paywall upgrade flag.");
 }
 
 static void TestApiExposesSecureAuthEndpoints()
@@ -4148,9 +4376,15 @@ sealed class RecordingTryOnOutputStorage : ITryOnOutputStorage
 sealed class RecordingTryOnJobQueue : ITryOnJobQueue
 {
     public List<Guid> Enqueued { get; } = new();
+    public List<Guid> PriorityEnqueued { get; } = new();
 
-    public ValueTask EnqueueAsync(Guid jobId, CancellationToken cancellationToken = default)
+    public ValueTask EnqueueAsync(Guid jobId, bool priority = false, CancellationToken cancellationToken = default)
     {
+        if (priority)
+        {
+            PriorityEnqueued.Add(jobId);
+        }
+
         Enqueued.Add(jobId);
         return ValueTask.CompletedTask;
     }
@@ -4165,6 +4399,16 @@ sealed class RecordingTryOnJobQueue : ITryOnJobQueue
         var jobId = Enqueued[0];
         Enqueued.RemoveAt(0);
         return Task.FromResult(jobId);
+    }
+}
+
+sealed class ThrowingTryOnProvider : ITryOnProvider
+{
+    public string Name => "throwing-test";
+
+    public TryOnGeneration Generate(TryOnProviderRequest request)
+    {
+        throw new InvalidOperationException("provider down");
     }
 }
 

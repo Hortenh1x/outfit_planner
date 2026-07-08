@@ -2,8 +2,8 @@ import { type ChangeEvent, useState } from 'react';
 import { useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { GitBranch, Layers3, Link2, Plus, ScanFace, Sparkles, Trash2, Wand2 } from 'lucide-react';
-import { createBodyReferencePhoto, createGarment, createOutfit, deleteBodyReferencePhoto, deleteOutfit, deleteOutfitTryOnPreview, deleteTryOnJobOutput, estimateTryOn, getTryOnJob, listBodyReferencePhotos, listGarments, listOutfits, shareOutfit, startTryOn, updateOutfit, uploadBodyReferencePhoto, uploadGarmentPhoto } from '../api/client';
+import { Coins, GitBranch, Layers3, Link2, Plus, ScanFace, Sparkles, Trash2, Wand2 } from 'lucide-react';
+import { accountEntitlementsQueryKey, createBodyReferencePhoto, createGarment, createOutfit, deleteBodyReferencePhoto, deleteOutfit, deleteOutfitTryOnPreview, deleteTryOnJobOutput, estimateTryOn, getAccountEntitlements, getTryOnJob, listBodyReferencePhotos, listGarments, listOutfits, shareOutfit, startTryOn, updateOutfit, uploadBodyReferencePhoto, uploadGarmentPhoto } from '../api/client';
 import { ModeToggle } from '../components/ModeToggle';
 import { BodyReferenceManager } from '../features/builder/BodyReferenceManager';
 import { garmentNameFromFile } from '../features/builder/garmentName';
@@ -111,6 +111,14 @@ export function BuilderPage() {
     }
   });
   const estimateMutation = useMutation({ mutationFn: estimateTryOn });
+  const entitlementsQuery = useQuery({ queryKey: accountEntitlementsQueryKey, queryFn: getAccountEntitlements, retry: 1 });
+  // A cache hit never debits credits, so a zero balance may still confirm a cached run.
+  const insufficientCredits = pendingEstimate != null
+    && pendingEstimate.requiresAi
+    && !pendingEstimate.hasCachedResult
+    && pendingEstimate.creditsUnlimited !== true
+    && typeof pendingEstimate.creditBalance === 'number'
+    && pendingEstimate.creditBalance < pendingEstimate.estimatedCredits;
   const tryOnJobQuery = useQuery({
     queryKey: ['try-on-job', tryOnMutation.data?.id],
     queryFn: () => getTryOnJob(tryOnMutation.data?.id ?? ''),
@@ -476,22 +484,38 @@ export function BuilderPage() {
             onUpload={handleBodyPhotoFileChange}
           />
           <div className="tryon-mode-selector" role="group" aria-label="Try-on mode">
-            {(['ClothesOnlyPreview', 'SingleGarmentTryOn', 'SequentialOutfitTryOn', 'ExperimentalCompositeTryOn'] as TryOnMode[]).map((option) => (
-              <button
-                key={option}
-                type="button"
-                className={tryOnMode === option ? 'flow-toggle active' : 'flow-toggle'}
-                aria-pressed={tryOnMode === option}
-                onClick={() => {
-                  setTryOnMode(option);
-                  setPendingEstimate(null);
-                }}
-              >
-                <GitBranch size={16} />
-                <span>{modeLabel(option)}</span>
-              </button>
-            ))}
+            {(['ClothesOnlyPreview', 'SingleGarmentTryOn', 'SequentialOutfitTryOn', 'ExperimentalCompositeTryOn'] as TryOnMode[]).map((option) => {
+              // Plan-gated AI modes stay clickable: the estimate explains the gate and the
+              // upgrade path instead of a silently disabled button.
+              const planGated = option !== 'ClothesOnlyPreview'
+                && entitlementsQuery.data?.allowedAiModes != null
+                && !entitlementsQuery.data.allowedAiModes.includes(option);
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  className={tryOnMode === option ? 'flow-toggle active' : 'flow-toggle'}
+                  aria-pressed={tryOnMode === option}
+                  onClick={() => {
+                    setTryOnMode(option);
+                    setPendingEstimate(null);
+                  }}
+                >
+                  <GitBranch size={16} />
+                  <span>{modeLabel(option)}</span>
+                  {planGated ? <span className="mode-premium-pill">Premium</span> : null}
+                </button>
+              );
+            })}
           </div>
+          {entitlementsQuery.data?.creditsUnlimited === true || typeof entitlementsQuery.data?.creditBalance === 'number' ? (
+            <p className="tryon-credits" role="status">
+              <Coins size={14} aria-hidden="true" />
+              <span>
+                AI credits: {entitlementsQuery.data.creditsUnlimited ? 'unlimited' : entitlementsQuery.data.creditBalance}
+              </span>
+            </p>
+          ) : null}
           <button
             type="button"
             className="primary-action generate-action"
@@ -527,10 +551,20 @@ export function BuilderPage() {
               {pendingEstimate.warnings.map((warning) => (
                 <p className="error" key={warning}>{warning}</p>
               ))}
+              {pendingEstimate.requiresUpgrade ? (
+                <p className="upgrade-notice">
+                  This mode is part of the <em>Premium</em> plan. Ask the admin to upgrade your account.
+                </p>
+              ) : null}
+              {insufficientCredits ? (
+                <p className="error">
+                  Not enough AI credits: balance {pendingEstimate.creditBalance}, required {pendingEstimate.estimatedCredits}.
+                </p>
+              ) : null}
               <button
                 type="button"
                 className="primary-action"
-                disabled={!pendingEstimate.isAvailable || (pendingEstimate.requiresAi && (requiresProfileGender || !selectedBodyPhoto?.imageUrl)) || tryOnMutation.isPending}
+                disabled={!pendingEstimate.isAvailable || insufficientCredits || (pendingEstimate.requiresAi && (requiresProfileGender || !selectedBodyPhoto?.imageUrl)) || tryOnMutation.isPending}
                 onClick={async () => {
                   const outfit = await ensureOutfit();
                   await tryOnMutation.mutateAsync({
@@ -543,6 +577,8 @@ export function BuilderPage() {
                   });
                   setPendingEstimate(null);
                   setMode('person');
+                  // The debit changed the balance shown in the credits chip.
+                  void queryClient.invalidateQueries({ queryKey: accountEntitlementsQueryKey });
                 }}
               >
                 <Sparkles size={16} />

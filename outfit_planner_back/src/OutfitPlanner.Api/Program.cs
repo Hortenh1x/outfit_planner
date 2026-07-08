@@ -157,6 +157,11 @@ builder.Services.AddSingleton<IAuthTokenService, SecureAuthTokenService>();
 // Role pins ("always admin/premium" accounts) resolve by normalized email at read time; the
 // defaults apply when the Roles__Pinned*Emails settings are unset.
 builder.Services.AddSingleton(new RolePinningPolicy(LoadRolePinningOptions(builder.Configuration)));
+// Paywall tiers: one catalog drives caps, allowed AI modes, resolution, and credit
+// allowances (numbers overridable via Paywall__Free__*/Paywall__Premium__*).
+builder.Services.AddSingleton(LoadPlanCatalog(builder.Configuration));
+builder.Services.AddSingleton<CreditLedgerService>();
+builder.Services.AddSingleton<EntitlementService>();
 var authenticationBuilder = builder.Services.AddAuthentication();
 var externalAuthPublicOrigin = NormalizePublicOrigin(builder.Configuration["Authentication:PublicOrigin"]);
 var publicOrigin = NormalizePublicOrigin(builder.Configuration["PublicOrigin"]) ?? externalAuthPublicOrigin;
@@ -344,6 +349,7 @@ if (storageProvider == "Postgres")
     builder.Services.AddSingleton<IShareLinkRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
     builder.Services.AddSingleton<IUserAccountRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
     builder.Services.AddSingleton<IAdminUserRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
+    builder.Services.AddSingleton<ICreditLedgerRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
 }
 else
 {
@@ -356,6 +362,7 @@ else
     builder.Services.AddSingleton<IShareLinkRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
     builder.Services.AddSingleton<IUserAccountRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
     builder.Services.AddSingleton<IAdminUserRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
+    builder.Services.AddSingleton<ICreditLedgerRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
 }
 builder.Services.AddSingleton<WardrobeService>();
 builder.Services.AddSingleton<PhotoUploadService>();
@@ -733,6 +740,26 @@ api.MapGet("/account/export", (
     });
 });
 
+api.MapGet("/account/entitlements", (EntitlementService entitlements, HttpContext context) =>
+{
+    var account = entitlements.Get(CurrentUser(context));
+    return Results.Ok(new AccountEntitlementsResponse(
+        account.Role,
+        account.Limits.MaxGarments,
+        account.Limits.MaxOutfits,
+        account.Limits.MaxBodyReferencePhotos,
+        account.GarmentCount,
+        account.OutfitCount,
+        account.BodyReferencePhotoCount,
+        account.Credits.Unlimited,
+        account.Credits.Balance,
+        account.Credits.MonthlyAllowance,
+        account.Limits.AllowedAiModes,
+        account.Limits.MaxTryOnResolution,
+        account.Limits.PriorityQueue));
+})
+    .Produces<AccountEntitlementsResponse>(StatusCodes.Status200OK);
+
 api.MapPatch("/account/profile", (
     UpdateAccountProfileRequest request,
     AuthService auth,
@@ -871,6 +898,35 @@ api.MapPut("/admin/users/{userId}/role", (
     }
 })
     .Produces<AdminUserResponse>(StatusCodes.Status200OK);
+
+api.MapPost("/admin/users/{userId}/credits", (
+    string userId,
+    AdjustUserCreditsRequest request,
+    IUserAccountRepository users,
+    CreditLedgerService credits,
+    HttpContext context) =>
+{
+    if (RequireAdmin(context) is { } forbidden)
+    {
+        return forbidden;
+    }
+
+    var target = users.GetUserById(userId);
+    if (target is null)
+    {
+        return Results.NotFound();
+    }
+
+    try
+    {
+        var balance = credits.AdminAdjust(target, request.Delta);
+        return Results.Ok(new { balance });
+    }
+    catch (ValidationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
 
 api.MapPost("/admin/users/{userId}/sessions/revoke", (
     string userId,
@@ -1265,17 +1321,21 @@ api.MapPost("/outfits/{outfitId:guid}/try-on/estimate", (
     Guid outfitId,
     EstimateTryOnRequest request,
     TryOnService tryOn,
+    IUserAccountRepository users,
+    CreditLedgerService credits,
     HttpContext context) =>
 {
     try
     {
+        var userId = CurrentUser(context);
         var estimate = tryOn.Estimate(
-            CurrentUser(context),
+            userId,
             outfitId,
             request.TryOnMode,
             request.BodyReferencePhotoUrl,
             request.BodyReferencePhotoId);
-        return Results.Ok(ToTryOnEstimateResponse(estimate));
+        var balance = users.GetUserById(userId) is { } user ? credits.GetBalance(user) : null;
+        return Results.Ok(ToTryOnEstimateResponse(estimate, balance));
     }
     catch (ValidationException ex)
     {
@@ -2056,10 +2116,42 @@ static AdminUserResponse ToAdminUserResponse(AdminUserRecord record, AdminServic
         record.TryOnJobCount,
         record.BodyReferencePhotoCount,
         record.ActiveSessionCount,
-        avatarUrl);
+        avatarUrl,
+        admin.RawCreditBalance(user));
 }
 
-static TryOnEstimateResponse ToTryOnEstimateResponse(TryOnCostEstimate estimate)
+static PlanCatalog LoadPlanCatalog(IConfiguration configuration)
+{
+    var free = PlanCatalog.Default.For(UserRole.Free);
+    var premium = PlanCatalog.Default.For(UserRole.Premium);
+    return new PlanCatalog(
+        free with
+        {
+            MaxGarments = ReadPlanCap(configuration["Paywall:Free:MaxGarments"], free.MaxGarments),
+            MaxOutfits = ReadPlanCap(configuration["Paywall:Free:MaxOutfits"], free.MaxOutfits),
+            MaxBodyReferencePhotos = ReadPlanCap(configuration["Paywall:Free:MaxBodyReferencePhotos"], free.MaxBodyReferencePhotos),
+            TrialCredits = ReadPlanCount(configuration["Paywall:Free:TrialCredits"], free.TrialCredits)
+        },
+        premium with
+        {
+            MaxBodyReferencePhotos = ReadPlanCap(configuration["Paywall:Premium:MaxBodyReferencePhotos"], premium.MaxBodyReferencePhotos),
+            MonthlyCredits = ReadPlanCount(configuration["Paywall:Premium:MonthlyCredits"], premium.MonthlyCredits)
+        },
+        PlanCatalog.Default.For(UserRole.Admin));
+
+    // Caps: unset keeps the default, zero/negative means unlimited.
+    static int? ReadPlanCap(string? value, int? fallback)
+    {
+        return int.TryParse(value, out var parsed) ? (parsed <= 0 ? null : parsed) : fallback;
+    }
+
+    static int ReadPlanCount(string? value, int fallback)
+    {
+        return int.TryParse(value, out var parsed) && parsed >= 0 ? parsed : fallback;
+    }
+}
+
+static TryOnEstimateResponse ToTryOnEstimateResponse(TryOnCostEstimate estimate, CreditBalanceInfo? creditBalance = null)
 {
     return new TryOnEstimateResponse(
         estimate.Mode,
@@ -2075,7 +2167,10 @@ static TryOnEstimateResponse ToTryOnEstimateResponse(TryOnCostEstimate estimate)
         estimate.CacheKey,
         estimate.HasCachedResult,
         estimate.Summary,
-        estimate.Warnings);
+        estimate.Warnings,
+        estimate.RequiresUpgrade,
+        creditBalance?.Unlimited ?? false,
+        creditBalance is { Unlimited: false } info ? info.Balance : null);
 }
 
 static TryOnEstimateItemResponse ToEstimateItem(OutfitItem item)

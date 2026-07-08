@@ -64,6 +64,17 @@ public interface IShareLinkRepository
     bool RevokeShareLinkByUser(string userId, string token, DateTimeOffset revokedAt);
 }
 
+// AI-credit ledger reads/writes (paywall metering). The balance is the sum of non-expired
+// entries; reason-based lookups back idempotent grants and refunds.
+public interface ICreditLedgerRepository
+{
+    void AddCreditEntry(CreditLedgerEntry entry);
+    IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByUser(string userId);
+    int GetCreditBalance(string userId, DateTimeOffset now);
+    bool HasCreditEntryWithReasonSince(string userId, CreditLedgerReason reason, DateTimeOffset since);
+    IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByJob(Guid tryOnJobId);
+}
+
 public sealed record AdminUserQuery(string? Search, UserRole? Role, int Offset, int Limit);
 
 public sealed record AdminUserRecord(

@@ -1,8 +1,19 @@
-# Paywall Model Proposal
+# Paywall Model
 
-Status: **proposal**. The role foundation (`Free` / `Premium` / `Admin` accounts, pinned
-role emails, admin panel) is implemented; everything else in this document is a plan, not
-shipped behavior. Numbers marked *(placeholder)* need product/pricing validation.
+Status: **stages 1–3 implemented** (plus the free-tier caps, the premium priority queue,
+and the admin credit lever). Roles/pinning/admin panel, the `PlanCatalog` entitlements,
+the `account_credit_ledger` metering (trial + monthly grants, debit on confirm, refund on
+failure), tier-gated try-on modes, the per-tier resolution repricing, and the entitlements
+UI are live. **Stage 4 (Stripe billing) is intentionally not implemented** — there are no
+billing credentials; the `Free ↔ Premium` role switch and the ledger are billing-ready.
+Numbers marked *(placeholder)* still need pricing validation and are configurable through
+`Paywall__Free__*` / `Paywall__Premium__*`.
+
+Implementation deviation from the original sketch: monthly grants are granted once per UTC
+calendar month and **roll over** (stored without expiry) instead of expiring — expiring
+grants with non-expiring spends would let balances drift negative across months. The
+`expires_at` column exists and is honored by the balance query, reserved for a future
+tightening.
 
 ## Philosophy
 
@@ -128,11 +139,16 @@ ledger meters consumption.
 
 1. **Foundation** — roles + pinned accounts + admin panel. *(shipped)*
 2. **Visible entitlements** — estimates and Builder UI show per-tier availability and an
-   upgrade dialog; nothing is billed yet, Free simply sees which modes are Premium.
-3. **Metering** — credit ledger + trial grants + debit/refund wiring; premium accounts get
-   a generous manual allowance. Still no money.
-4. **Billing** — Stripe subscription/top-ups + webhook role transitions.
-5. **Tighten Free caps** — apply wardrobe caps with grandfathering for existing accounts.
+   upgrade notice; Free sees which modes are Premium. *(shipped: `GET
+   /api/account/entitlements`, Premium pills on gated modes, credits chip, upgrade notice)*
+3. **Metering** — credit ledger + trial/monthly grants + debit/refund wiring + admin
+   credit adjustments. *(shipped: migration 012, `CreditLedgerService`, `POST
+   /api/admin/users/{id}/credits`)*
+4. **Billing** — Stripe subscription/top-ups + webhook role transitions. *(not started —
+   requires Stripe credentials)*
+5. **Tighten Free caps** — the caps are enforced (garments/outfits/body photos) with the
+   placeholder numbers; revisit the numbers and grandfathering before charging money.
+   *(enforcement shipped, numbers provisional)*
 
 ## What stays free forever
 

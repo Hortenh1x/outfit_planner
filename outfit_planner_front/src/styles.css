@@ -2072,3 +2072,56 @@ input[type="file"] {
     transition-duration: 1ms !important;
   }
 }
+
+/* Paywall surfaces (Builder try-on rail + Wardrobe add panel). */
+
+.tryon-credits {
+  align-items: center;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 700;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 12px;
+  width: fit-content;
+}
+
+.mode-premium-pill {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  color: var(--accent-strong);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  margin-left: auto;
+  padding: 1px 7px;
+  text-transform: uppercase;
+}
+
+.upgrade-notice {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-small);
+  color: var(--accent-strong);
+  font-size: 0.82rem;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.upgrade-notice em {
+  font-family: var(--font-display);
+  font-style: italic;
+}
+
+.wardrobe-cap-notice {
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-small);
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin: 0 0 10px;
+  padding: 7px 10px;
+}

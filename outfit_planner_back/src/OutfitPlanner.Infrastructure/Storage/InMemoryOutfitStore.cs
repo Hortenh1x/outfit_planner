@@ -16,7 +16,10 @@ public sealed record InMemoryOutfitStoreSnapshot(
     Outfit[] Outfits,
     ScheduledOutfit[] ScheduledOutfits,
     TryOnJob[] TryOnJobs,
-    ShareLink[] ShareLinks)
+    ShareLink[] ShareLinks,
+    // Nullable with a default so snapshots written before the credit ledger existed keep
+    // deserializing (missing field → null → loaded as empty).
+    CreditLedgerEntry[]? CreditLedger = null)
 {
     public static InMemoryOutfitStoreSnapshot Empty { get; } = new(
         Array.Empty<UserAccount>(),
@@ -29,7 +32,8 @@ public sealed record InMemoryOutfitStoreSnapshot(
         Array.Empty<Outfit>(),
         Array.Empty<ScheduledOutfit>(),
         Array.Empty<TryOnJob>(),
-        Array.Empty<ShareLink>());
+        Array.Empty<ShareLink>(),
+        Array.Empty<CreditLedgerEntry>());
 }
 
 public sealed class InMemoryOutfitStore :
@@ -40,7 +44,8 @@ public sealed class InMemoryOutfitStore :
     ITryOnJobRepository,
     IShareLinkRepository,
     IUserAccountRepository,
-    IAdminUserRepository
+    IAdminUserRepository,
+    ICreditLedgerRepository
 {
     private readonly object _lock = new();
     private readonly Dictionary<string, UserAccount> _users = new(StringComparer.Ordinal);
@@ -54,6 +59,7 @@ public sealed class InMemoryOutfitStore :
     private readonly Dictionary<(string UserId, DateOnly Date), ScheduledOutfit> _schedule = new();
     private readonly Dictionary<Guid, TryOnJob> _tryOnJobs = new();
     private readonly Dictionary<string, ShareLink> _shareLinks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<Guid, CreditLedgerEntry> _creditLedger = new();
 
     public InMemoryOutfitStore()
     {
@@ -79,7 +85,8 @@ public sealed class InMemoryOutfitStore :
                 _outfits.Values.ToArray(),
                 _schedule.Values.ToArray(),
                 _tryOnJobs.Values.ToArray(),
-                _shareLinks.Values.ToArray());
+                _shareLinks.Values.ToArray(),
+                _creditLedger.Values.ToArray());
         }
     }
 
@@ -550,6 +557,55 @@ public sealed class InMemoryOutfitStore :
         }
     }
 
+    public void AddCreditEntry(CreditLedgerEntry entry)
+    {
+        lock (_lock)
+        {
+            _creditLedger[entry.Id] = entry;
+        }
+    }
+
+    public IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByUser(string userId)
+    {
+        lock (_lock)
+        {
+            return _creditLedger.Values
+                .Where(entry => entry.UserId == userId)
+                .OrderByDescending(entry => entry.CreatedAt)
+                .ToList();
+        }
+    }
+
+    public int GetCreditBalance(string userId, DateTimeOffset now)
+    {
+        lock (_lock)
+        {
+            return _creditLedger.Values
+                .Where(entry => entry.UserId == userId && (entry.ExpiresAt is null || entry.ExpiresAt > now))
+                .Sum(entry => entry.Delta);
+        }
+    }
+
+    public bool HasCreditEntryWithReasonSince(string userId, CreditLedgerReason reason, DateTimeOffset since)
+    {
+        lock (_lock)
+        {
+            return _creditLedger.Values.Any(entry =>
+                entry.UserId == userId && entry.Reason == reason && entry.CreatedAt >= since);
+        }
+    }
+
+    public IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByJob(Guid tryOnJobId)
+    {
+        lock (_lock)
+        {
+            return _creditLedger.Values
+                .Where(entry => entry.TryOnJobId == tryOnJobId)
+                .OrderBy(entry => entry.CreatedAt)
+                .ToList();
+        }
+    }
+
     private IEnumerable<UserAccount> FilterUsers(AdminUserQuery query)
     {
         var users = _users.Values.AsEnumerable();
@@ -795,6 +851,11 @@ public sealed class InMemoryOutfitStore :
                 _passwordResetTokens.Remove(key);
             }
 
+            foreach (var key in _creditLedger.Where(item => item.Value.UserId == userId).Select(item => item.Key).ToList())
+            {
+                _creditLedger.Remove(key);
+            }
+
             return true;
         }
     }
@@ -861,6 +922,11 @@ public sealed class InMemoryOutfitStore :
             foreach (var link in snapshot.ShareLinks)
             {
                 _shareLinks[link.Token] = link;
+            }
+
+            foreach (var entry in snapshot.CreditLedger ?? Array.Empty<CreditLedgerEntry>())
+            {
+                _creditLedger[entry.Id] = entry;
             }
         }
     }

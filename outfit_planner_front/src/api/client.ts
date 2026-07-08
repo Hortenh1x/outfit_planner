@@ -615,6 +615,30 @@ export function getSharedOutfit(token: string): Promise<SharedOutfit> {
   return request<SharedOutfit>(`/share/${token}`);
 }
 
+// Paywall entitlements: the account's plan limits, usage against them, and AI-credit balance.
+
+export interface AccountEntitlements {
+  role: UserRole;
+  maxGarments?: number | null;
+  maxOutfits?: number | null;
+  maxBodyReferencePhotos?: number | null;
+  garmentCount: number;
+  outfitCount: number;
+  bodyReferencePhotoCount: number;
+  creditsUnlimited: boolean;
+  creditBalance: number;
+  monthlyCreditAllowance: number;
+  allowedAiModes: TryOnMode[];
+  maxTryOnResolution: string;
+  priorityTryOnQueue: boolean;
+}
+
+export const accountEntitlementsQueryKey = ['account-entitlements'] as const;
+
+export function getAccountEntitlements(): Promise<AccountEntitlements> {
+  return request<AccountEntitlements>('/account/entitlements');
+}
+
 // Admin panel API (requires the Admin role; non-admins receive 403).
 
 export interface AdminStats {
@@ -641,6 +665,8 @@ export interface AdminUser {
   bodyReferencePhotoCount: number;
   activeSessionCount: number;
   avatarUrl?: string | null;
+  // Raw AI-credit balance; null for accounts with unlimited credits (Admin).
+  creditBalance?: number | null;
 }
 
 export interface AdminUsersPage {
@@ -696,5 +722,13 @@ export function getAdminUserExport(userId: string): Promise<unknown> {
 export function deleteAdminUser(userId: string): Promise<void> {
   return request<void>(`/admin/users/${encodeURIComponent(userId)}`, {
     method: 'DELETE'
+  });
+}
+
+// Appends an AdminAdjustment row to the user's AI-credit ledger and returns the new balance.
+export function adjustAdminUserCredits(userId: string, delta: number): Promise<{ balance: number }> {
+  return request<{ balance: number }>(`/admin/users/${encodeURIComponent(userId)}/credits`, {
+    method: 'POST',
+    body: JSON.stringify({ delta })
   });
 }

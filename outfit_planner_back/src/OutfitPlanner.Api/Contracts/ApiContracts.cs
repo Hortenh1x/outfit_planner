@@ -109,7 +109,12 @@ public sealed record TryOnEstimateResponse(
     string CacheKey,
     bool HasCachedResult,
     string Summary,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings,
+    // Paywall surface: the mode is blocked only by the account's plan (offer an upgrade),
+    // and the account's AI-credit balance so the UI can warn before confirming.
+    bool RequiresUpgrade = false,
+    bool CreditsUnlimited = false,
+    int? CreditBalance = null);
 
 public sealed record ShareLinkResponse(string Token, string Url);
 
@@ -196,6 +201,25 @@ public sealed record AuthUserResponse(
 
 public sealed record UpdateUserRoleRequest(UserRole Role);
 
+public sealed record AdjustUserCreditsRequest(int Delta);
+
+// The account's plan, current usage against its caps, and the AI-credit balance. Null caps
+// mean unlimited; CreditsUnlimited marks admin accounts that bypass the ledger.
+public sealed record AccountEntitlementsResponse(
+    UserRole Role,
+    int? MaxGarments,
+    int? MaxOutfits,
+    int? MaxBodyReferencePhotos,
+    int GarmentCount,
+    int OutfitCount,
+    int BodyReferencePhotoCount,
+    bool CreditsUnlimited,
+    int CreditBalance,
+    int MonthlyCreditAllowance,
+    IReadOnlyList<TryOnMode> AllowedAiModes,
+    string MaxTryOnResolution,
+    bool PriorityTryOnQueue);
+
 // Admin-facing account view. Role is the effective role; RolePinned marks the accounts whose
 // role is pinned by email and cannot be changed or deleted from the panel. Sensitive fields
 // (password hash, avatar object key) are intentionally absent.
@@ -214,7 +238,9 @@ public sealed record AdminUserResponse(
     int TryOnJobCount,
     int BodyReferencePhotoCount,
     int ActiveSessionCount,
-    string? AvatarUrl);
+    string? AvatarUrl,
+    // Raw AI-credit ledger balance; null for accounts with unlimited credits (Admin).
+    int? CreditBalance = null);
 
 public sealed record AdminUsersPageResponse(
     IReadOnlyList<AdminUserResponse> Items,

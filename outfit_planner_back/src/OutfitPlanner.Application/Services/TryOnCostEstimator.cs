@@ -40,7 +40,12 @@ public sealed record TryOnCostEstimate(
     string CacheKey,
     bool HasCachedResult,
     string Summary,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    // True when the mode is unavailable only because the account's plan does not include
+    // it (paywall gate), so the UI can offer an upgrade instead of a generic error.
+    public bool RequiresUpgrade { get; init; }
+}
 
 public sealed class TryOnCostEstimator
 {

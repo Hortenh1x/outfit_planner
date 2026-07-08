@@ -19,7 +19,8 @@ The app is intentionally small, but it has a real backend/frontend split, signed
 - Secure account registration and sign-in with email/password.
 - Google OAuth and Apple OIDC sign-in when provider credentials are configured.
 - Revocable server-side sessions with HttpOnly cookies, CSRF protection, rate-limited auth endpoints, email verification/password reset token storage, and session revoke-all support.
-- Free, Premium, and Admin account roles as the paywall foundation (roles gate no product features yet; [`PAYWALL_MODEL.md`](PAYWALL_MODEL.md) is the paywall proposal), with two email-pinned accounts whose roles can never change, and an admin panel that lists, inspects, and manages all users and their data.
+- Free, Premium, and Admin account roles with two email-pinned accounts whose roles can never change, and an admin panel that lists, inspects, and manages all users, their data, and their AI credits.
+- An enforced paywall over AI compute ([`PAYWALL_MODEL.md`](PAYWALL_MODEL.md)): per-tier plan catalog (free caps on garments/outfits/body photos, allowed try-on modes, output resolution), an AI-credit ledger with a one-time free trial grant and a rolling monthly Premium allowance, debit-on-confirm with automatic refunds for failed jobs, no spend on cache hits, a premium-priority try-on queue, and entitlements surfaced in the Builder (credits chip, Premium mode pills, upgrade notice). Billing (Stripe) is not wired yet; roles are switched manually via the admin panel.
 - Privacy endpoints for account export/delete, body photo deletion, and AI output purging.
 - Configurable garment background removal for uploaded item cutouts, with simple local fallback, `rembg`, and HTTP/API provider adapters.
 - Optional local garment auto-tagging that prefills category, colors, seasons, and tags on upload (FashionCLIP + k-means colors), with soft degradation when the service is off and user edits that are never overwritten.
@@ -264,6 +265,12 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `Authentication__Apple__ClientSecret` | empty | Apple OIDC client secret JWT generated from Apple developer credentials. |
 | `Roles__PinnedAdminEmails` | `dmytro.bolibok@gmail.com` | Comma-separated emails whose accounts are always `Admin`. Blank keeps the default pin. |
 | `Roles__PinnedPremiumEmails` | `olya.shaydur@gmail.com` | Comma-separated emails whose accounts are always `Premium`. Blank keeps the default pin. |
+| `Paywall__Free__MaxGarments` | `50` | Free-tier garment cap. Zero or negative means unlimited. |
+| `Paywall__Free__MaxOutfits` | `20` | Free-tier saved-outfit cap. Zero or negative means unlimited. |
+| `Paywall__Free__MaxBodyReferencePhotos` | `1` | Free-tier body reference photo cap. Zero or negative means unlimited. |
+| `Paywall__Free__TrialCredits` | `6` | One-time AI-credit trial grant for free accounts. |
+| `Paywall__Premium__MaxBodyReferencePhotos` | `5` | Premium body reference photo cap. Zero or negative means unlimited. |
+| `Paywall__Premium__MonthlyCredits` | `100` | Premium AI-credit allowance granted once per UTC calendar month (rolls over). |
 
 Frontend configuration:
 
@@ -360,10 +367,12 @@ Private routes require the `outfit_session` cookie. Mutating private routes also
 | `PATCH` | `/account/profile` | Update account `username` and `gender`. |
 | `POST` | `/account/avatar` | Upload and persist the current account avatar through private signed object storage. |
 | `DELETE` | `/account` | Delete the current account and clear auth cookies. |
+| `GET` | `/account/entitlements` | The account's plan limits, current usage, allowed AI try-on modes, resolution cap, and AI-credit balance. |
 | `GET` | `/admin/stats` | Admin-only totals for users, garments, outfits, and try-on jobs. |
 | `GET` | `/admin/users?q=&role=&offset=&limit=` | Admin-only paged/searchable user list with per-user data counts. |
 | `GET` | `/admin/users/{userId}` | Admin-only single user view. |
 | `PUT` | `/admin/users/{userId}/role` | Admin-only role change. Pinned accounts and your own account are rejected with `409`. |
+| `POST` | `/admin/users/{userId}/credits` | Admin-only AI-credit adjustment (appends an `AdminAdjustment` ledger row, returns the new balance). |
 | `POST` | `/admin/users/{userId}/sessions/revoke` | Admin-only revocation of all sessions of a user. |
 | `POST` | `/admin/users/{userId}/purge-ai-outputs` | Admin-only purge of a user's AI outputs. |
 | `GET` | `/admin/users/{userId}/export` | Admin-only export of a user's data with a sanitized account record. |
@@ -440,7 +449,7 @@ curl.exe -k https://localhost:5001/api/health
 ## Current Boundaries
 
 - Google and Apple auth require provider credentials. Email/password auth works without external secrets.
-- Account roles exist as the paywall foundation but gate no product features yet; the paywall itself (credits, caps, billing) is only a proposal in [`PAYWALL_MODEL.md`](PAYWALL_MODEL.md).
+- The paywall (tier caps, AI-credit metering, mode/resolution gating, priority queue) is enforced per [`PAYWALL_MODEL.md`](PAYWALL_MODEL.md), but billing is not wired: there is no Stripe integration, so `Free ↔ Premium` transitions happen manually through the admin panel and the tier numbers are provisional placeholders.
 - Password registration requires at least 8 characters, at least one letter, and at least one digit.
 - Uploaded files default to local object storage; S3-compatible MinIO can be enabled with object storage configuration.
 - PostgreSQL schema changes are applied through DbUp migrations at startup.

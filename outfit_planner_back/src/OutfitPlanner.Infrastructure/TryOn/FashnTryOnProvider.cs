@@ -47,19 +47,39 @@ public sealed class FashnTryOnProvider : ITryOnProvider
 
     public string Name => nameof(FashnTryOnProvider);
 
-    public TryOnProviderCapabilities Capabilities => new(
-        Name,
-        _settings.ModelName,
-        _settings.Mode,
-        _settings.SettingsHash,
-        new HashSet<TryOnMode>
-        {
-            TryOnMode.SingleGarmentTryOn,
-            TryOnMode.SequentialOutfitTryOn
-        })
+    public TryOnProviderCapabilities Capabilities => CapabilitiesFrom(_settings);
+
+    // Tier resolution cap: a "1k" cap under a "4k" configuration reprices the run (2 credits
+    // instead of 5) and changes the settings hash, so tiers cache separately.
+    public TryOnProviderCapabilities CapabilitiesFor(string? maxResolution)
     {
-        CreditsPerRun = _settings.CreditsPerRun
-    };
+        return CapabilitiesFrom(EffectiveSettings(maxResolution));
+    }
+
+    private TryOnProviderCapabilities CapabilitiesFrom(FashnTryOnSettings settings)
+    {
+        return new TryOnProviderCapabilities(
+            Name,
+            settings.ModelName,
+            settings.Mode,
+            settings.SettingsHash,
+            new HashSet<TryOnMode>
+            {
+                TryOnMode.SingleGarmentTryOn,
+                TryOnMode.SequentialOutfitTryOn
+            })
+        {
+            CreditsPerRun = settings.CreditsPerRun
+        };
+    }
+
+    private FashnTryOnSettings EffectiveSettings(string? maxResolution)
+    {
+        return string.Equals(maxResolution, "1k", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(_settings.Resolution, "4k", StringComparison.OrdinalIgnoreCase)
+            ? _settings with { Resolution = "1k" }
+            : _settings;
+    }
 
     public FashnTryOnProvider(HttpClient http, FashnTryOnSettings settings)
     {
@@ -89,17 +109,17 @@ public sealed class FashnTryOnProvider : ITryOnProvider
             throw new InvalidOperationException("Enable sequential flow before sending a multi-garment outfit to FASHN.");
         }
 
-        return GenerateSequentially(request.BodyReferencePhotoUrl, request.BodyTryOnItems, request.UserGender);
+        return GenerateSequentially(EffectiveSettings(request.Settings.Resolution), request.BodyReferencePhotoUrl, request.BodyTryOnItems, request.UserGender);
     }
 
-    private TryOnGeneration GenerateSequentially(string bodyReferencePhotoUrl, IReadOnlyList<OutfitItem> items, UserGender? userGender)
+    private TryOnGeneration GenerateSequentially(FashnTryOnSettings settings, string bodyReferencePhotoUrl, IReadOnlyList<OutfitItem> items, UserGender? userGender)
     {
         var modelImage = bodyReferencePhotoUrl;
         TryOnGeneration? latest = null;
 
         foreach (var item in items)
         {
-            var predictionId = SubmitPrediction(modelImage, item, userGender);
+            var predictionId = SubmitPrediction(settings, modelImage, item, userGender);
             latest = PollUntilCompleted(predictionId);
             modelImage = latest.OutputImageUrl;
         }
@@ -107,34 +127,34 @@ public sealed class FashnTryOnProvider : ITryOnProvider
         return latest ?? throw new InvalidOperationException("FASHN generation did not produce an output.");
     }
 
-    private string SubmitPrediction(string bodyReferencePhotoUrl, OutfitItem item, UserGender? userGender)
+    private string SubmitPrediction(FashnTryOnSettings settings, string bodyReferencePhotoUrl, OutfitItem item, UserGender? userGender)
     {
-        var content = _settings.UsesTryOnMax
+        var content = settings.UsesTryOnMax
             ? JsonContent(new FashnTryOnMaxRunRequest(
-                _settings.ModelName,
+                settings.ModelName,
                 new FashnTryOnMaxInputs(
                     bodyReferencePhotoUrl,
                     item.ThumbnailUrl,
                     GenderPrompt(userGender),
-                    _settings.Resolution,
-                    _settings.Mode,
-                    _settings.NumSamples,
-                    _settings.OutputFormat,
-                    _settings.ReturnBase64,
-                    _settings.Seed)))
+                    settings.Resolution,
+                    settings.Mode,
+                    settings.NumSamples,
+                    settings.OutputFormat,
+                    settings.ReturnBase64,
+                    settings.Seed)))
             : JsonContent(new FashnRunRequest(
-                _settings.ModelName,
+                settings.ModelName,
                 new FashnTryOnInputs(
                     bodyReferencePhotoUrl,
                     item.ThumbnailUrl,
                     FashnCategory(item.Category),
-                    _settings.Mode,
-                    _settings.NumSamples,
-                    _settings.OutputFormat,
-                    _settings.ReturnBase64,
-                    _settings.SegmentationFree,
-                    _settings.GarmentPhotoType,
-                    _settings.Seed)));
+                    settings.Mode,
+                    settings.NumSamples,
+                    settings.OutputFormat,
+                    settings.ReturnBase64,
+                    settings.SegmentationFree,
+                    settings.GarmentPhotoType,
+                    settings.Seed)));
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "run")
         {
