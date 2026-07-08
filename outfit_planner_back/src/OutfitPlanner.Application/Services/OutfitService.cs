@@ -12,13 +12,15 @@ public sealed class OutfitService
     private readonly IOutfitRepository _outfits;
     private readonly IClock _clock;
     private readonly IHairstylePresetCatalog? _hairstyles;
+    private readonly EntitlementService? _entitlements;
 
-    public OutfitService(IGarmentRepository garments, IOutfitRepository outfits, IClock clock, IHairstylePresetCatalog? hairstyles = null)
+    public OutfitService(IGarmentRepository garments, IOutfitRepository outfits, IClock clock, IHairstylePresetCatalog? hairstyles = null, EntitlementService? entitlements = null)
     {
         _garments = garments;
         _outfits = outfits;
         _clock = clock;
         _hairstyles = hairstyles;
+        _entitlements = entitlements;
     }
 
     public Outfit CreateOutfit(
@@ -30,6 +32,7 @@ public sealed class OutfitService
         UserGender? silhouetteGender = null)
     {
         var normalizedUserId = InputGuard.NormalizeUserId(userId);
+        _entitlements?.EnsureCanAddOutfit(normalizedUserId);
         var selectedIds = garmentIds.Distinct().ToList();
         var selectedGarments = selectedIds
             .Select(id => _garments.GetGarmentByUser(normalizedUserId, id) ?? throw new ValidationException($"Garment {id} was not found."))

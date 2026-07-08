@@ -15,7 +15,8 @@ public sealed class FileBackedOutfitStore :
     ITryOnJobRepository,
     IShareLinkRepository,
     IUserAccountRepository,
-    IAdminUserRepository
+    IAdminUserRepository,
+    ICreditLedgerRepository
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -326,6 +327,31 @@ public sealed class FileBackedOutfitStore :
     public AdminUserStats GetStats()
     {
         return _inner.GetStats();
+    }
+
+    public void AddCreditEntry(CreditLedgerEntry entry)
+    {
+        Mutate(() => _inner.AddCreditEntry(entry));
+    }
+
+    public IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByUser(string userId)
+    {
+        return _inner.ListCreditEntriesByUser(userId);
+    }
+
+    public int GetCreditBalance(string userId, DateTimeOffset now)
+    {
+        return _inner.GetCreditBalance(userId, now);
+    }
+
+    public bool HasCreditEntryWithReasonSince(string userId, CreditLedgerReason reason, DateTimeOffset since)
+    {
+        return _inner.HasCreditEntryWithReasonSince(userId, reason, since);
+    }
+
+    public IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByJob(Guid tryOnJobId)
+    {
+        return _inner.ListCreditEntriesByJob(tryOnJobId);
     }
 
     private void Mutate(Action action)

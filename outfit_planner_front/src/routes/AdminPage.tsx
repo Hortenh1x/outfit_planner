@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, KeyRound, Search, Sparkles, Trash2, UserRound } from 'lucide-react';
+import { Coins, Download, KeyRound, Search, Sparkles, Trash2, UserRound } from 'lucide-react';
 import {
+  adjustAdminUserCredits,
   deleteAdminUser,
   getAdminStats,
   getAdminUserExport,
@@ -31,6 +32,8 @@ export function AdminPage() {
   const [roleFilter, setRoleFilter] = useState<UserRole | ''>('');
   const [offset, setOffset] = useState(0);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [creditsEditId, setCreditsEditId] = useState<string | null>(null);
+  const [creditsDeltaInput, setCreditsDeltaInput] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
 
@@ -82,6 +85,15 @@ export function AdminPage() {
     onSuccess: (_, user) => {
       setConfirmDeleteId(null);
       settleAction(`Account ${accountLabel(user)} was deleted.`);
+    },
+    onError: failAction
+  });
+  const creditsMutation = useMutation({
+    mutationFn: ({ user, delta }: { user: AdminUser; delta: number }) => adjustAdminUserCredits(user.id, delta),
+    onSuccess: (result, { user }) => {
+      setCreditsEditId(null);
+      setCreditsDeltaInput('');
+      settleAction(`AI credits of ${accountLabel(user)}: ${result.balance}.`);
     },
     onError: failAction
   });
@@ -190,6 +202,7 @@ export function AdminPage() {
                 <th scope="col" className="admin-count-column">Outfits</th>
                 <th scope="col" className="admin-count-column">Try-ons</th>
                 <th scope="col" className="admin-count-column">Sessions</th>
+                <th scope="col">Credits</th>
                 <th scope="col">Joined</th>
                 <th scope="col">Actions</th>
               </tr>
@@ -233,6 +246,52 @@ export function AdminPage() {
                   <td className="admin-count-column">{user.outfitCount}</td>
                   <td className="admin-count-column">{user.tryOnJobCount}</td>
                   <td className="admin-count-column">{user.activeSessionCount}</td>
+                  <td>
+                    {user.creditBalance == null ? (
+                      <span className="admin-credits-unlimited" title="Admin accounts have unlimited AI credits.">unlimited</span>
+                    ) : creditsEditId === user.id ? (
+                      <form
+                        className="admin-credits-edit"
+                        aria-label={`Adjust AI credits of ${accountLabel(user)}`}
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          const delta = Number.parseInt(creditsDeltaInput, 10);
+                          if (Number.isNaN(delta) || delta === 0) {
+                            setActionNotice(null);
+                            setActionError('Enter a non-zero credit delta, e.g. 10 or -5.');
+                            return;
+                          }
+                          creditsMutation.mutate({ user, delta });
+                        }}
+                      >
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={creditsDeltaInput}
+                          placeholder="+/-"
+                          aria-label="Credit delta"
+                          onChange={(event) => setCreditsDeltaInput(event.target.value)}
+                        />
+                        <button type="submit" className="secondary-action" disabled={creditsMutation.isPending}>Apply</button>
+                        <button type="button" className="secondary-action" onClick={() => setCreditsEditId(null)}>Cancel</button>
+                      </form>
+                    ) : (
+                      <button
+                        type="button"
+                        className="admin-credits-value"
+                        title="Adjust AI credits"
+                        aria-label={`AI credits of ${accountLabel(user)}: ${user.creditBalance}. Adjust`}
+                        disabled={actionPending}
+                        onClick={() => {
+                          setCreditsEditId(user.id);
+                          setCreditsDeltaInput('');
+                        }}
+                      >
+                        <Coins size={13} aria-hidden="true" />
+                        {user.creditBalance}
+                      </button>
+                    )}
+                  </td>
                   <td>
                     <time dateTime={user.createdAt}>{formatDate(user.createdAt)}</time>
                   </td>

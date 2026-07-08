@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { listGarments, type UpdateGarmentInput } from '../api/client';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { accountEntitlementsQueryKey, getAccountEntitlements, listGarments, type UpdateGarmentInput } from '../api/client';
 import { GarmentCard } from '../features/wardrobe/GarmentCard';
 import { GarmentEditor, type GarmentEditorSaveInput } from '../features/wardrobe/GarmentEditor';
 import { GarmentPreviewDialog } from '../features/wardrobe/GarmentPreviewDialog';
@@ -62,10 +62,22 @@ export function WardrobePage() {
       return removing ? 1500 : false;
     }
   });
+  const queryClient = useQueryClient();
   const mutations = useWardrobeMutations();
   const uploads = useEagerGarmentUploads(setUploadQueue);
   const autoTagging = useGarmentAutoTagging(setUploadQueue);
   const allGarments = garmentsQuery.data ?? [];
+  const entitlementsQuery = useQuery({ queryKey: accountEntitlementsQueryKey, queryFn: getAccountEntitlements, retry: 1 });
+  // Plan-usage hint for the Add garment panel: warn when close to the cap (server-side
+  // total, so wardrobe filters don't skew it); the backend enforces the cap regardless.
+  const entitlements = entitlementsQuery.data;
+  const garmentCapNotice = entitlements?.maxGarments == null
+    ? null
+    : entitlements.garmentCount >= entitlements.maxGarments
+      ? `Plan limit reached: ${entitlements.garmentCount}/${entitlements.maxGarments} garments. Remove pieces or upgrade to Premium.`
+      : entitlements.maxGarments - entitlements.garmentCount <= 5
+        ? `${entitlements.garmentCount}/${entitlements.maxGarments} garments used on your plan.`
+        : null;
 
   // Kick off background removal as soon as items land in the queue, and refill
   // concurrency slots whenever an upload settles and the queue changes.
@@ -234,11 +246,17 @@ export function WardrobePage() {
         <WardrobeUploadPanel
           queue={uploadQueue}
           isUploading={mutations.uploadQueueMutation.isPending}
+          capNotice={garmentCapNotice}
           onAddFiles={addFiles}
           onChangeItem={changeQueueItem}
           onRemoveItem={removeQueueItem}
           onRetryItem={retryQueueItem}
-          onSubmitAll={() => mutations.uploadQueueMutation.mutate(uploadQueue, { onSuccess: () => setUploadQueue([]) })}
+          onSubmitAll={() => mutations.uploadQueueMutation.mutate(uploadQueue, {
+            onSuccess: () => {
+              setUploadQueue([]);
+              void queryClient.invalidateQueries({ queryKey: accountEntitlementsQueryKey });
+            }
+          })}
         />
       )}
       {previewGarment ? (

@@ -19,6 +19,8 @@ export interface WardrobeUploadDefaults {
 interface WardrobeUploadPanelProps {
   queue: UploadQueueItem[];
   isUploading: boolean;
+  // Paywall plan-usage hint ("42/50 garments used"); null hides it.
+  capNotice?: string | null;
   onAddFiles: (files: File[]) => void;
   onChangeItem: (itemId: string, updates: UploadQueueItemUpdates) => void;
   onRemoveItem: (itemId: string) => void;
@@ -29,6 +31,7 @@ interface WardrobeUploadPanelProps {
 export function WardrobeUploadPanel({
   queue,
   isUploading,
+  capNotice = null,
   onAddFiles,
   onChangeItem,
   onRemoveItem,
@@ -68,6 +71,7 @@ export function WardrobeUploadPanel({
       <div className="wardrobe-rail-heading">
         <h2>Add garment</h2>
       </div>
+      {capNotice ? <p className="wardrobe-cap-notice" role="status">{capNotice}</p> : null}
       <label className="wardrobe-drop-zone" aria-disabled={isUploading} onDragOver={handleDragOver} onDrop={handleDrop}>
         <CloudUpload size={24} aria-hidden="true" />
         <strong>Upload photos</strong>

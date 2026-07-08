@@ -21,7 +21,8 @@ const pinnedAdminRow = {
   tryOnJobCount: 1,
   bodyReferencePhotoCount: 1,
   activeSessionCount: 2,
-  avatarUrl: null
+  avatarUrl: null,
+  creditBalance: null
 };
 
 const memberRow = {
@@ -39,11 +40,13 @@ const memberRow = {
   tryOnJobCount: 0,
   bodyReferencePhotoCount: 0,
   activeSessionCount: 1,
-  avatarUrl: null
+  avatarUrl: null,
+  creditBalance: 6
 };
 
 function renderAdminRoute({ sessionRole = 'Admin' }: { sessionRole?: string } = {}) {
   const roleChangeCalls: Array<{ url: string; body: unknown }> = [];
+  const creditsCalls: Array<{ url: string; body: unknown }> = [];
 
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
@@ -73,6 +76,11 @@ function renderAdminRoute({ sessionRole = 'Admin' }: { sessionRole?: string } = 
       return jsonResponse({ ...memberRow, role: 'Premium' });
     }
 
+    if (url.includes('/admin/users/usr_member/credits') && method === 'POST') {
+      creditsCalls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      return jsonResponse({ balance: 16 });
+    }
+
     if (url.includes('/admin/users')) {
       return jsonResponse({ items: [pinnedAdminRow, memberRow], totalCount: 2, offset: 0, limit: 20 });
     }
@@ -94,7 +102,7 @@ function renderAdminRoute({ sessionRole = 'Admin' }: { sessionRole?: string } = 
     </QueryClientProvider>
   );
 
-  return { ...view, fetchMock, roleChangeCalls };
+  return { ...view, fetchMock, roleChangeCalls, creditsCalls };
 }
 
 describe('AdminPage', () => {
@@ -129,6 +137,21 @@ describe('AdminPage', () => {
     await waitFor(() => expect(roleChangeCalls).toHaveLength(1));
     expect(roleChangeCalls[0].body).toEqual({ role: 'Premium' });
     expect(await screen.findByText('Member is now Premium.')).toBeInTheDocument();
+  });
+
+  it('adjusts a member credit balance from the credits cell', async () => {
+    const { creditsCalls } = renderAdminRoute();
+
+    // The admin account bypasses the ledger entirely.
+    expect(await screen.findByText('unlimited')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'AI credits of Member: 6. Adjust' }));
+    await userEvent.type(screen.getByLabelText('Credit delta'), '10');
+    await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => expect(creditsCalls).toHaveLength(1));
+    expect(creditsCalls[0].body).toEqual({ delta: 10 });
+    expect(await screen.findByText('AI credits of Member: 16.')).toBeInTheDocument();
   });
 
   it('asks for confirmation before deleting an account', async () => {

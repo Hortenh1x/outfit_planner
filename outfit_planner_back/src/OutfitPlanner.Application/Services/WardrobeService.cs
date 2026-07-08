@@ -16,8 +16,9 @@ public sealed class WardrobeService
     private readonly IGarmentImageRotator? _imageRotator;
     private readonly IBackgroundRemovalJobQueue? _removalQueue;
     private readonly IBackgroundRemovalJobRepository? _removalJobs;
+    private readonly EntitlementService? _entitlements;
 
-    public WardrobeService(IBodyReferencePhotoRepository bodyPhotos, IGarmentRepository garments, IClock clock, IStoredPhotoDeletion? photoDeletion = null, IGarmentImageRotator? imageRotator = null, IBackgroundRemovalJobQueue? removalQueue = null, IBackgroundRemovalJobRepository? removalJobs = null)
+    public WardrobeService(IBodyReferencePhotoRepository bodyPhotos, IGarmentRepository garments, IClock clock, IStoredPhotoDeletion? photoDeletion = null, IGarmentImageRotator? imageRotator = null, IBackgroundRemovalJobQueue? removalQueue = null, IBackgroundRemovalJobRepository? removalJobs = null, EntitlementService? entitlements = null)
     {
         _bodyPhotos = bodyPhotos;
         _garments = garments;
@@ -26,11 +27,14 @@ public sealed class WardrobeService
         _imageRotator = imageRotator;
         _removalQueue = removalQueue;
         _removalJobs = removalJobs;
+        _entitlements = entitlements;
     }
 
     public BodyReferencePhoto CreateBodyReferencePhoto(string userId, string imageUrl)
     {
-        var photo = new BodyReferencePhoto(Guid.NewGuid(), InputGuard.NormalizeUserId(userId), InputGuard.RequireText(imageUrl, "Body reference photo URL"), _clock.UtcNow);
+        var normalizedUserId = InputGuard.NormalizeUserId(userId);
+        _entitlements?.EnsureCanAddBodyReferencePhoto(normalizedUserId);
+        var photo = new BodyReferencePhoto(Guid.NewGuid(), normalizedUserId, InputGuard.RequireText(imageUrl, "Body reference photo URL"), _clock.UtcNow);
         _bodyPhotos.AddBodyReferencePhoto(photo);
         return photo;
     }
@@ -56,6 +60,7 @@ public sealed class WardrobeService
     public GarmentItem CreateGarment(CreateGarmentCommand command)
     {
         var userId = InputGuard.NormalizeUserId(command.UserId);
+        _entitlements?.EnsureCanAddGarment(userId);
         var imageUrl = InputGuard.RequireText(command.ImageUrl, "Garment image URL");
         var thumbnailUrl = string.IsNullOrWhiteSpace(command.ThumbnailUrl) ? imageUrl : command.ThumbnailUrl.Trim();
         var rotationDegrees = 0d;
