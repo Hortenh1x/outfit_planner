@@ -66,6 +66,7 @@ var tests = new List<(string Name, Action Test)>
     ("try-on queue prioritizes premium jobs", TestTryOnQueuePrioritizesPremiumJobs),
     ("postgres schema contains account credit ledger", TestPostgresSchemaContainsCreditLedger),
     ("api exposes paywall endpoints", TestApiExposesPaywallEndpoints),
+    ("api exposes billing endpoints", TestApiExposesBillingEndpoints),
     ("api exposes secure auth endpoints and cookie settings", TestApiExposesSecureAuthEndpoints),
     ("api exposes privacy and auth hardening endpoints", TestApiExposesPrivacyAndAuthHardeningEndpoints),
     ("api exposes edit delete filtering and revoke endpoints", TestApiExposesEditDeleteFilterAndRevokeEndpoints),
@@ -1419,6 +1420,31 @@ static void TestApiExposesPaywallEndpoints()
     AssertTrue(program.Contains("LoadPlanCatalog", StringComparison.Ordinal), "api should build the plan catalog from configuration.");
     AssertTrue(contracts.Contains("AccountEntitlementsResponse", StringComparison.Ordinal), "contracts should document the entitlements response.");
     AssertTrue(contracts.Contains("RequiresUpgrade", StringComparison.Ordinal), "the try-on estimate should carry the paywall upgrade flag.");
+}
+
+static void TestApiExposesBillingEndpoints()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var program = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Program.cs"));
+    var contracts = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Contracts", "ApiContracts.cs"));
+    // The example file is the tracked one; the live appsettings.json stays gitignored.
+    var settings = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "appsettings.example.json"));
+
+    AssertTrue(program.Contains("MapGet(\"/billing\"", StringComparison.Ordinal), "api should expose the billing status endpoint.");
+    AssertTrue(program.Contains("MapPost(\"/billing/checkout\"", StringComparison.Ordinal), "api should expose the subscription checkout endpoint.");
+    AssertTrue(program.Contains("MapPost(\"/billing/topup\"", StringComparison.Ordinal), "api should expose the top-up checkout endpoint.");
+    AssertTrue(program.Contains("MapPost(\"/billing/portal\"", StringComparison.Ordinal), "api should expose the billing portal endpoint.");
+    AssertTrue(program.Contains("MapPost(\"/billing/webhook\"", StringComparison.Ordinal), "api should expose the billing webhook endpoint.");
+    AssertTrue(program.Contains("!path.Equals(\"/billing/webhook\"", StringComparison.Ordinal), "the webhook must stay anonymous: its provider signature is the authentication.");
+    AssertTrue(program.Contains("Stripe-Signature", StringComparison.Ordinal), "the webhook should read the provider signature header.");
+    AssertTrue(program.Contains("CreateBillingProvider", StringComparison.Ordinal), "api should select the billing provider from configuration.");
+    AssertTrue(program.Contains("LoadBillingOptions", StringComparison.Ordinal), "api should build the billing options from configuration.");
+    AssertTrue(contracts.Contains("BillingStatusResponse", StringComparison.Ordinal), "contracts should document the billing status response.");
+    AssertTrue(contracts.Contains("BillingCheckoutResponse", StringComparison.Ordinal), "contracts should document the checkout url response.");
+    AssertTrue(contracts.Contains("SubscriptionStatus", StringComparison.Ordinal), "the admin view should carry read-only subscription visibility.");
+    AssertTrue(settings.Contains("\"Stripe\"", StringComparison.Ordinal), "appsettings should carry the Stripe placeholder section.");
+    AssertTrue(!settings.Contains("sk_live", StringComparison.OrdinalIgnoreCase) && !settings.Contains("sk_test", StringComparison.OrdinalIgnoreCase),
+        "no Stripe secret may ever be committed.");
 }
 
 static void TestApiExposesSecureAuthEndpoints()

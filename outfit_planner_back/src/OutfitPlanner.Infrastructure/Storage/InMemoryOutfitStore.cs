@@ -680,13 +680,16 @@ public sealed class InMemoryOutfitStore :
 
     private AdminUserRecord BuildAdminUserRecord(UserAccount user, DateTimeOffset now)
     {
+        var subscription = _subscriptions.GetValueOrDefault(user.Id);
         return new AdminUserRecord(
             user,
             _garments.Values.Count(item => item.UserId == user.Id),
             _outfits.Values.Count(item => item.UserId == user.Id),
             _tryOnJobs.Values.Count(item => item.UserId == user.Id),
             _bodyPhotos.Values.Count(item => item.UserId == user.Id),
-            _authSessions.Values.Count(session => session.UserId == user.Id && session.RevokedAt is null && session.ExpiresAt > now));
+            _authSessions.Values.Count(session => session.UserId == user.Id && session.RevokedAt is null && session.ExpiresAt > now),
+            subscription?.Status,
+            subscription?.CurrentPeriodEnd);
     }
 
     public void AddExternalLogin(ExternalAuthLogin login)

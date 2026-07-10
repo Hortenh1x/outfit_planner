@@ -784,7 +784,9 @@ public sealed class PostgresOutfitStore :
             (select count(*) from outfits o where o.user_id = u.id) as outfit_count,
             (select count(*) from try_on_jobs t where t.user_id = u.id) as try_on_job_count,
             (select count(*) from body_reference_photos b where b.user_id = u.id) as body_reference_photo_count,
-            (select count(*) from auth_sessions s where s.user_id = u.id and s.revoked_at is null and s.expires_at > @now) as active_session_count
+            (select count(*) from auth_sessions s where s.user_id = u.id and s.revoked_at is null and s.expires_at > @now) as active_session_count,
+            (select bs.status from billing_subscriptions bs where bs.user_id = u.id) as subscription_status,
+            (select bs.current_period_end from billing_subscriptions bs where bs.user_id = u.id) as subscription_period_end
         """;
 
     public IReadOnlyList<AdminUserRecord> ListUsers(AdminUserQuery query, DateTimeOffset now)
@@ -885,7 +887,9 @@ public sealed class PostgresOutfitStore :
             Convert.ToInt32(reader.GetInt64(15)),
             Convert.ToInt32(reader.GetInt64(16)),
             Convert.ToInt32(reader.GetInt64(17)),
-            Convert.ToInt32(reader.GetInt64(18)));
+            Convert.ToInt32(reader.GetInt64(18)),
+            reader.IsDBNull(19) ? null : reader.GetString(19),
+            reader.IsDBNull(20) ? null : reader.GetFieldValue<DateTimeOffset>(20));
     }
 
     public void AddCreditEntry(CreditLedgerEntry entry)
