@@ -20,7 +20,8 @@ The app is intentionally small, but it has a real backend/frontend split, signed
 - Google OAuth and Apple OIDC sign-in when provider credentials are configured.
 - Revocable server-side sessions with HttpOnly cookies, CSRF protection, rate-limited auth endpoints, email verification/password reset token storage, and session revoke-all support.
 - Free, Premium, and Admin account roles with two email-pinned accounts whose roles can never change, and an admin panel that lists, inspects, and manages all users, their data, and their AI credits.
-- An enforced paywall over AI compute ([`PAYWALL_MODEL.md`](PAYWALL_MODEL.md)): per-tier plan catalog (free caps on garments/outfits/body photos, allowed try-on modes, output resolution), an AI-credit ledger with a one-time free trial grant and a rolling monthly Premium allowance, debit-on-confirm with automatic refunds for failed jobs, no spend on cache hits, a premium-priority try-on queue, and entitlements surfaced in the Builder (credits chip, Premium mode pills, upgrade notice). Billing (Stripe) is not wired yet; roles are switched manually via the admin panel.
+- An enforced paywall over AI compute ([`PAYWALL_MODEL.md`](PAYWALL_MODEL.md)): per-tier plan catalog (free caps on garments/outfits/body photos, allowed try-on modes, output resolution), an AI-credit ledger with a one-time 8-credit free trial grant (top-up-to-config for existing accounts) and a rolling monthly Premium allowance, debit-on-confirm with automatic refunds for failed jobs, no spend on cache hits, a premium-priority try-on queue, and entitlements surfaced in the Builder (credits chip, Premium mode pills, upgrade notice).
+- Stripe billing implemented to "insert the API key" readiness: subscription checkout, credit top-up packs, the customer portal, signature-verified idempotent webhooks that mirror subscription state and switch `Free ↔ Premium` roles automatically (pinned accounts exempt), an `/upgrade` page, and read-only admin subscription visibility. Without `Stripe__SecretKey` billing reads as disabled and roles are still switched manually via the admin panel.
 - Privacy endpoints for account export/delete, body photo deletion, and AI output purging.
 - Configurable garment background removal for uploaded item cutouts, with simple local fallback, `rembg`, and HTTP/API provider adapters.
 - Optional local garment auto-tagging that prefills category, colors, seasons, and tags on upload (FashionCLIP + k-means colors), with soft degradation when the service is off and user edits that are never overwritten.
@@ -227,6 +228,13 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `AutoTagging__HttpServer__TimeoutSeconds` | `60` | HTTP timeout for a classification request. |
 | `AutoTagging__HttpServer__HealthCacheSeconds` | `15` | How long a health-probe result is cached before re-checking. |
 | `AutoTagging__HttpServer__HealthTimeoutSeconds` | `3` | HTTP timeout for the health probe. |
+| `Billing__Provider` | `Auto` | Use `Auto`, `Stripe`, or `Disabled` for paywall billing. `Auto` selects Stripe when `Stripe__SecretKey` is set and otherwise disables billing softly (the app works unchanged). |
+| `Stripe__SecretKey` | empty | Stripe API secret key. Required before any billing network call; never commit it. |
+| `Stripe__WebhookSecret` | empty | Signing secret of the Stripe webhook endpoint pointing at `/api/billing/webhook`. |
+| `Stripe__PremiumMonthlyPriceId` | empty | Stripe price id of the Premium monthly subscription. Checkout is rejected until set. |
+| `Stripe__PremiumMonthlyDisplayPrice` | empty | Optional display price (e.g. `$9/mo`) shown on the upgrade page; Stripe Checkout stays the source of truth. |
+| `Stripe__TopUpPacks__N__{Id,Credits,PriceId,DisplayPrice}` | 20/50/100-credit packs, no price ids | Credit top-up packs; packs without a `PriceId` are not offered. |
+| `Stripe__SuccessUrl` / `Stripe__CancelUrl` / `Stripe__PortalReturnUrl` | derived | Default to `Authentication__PublicOrigin` + `/upgrade?checkout=success|cancelled` and `/upgrade`. |
 | `TryOn__Provider` | `Mock` | Use `Mock`, `Fashn`, `CompositeFashn`, `LocalVton`, `LocalCatVton`, `SelfHostedCatVton`, `GeneralImageEdit`, `Replicate`, or `Fal`. Unknown values use the mock provider. |
 | `Fashn__ApiKey` | empty | Required before the FASHN provider makes network calls. |
 | `Fashn__BaseUrl` | `https://api.fashn.ai/v1/` | FASHN API base URL. |
@@ -449,7 +457,7 @@ curl.exe -k https://localhost:5001/api/health
 ## Current Boundaries
 
 - Google and Apple auth require provider credentials. Email/password auth works without external secrets.
-- The paywall (tier caps, AI-credit metering, mode/resolution gating, priority queue) is enforced per [`PAYWALL_MODEL.md`](PAYWALL_MODEL.md), but billing is not wired: there is no Stripe integration, so `Free ↔ Premium` transitions happen manually through the admin panel and the tier numbers are provisional placeholders.
+- The paywall (tier caps, AI-credit metering, mode/resolution gating, priority queue) is enforced and Stripe billing is implemented per [`PAYWALL_MODEL.md`](PAYWALL_MODEL.md), but no Stripe credentials ship with the repo: until `Stripe__SecretKey`/`Stripe__WebhookSecret`/price ids are configured, billing reads as disabled, `Free ↔ Premium` transitions happen manually through the admin panel, and the tier numbers/prices are provisional placeholders.
 - Password registration requires at least 8 characters, at least one letter, and at least one digit.
 - Uploaded files default to local object storage; S3-compatible MinIO can be enabled with object storage configuration.
 - PostgreSQL schema changes are applied through DbUp migrations at startup.
