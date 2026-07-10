@@ -2,6 +2,7 @@ using OutfitPlanner.Application.Abstractions;
 using OutfitPlanner.Application.Services;
 using OutfitPlanner.Domain;
 using OutfitPlanner.Infrastructure.AutoTagging;
+using OutfitPlanner.Infrastructure.Billing;
 using OutfitPlanner.Infrastructure.Security;
 using OutfitPlanner.Infrastructure.Storage;
 using OutfitPlanner.Infrastructure.TryOn;
@@ -58,6 +59,7 @@ var tests = new List<(string Name, Action Test)>
     ("billing rules map subscription statuses to premium", TestBillingRulesMapStatuses),
     ("billing service gates checkout portal and top-ups by plan", TestBillingServiceGatesCheckoutAndPortal),
     ("billing webhooks upsert subscriptions transition roles and grant top-ups idempotently", TestBillingWebhooksDriveRolesAndTopUps),
+    ("stripe webhook fails closed when the webhook secret is empty", TestStripeWebhookFailsClosedWithoutSecret),
     ("local file store persists billing records across restarts", TestLocalFileStorePersistsBillingRecords),
     ("postgres schema contains billing tables", TestPostgresSchemaContainsBillingTables),
     ("entitlement caps block creation at plan limits", TestEntitlementCapsBlockCreation),
@@ -1188,6 +1190,23 @@ static void TestBillingWebhooksDriveRolesAndTopUps()
     provider.NextEvent = new BillingWebhookEvent("evt-7", BillingWebhookEventKind.SubscriptionUpdated, SubscriptionId: "sub_unknown", Status: "active");
     AssertEqual("ignored", billing.HandleWebhookAsync("{}", "valid", CancellationToken.None).GetAwaiter().GetResult().Status,
         "unresolvable subscriptions are ignored, not errors.");
+}
+
+static void TestStripeWebhookFailsClosedWithoutSecret()
+{
+    // A configured secret key but a blank webhook secret must NOT accept forged events:
+    // EventUtility.ConstructEvent with an empty key would otherwise verify a forged
+    // signature and let an unauthenticated caller grant credits / flip roles.
+    var noSecret = new StripeBillingProvider(new StripeBillingSettings("sk_test_dummy", ""));
+    AssertTrue(
+        noSecret.ParseWebhookEvent("{\"id\":\"evt_forged\",\"type\":\"checkout.session.completed\"}", "t=1,v1=deadbeef") is null,
+        "an empty webhook secret must reject every webhook (fail closed).");
+
+    // With a real secret configured, a bogus signature is still rejected (no forgery).
+    var withSecret = new StripeBillingProvider(new StripeBillingSettings("sk_test_dummy", "whsec_dummy"));
+    AssertTrue(
+        withSecret.ParseWebhookEvent("{\"id\":\"evt_forged\",\"type\":\"checkout.session.completed\"}", "t=1,v1=deadbeef") is null,
+        "a bogus signature must be rejected under a configured secret.");
 }
 
 static void TestLocalFileStorePersistsBillingRecords()

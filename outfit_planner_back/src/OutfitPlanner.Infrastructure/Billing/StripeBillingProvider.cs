@@ -97,7 +97,14 @@ public sealed class StripeBillingProvider : IBillingProvider
 
     public BillingWebhookEvent? ParseWebhookEvent(string payload, string? signatureHeader)
     {
-        if (string.IsNullOrWhiteSpace(payload) || string.IsNullOrWhiteSpace(signatureHeader))
+        // Fail closed: an empty webhook secret makes signature verification meaningless —
+        // EventUtility.ConstructEvent would HMAC with an empty key and accept a forged
+        // event. Reject every webhook until a real secret is configured, so a partial
+        // "SecretKey set, WebhookSecret blank" config cannot be exploited to forge
+        // credit grants or role changes.
+        if (string.IsNullOrWhiteSpace(_settings.WebhookSecret)
+            || string.IsNullOrWhiteSpace(payload)
+            || string.IsNullOrWhiteSpace(signatureHeader))
         {
             return null;
         }
