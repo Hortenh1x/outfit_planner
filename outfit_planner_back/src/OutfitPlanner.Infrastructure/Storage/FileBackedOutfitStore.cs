@@ -16,7 +16,9 @@ public sealed class FileBackedOutfitStore :
     IShareLinkRepository,
     IUserAccountRepository,
     IAdminUserRepository,
-    ICreditLedgerRepository
+    ICreditLedgerRepository,
+    ISubscriptionRepository,
+    IBillingEventRepository
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -357,6 +359,26 @@ public sealed class FileBackedOutfitStore :
     public IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByJob(Guid tryOnJobId)
     {
         return _inner.ListCreditEntriesByJob(tryOnJobId);
+    }
+
+    public void UpsertSubscription(BillingSubscription subscription)
+    {
+        Mutate(() => _inner.UpsertSubscription(subscription));
+    }
+
+    public BillingSubscription? GetSubscriptionByUser(string userId)
+    {
+        return _inner.GetSubscriptionByUser(userId);
+    }
+
+    public BillingSubscription? GetSubscriptionByExternalSubscriptionId(string externalSubscriptionId)
+    {
+        return _inner.GetSubscriptionByExternalSubscriptionId(externalSubscriptionId);
+    }
+
+    public bool TryRecordBillingEvent(string eventId, DateTimeOffset processedAt)
+    {
+        return MutateIfChanged(() => _inner.TryRecordBillingEvent(eventId, processedAt));
     }
 
     private void Mutate(Action action)

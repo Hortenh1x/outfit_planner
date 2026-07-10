@@ -55,6 +55,11 @@ var tests = new List<(string Name, Action Test)>
     ("api exposes role-gated admin endpoints", TestApiExposesAdminEndpoints),
     ("credit ledger grants debits and refunds with admin bypass", TestCreditLedgerGrantsDebitsAndRefunds),
     ("trial grants top up existing accounts to the configured amount", TestTrialGrantTopsUpToConfiguredAmount),
+    ("billing rules map subscription statuses to premium", TestBillingRulesMapStatuses),
+    ("billing service gates checkout portal and top-ups by plan", TestBillingServiceGatesCheckoutAndPortal),
+    ("billing webhooks upsert subscriptions transition roles and grant top-ups idempotently", TestBillingWebhooksDriveRolesAndTopUps),
+    ("local file store persists billing records across restarts", TestLocalFileStorePersistsBillingRecords),
+    ("postgres schema contains billing tables", TestPostgresSchemaContainsBillingTables),
     ("entitlement caps block creation at plan limits", TestEntitlementCapsBlockCreation),
     ("try-on estimate applies plan modes and resolution pricing", TestTryOnEstimateAppliesPlanModesAndResolution),
     ("try-on start debits credits and failures refund", TestStartTryOnDebitsCreditsCacheHitsAndRefunds),
@@ -372,7 +377,10 @@ static void TestPostgresStoreImplementsRepositoryPorts()
         typeof(IOutfitRepository),
         typeof(IOutfitScheduleRepository),
         typeof(ITryOnJobRepository),
-        typeof(IShareLinkRepository)
+        typeof(IShareLinkRepository),
+        typeof(ICreditLedgerRepository),
+        typeof(ISubscriptionRepository),
+        typeof(IBillingEventRepository)
     };
 
     foreach (var port in requiredPorts)
@@ -1043,6 +1051,193 @@ static void TestTrialGrantTopsUpToConfiguredAmount()
         PlanCatalog.Default.For(UserRole.Admin));
     var loweredCredits = new CreditLedgerService(store, lowered, pinning, clock);
     AssertEqual(8, loweredCredits.GetBalance(user).Balance, "a lowered trial config must not claw back granted credits.");
+}
+
+static void TestBillingRulesMapStatuses()
+{
+    foreach (var premium in new[] { "active", "trialing", "past_due", " Active " })
+    {
+        AssertTrue(BillingRules.GrantsPremium(premium), $"status '{premium}' should grant premium.");
+    }
+
+    foreach (var free in new[] { "canceled", "unpaid", "incomplete", "incomplete_expired", "paused", "", null })
+    {
+        AssertTrue(!BillingRules.GrantsPremium(free), $"status '{free}' must not grant premium.");
+    }
+}
+
+static BillingOptions TestBillingOptions()
+{
+    return new BillingOptions(
+        PremiumPriceId: "price_premium",
+        PremiumDisplayPrice: "$9/mo",
+        TopUpPacks: new[] { new BillingTopUpPack("pack-20", 20, "price_pack20", "$5") },
+        CheckoutSuccessUrl: "https://app.example/upgrade?checkout=success",
+        CheckoutCancelUrl: "https://app.example/upgrade?checkout=cancelled",
+        PortalReturnUrl: "https://app.example/upgrade");
+}
+
+static void TestBillingServiceGatesCheckoutAndPortal()
+{
+    var store = new InMemoryOutfitStore();
+    var pinning = TestRolePinning();
+    var clock = new SystemClock();
+    var credits = new CreditLedgerService(store, PlanCatalog.Default, pinning, clock);
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), clock, pinning);
+    var provider = new FakeBillingProvider();
+    var billing = new BillingService(store, store, store, credits, provider, TestBillingOptions(), pinning, clock);
+
+    var free = store.GetUserById(auth.RegisterWithPassword("billing-free@example.com", "abc12345", "abc12345").User.Id)
+        ?? throw new InvalidOperationException("Free account was not stored.");
+    var premium = store.GetUserById(auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345").User.Id)
+        ?? throw new InvalidOperationException("Premium account was not stored.");
+    var admin = store.GetUserById(auth.RegisterWithPassword("dmytro.bolibok@gmail.com", "abc12345", "abc12345").User.Id)
+        ?? throw new InvalidOperationException("Admin account was not stored.");
+
+    AssertEqual("https://billing.example/checkout", billing.StartSubscriptionCheckoutAsync(free.Id, CancellationToken.None).GetAwaiter().GetResult(),
+        "free accounts should get a subscription checkout url.");
+    AssertThrows<InvalidOperationException>(
+        () => billing.StartSubscriptionCheckoutAsync(premium.Id, CancellationToken.None).GetAwaiter().GetResult(),
+        "premium accounts must not start a second subscription checkout");
+    AssertThrows<InvalidOperationException>(
+        () => billing.StartSubscriptionCheckoutAsync(admin.Id, CancellationToken.None).GetAwaiter().GetResult(),
+        "admin accounts are not sellable");
+
+    AssertThrows<InvalidOperationException>(
+        () => billing.StartTopUpCheckoutAsync(free.Id, "pack-20", CancellationToken.None).GetAwaiter().GetResult(),
+        "top-ups are a premium feature");
+    AssertEqual("https://billing.example/topup/pack-20", billing.StartTopUpCheckoutAsync(premium.Id, "pack-20", CancellationToken.None).GetAwaiter().GetResult(),
+        "premium accounts should get a top-up checkout url.");
+    AssertThrows<InvalidOperationException>(
+        () => billing.StartTopUpCheckoutAsync(premium.Id, "missing", CancellationToken.None).GetAwaiter().GetResult(),
+        "unknown packs must be rejected");
+
+    AssertThrows<InvalidOperationException>(
+        () => billing.CreatePortalAsync(free.Id, CancellationToken.None).GetAwaiter().GetResult(),
+        "portal requires an existing subscription");
+
+    var status = billing.GetStatus(free.Id);
+    AssertTrue(status.Enabled && status.SubscriptionPriceConfigured, "billing status should reflect the configured provider.");
+    AssertEqual(1, status.TopUpPacks.Count, "configured packs should be offered.");
+    AssertTrue(status.Subscription is null && !status.PortalAvailable, "accounts without subscriptions have no portal.");
+
+    var disabledProvider = new FakeBillingProvider { Enabled = false };
+    var disabled = new BillingService(store, store, store, credits, disabledProvider, BillingOptions.Empty, pinning, clock);
+    AssertTrue(!disabled.GetStatus(free.Id).Enabled, "disabled providers must read as disabled.");
+    AssertThrows<InvalidOperationException>(
+        () => disabled.StartSubscriptionCheckoutAsync(free.Id, CancellationToken.None).GetAwaiter().GetResult(),
+        "checkout must be rejected while billing is disabled");
+}
+
+static void TestBillingWebhooksDriveRolesAndTopUps()
+{
+    var store = new InMemoryOutfitStore();
+    var pinning = TestRolePinning();
+    var clock = new SystemClock();
+    var credits = new CreditLedgerService(store, PlanCatalog.Default, pinning, clock);
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), clock, pinning);
+    var provider = new FakeBillingProvider();
+    var billing = new BillingService(store, store, store, credits, provider, TestBillingOptions(), pinning, clock);
+
+    var user = store.GetUserById(auth.RegisterWithPassword("webhook-user@example.com", "abc12345", "abc12345").User.Id)
+        ?? throw new InvalidOperationException("Account was not stored.");
+
+    provider.NextEvent = new BillingWebhookEvent("evt-1", BillingWebhookEventKind.CheckoutCompleted,
+        UserId: user.Id, CustomerId: "cus_1", SubscriptionId: "sub_1", CheckoutMode: "subscription");
+    AssertEqual("processed", billing.HandleWebhookAsync("{}", "valid", CancellationToken.None).GetAwaiter().GetResult().Status,
+        "subscription checkout completion should process.");
+    AssertEqual(UserRole.Premium, store.GetUserById(user.Id)?.Role, "checkout completion should promote the stored role.");
+    AssertEqual("sub_1", store.GetSubscriptionByUser(user.Id)?.ExternalSubscriptionId, "the subscription row should be bound to the user.");
+
+    AssertEqual("duplicate", billing.HandleWebhookAsync("{}", "valid", CancellationToken.None).GetAwaiter().GetResult().Status,
+        "replayed event ids must be no-ops.");
+
+    provider.NextEvent = new BillingWebhookEvent("evt-2", BillingWebhookEventKind.SubscriptionUpdated,
+        SubscriptionId: "sub_1", Status: "past_due", CurrentPeriodEnd: clock.UtcNow.AddDays(30));
+    billing.HandleWebhookAsync("{}", "valid", CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(UserRole.Premium, store.GetUserById(user.Id)?.Role, "past_due keeps premium as a grace window.");
+    AssertEqual("past_due", store.GetSubscriptionByUser(user.Id)?.Status, "subscription status should update by external id lookup.");
+
+    provider.NextEvent = new BillingWebhookEvent("evt-3", BillingWebhookEventKind.SubscriptionDeleted, SubscriptionId: "sub_1");
+    billing.HandleWebhookAsync("{}", "valid", CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(UserRole.Free, store.GetUserById(user.Id)?.Role, "deleted subscriptions should demote the stored role.");
+    AssertEqual("canceled", store.GetSubscriptionByUser(user.Id)?.Status, "deleted subscriptions should read canceled.");
+
+    var refreshedUser = store.GetUserById(user.Id) ?? throw new InvalidOperationException("Account disappeared.");
+    var balanceBefore = credits.GetBalance(refreshedUser).Balance;
+    provider.NextEvent = new BillingWebhookEvent("evt-4", BillingWebhookEventKind.CheckoutCompleted,
+        UserId: user.Id, CheckoutMode: "payment", TopUpPackId: "pack-20", TopUpCredits: 20);
+    billing.HandleWebhookAsync("{}", "valid", CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(balanceBefore + 20, credits.GetBalance(refreshedUser).Balance, "top-up checkouts should grant credits.");
+
+    // Pinned accounts are exempt from webhook-driven role changes.
+    var pinnedPremium = store.GetUserById(auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345").User.Id)
+        ?? throw new InvalidOperationException("Pinned account was not stored.");
+    provider.NextEvent = new BillingWebhookEvent("evt-5", BillingWebhookEventKind.CheckoutCompleted,
+        UserId: pinnedPremium.Id, CustomerId: "cus_2", SubscriptionId: "sub_2", CheckoutMode: "subscription");
+    billing.HandleWebhookAsync("{}", "valid", CancellationToken.None).GetAwaiter().GetResult();
+    provider.NextEvent = new BillingWebhookEvent("evt-6", BillingWebhookEventKind.SubscriptionDeleted, SubscriptionId: "sub_2");
+    billing.HandleWebhookAsync("{}", "valid", CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(UserRole.Premium, store.GetUserById(pinnedPremium.Id)?.Role, "pinned stored roles must not be rewritten by webhooks.");
+
+    AssertThrows<InvalidOperationException>(
+        () => billing.HandleWebhookAsync("{}", "bogus", CancellationToken.None).GetAwaiter().GetResult(),
+        "invalid signatures must be rejected");
+
+    provider.NextEvent = new BillingWebhookEvent("evt-7", BillingWebhookEventKind.SubscriptionUpdated, SubscriptionId: "sub_unknown", Status: "active");
+    AssertEqual("ignored", billing.HandleWebhookAsync("{}", "valid", CancellationToken.None).GetAwaiter().GetResult().Status,
+        "unresolvable subscriptions are ignored, not errors.");
+}
+
+static void TestLocalFileStorePersistsBillingRecords()
+{
+    var tempPath = Path.Combine(Path.GetTempPath(), "outfit-planner-local-store-tests", Guid.NewGuid().ToString("N"));
+
+    try
+    {
+        var snapshotPath = Path.Combine(tempPath, "outfit-store.json");
+        var now = DateTimeOffset.UtcNow;
+        var user = new UserAccount(
+            "usr_billing",
+            "billing@example.com",
+            "billing@example.com",
+            "Billing User",
+            "hashed-password",
+            now,
+            now,
+            null);
+
+        var first = new FileBackedOutfitStore(snapshotPath);
+        first.AddUser(user);
+        first.UpsertSubscription(new BillingSubscription(user.Id, "stripe", "cus_1", "sub_1", "active", now.AddDays(30), now));
+        AssertTrue(first.TryRecordBillingEvent("evt-1", now), "the first webhook event record should win.");
+
+        var second = new FileBackedOutfitStore(snapshotPath);
+        var subscription = second.GetSubscriptionByUser(user.Id) ?? throw new InvalidOperationException("Subscription did not persist.");
+        AssertEqual("active", subscription.Status, "the subscription status should round-trip the snapshot.");
+        AssertEqual("cus_1", subscription.ExternalCustomerId, "the customer id should round-trip the snapshot.");
+        AssertEqual("sub_1", second.GetSubscriptionByExternalSubscriptionId("sub_1")?.ExternalSubscriptionId, "the external subscription lookup should round-trip.");
+        AssertTrue(!second.TryRecordBillingEvent("evt-1", now), "processed webhook events must stay processed across restarts.");
+    }
+    finally
+    {
+        if (Directory.Exists(tempPath))
+        {
+            Directory.Delete(tempPath, recursive: true);
+        }
+    }
+}
+
+static void TestPostgresSchemaContainsBillingTables()
+{
+    var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "schema.sql"));
+    var schema = File.ReadAllText(schemaPath);
+    AssertTrue(schema.Contains("create table if not exists billing_subscriptions", StringComparison.OrdinalIgnoreCase), "schema should declare the billing subscriptions table.");
+    AssertTrue(schema.Contains("create table if not exists billing_webhook_events", StringComparison.OrdinalIgnoreCase), "schema should declare the billing webhook idempotency table.");
+    AssertTrue(schema.Contains("ux_billing_subscriptions_external_subscription", StringComparison.OrdinalIgnoreCase), "the external subscription id should be unique.");
+
+    var migrationPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "migrations", "013_billing.sql"));
+    AssertTrue(File.Exists(migrationPath), "migration 013 should create the billing tables.");
 }
 
 static void TestEntitlementCapsBlockCreation()
@@ -4426,6 +4621,33 @@ sealed class RecordingTryOnJobQueue : ITryOnJobQueue
         var jobId = Enqueued[0];
         Enqueued.RemoveAt(0);
         return Task.FromResult(jobId);
+    }
+}
+
+sealed class FakeBillingProvider : IBillingProvider
+{
+    public string Name => "fake";
+    public bool Enabled { get; set; } = true;
+    public BillingWebhookEvent? NextEvent { get; set; }
+
+    public Task<string> CreateSubscriptionCheckoutAsync(UserAccount user, string priceId, string successUrl, string cancelUrl, CancellationToken cancellationToken)
+    {
+        return Task.FromResult("https://billing.example/checkout");
+    }
+
+    public Task<string> CreateTopUpCheckoutAsync(UserAccount user, BillingTopUpPack pack, string successUrl, string cancelUrl, CancellationToken cancellationToken)
+    {
+        return Task.FromResult($"https://billing.example/topup/{pack.Id}");
+    }
+
+    public Task<string> CreatePortalSessionAsync(string customerId, string returnUrl, CancellationToken cancellationToken)
+    {
+        return Task.FromResult($"https://billing.example/portal/{customerId}");
+    }
+
+    public BillingWebhookEvent? ParseWebhookEvent(string payload, string? signatureHeader)
+    {
+        return signatureHeader == "valid" ? NextEvent : null;
     }
 }
 

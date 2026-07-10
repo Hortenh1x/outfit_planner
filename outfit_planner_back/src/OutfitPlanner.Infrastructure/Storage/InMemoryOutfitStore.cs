@@ -19,7 +19,10 @@ public sealed record InMemoryOutfitStoreSnapshot(
     ShareLink[] ShareLinks,
     // Nullable with a default so snapshots written before the credit ledger existed keep
     // deserializing (missing field → null → loaded as empty).
-    CreditLedgerEntry[]? CreditLedger = null)
+    CreditLedgerEntry[]? CreditLedger = null,
+    // Same pattern for snapshots written before stage-4 billing existed.
+    BillingSubscription[]? BillingSubscriptions = null,
+    ProcessedBillingEvent[]? BillingEvents = null)
 {
     public static InMemoryOutfitStoreSnapshot Empty { get; } = new(
         Array.Empty<UserAccount>(),
@@ -33,7 +36,9 @@ public sealed record InMemoryOutfitStoreSnapshot(
         Array.Empty<ScheduledOutfit>(),
         Array.Empty<TryOnJob>(),
         Array.Empty<ShareLink>(),
-        Array.Empty<CreditLedgerEntry>());
+        Array.Empty<CreditLedgerEntry>(),
+        Array.Empty<BillingSubscription>(),
+        Array.Empty<ProcessedBillingEvent>());
 }
 
 public sealed class InMemoryOutfitStore :
@@ -45,7 +50,9 @@ public sealed class InMemoryOutfitStore :
     IShareLinkRepository,
     IUserAccountRepository,
     IAdminUserRepository,
-    ICreditLedgerRepository
+    ICreditLedgerRepository,
+    ISubscriptionRepository,
+    IBillingEventRepository
 {
     private readonly object _lock = new();
     private readonly Dictionary<string, UserAccount> _users = new(StringComparer.Ordinal);
@@ -60,6 +67,8 @@ public sealed class InMemoryOutfitStore :
     private readonly Dictionary<Guid, TryOnJob> _tryOnJobs = new();
     private readonly Dictionary<string, ShareLink> _shareLinks = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Guid, CreditLedgerEntry> _creditLedger = new();
+    private readonly Dictionary<string, BillingSubscription> _subscriptions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTimeOffset> _billingEvents = new(StringComparer.Ordinal);
 
     public InMemoryOutfitStore()
     {
@@ -86,7 +95,9 @@ public sealed class InMemoryOutfitStore :
                 _schedule.Values.ToArray(),
                 _tryOnJobs.Values.ToArray(),
                 _shareLinks.Values.ToArray(),
-                _creditLedger.Values.ToArray());
+                _creditLedger.Values.ToArray(),
+                _subscriptions.Values.ToArray(),
+                _billingEvents.Select(pair => new ProcessedBillingEvent(pair.Key, pair.Value)).ToArray());
         }
     }
 
@@ -616,6 +627,39 @@ public sealed class InMemoryOutfitStore :
         }
     }
 
+    public void UpsertSubscription(BillingSubscription subscription)
+    {
+        lock (_lock)
+        {
+            _subscriptions[subscription.UserId] = subscription;
+        }
+    }
+
+    public BillingSubscription? GetSubscriptionByUser(string userId)
+    {
+        lock (_lock)
+        {
+            return _subscriptions.TryGetValue(userId, out var subscription) ? subscription : null;
+        }
+    }
+
+    public BillingSubscription? GetSubscriptionByExternalSubscriptionId(string externalSubscriptionId)
+    {
+        lock (_lock)
+        {
+            return _subscriptions.Values.FirstOrDefault(subscription =>
+                string.Equals(subscription.ExternalSubscriptionId, externalSubscriptionId, StringComparison.Ordinal));
+        }
+    }
+
+    public bool TryRecordBillingEvent(string eventId, DateTimeOffset processedAt)
+    {
+        lock (_lock)
+        {
+            return _billingEvents.TryAdd(eventId, processedAt);
+        }
+    }
+
     private IEnumerable<UserAccount> FilterUsers(AdminUserQuery query)
     {
         var users = _users.Values.AsEnumerable();
@@ -866,6 +910,8 @@ public sealed class InMemoryOutfitStore :
                 _creditLedger.Remove(key);
             }
 
+            _subscriptions.Remove(userId);
+
             return true;
         }
     }
@@ -937,6 +983,16 @@ public sealed class InMemoryOutfitStore :
             foreach (var entry in snapshot.CreditLedger ?? Array.Empty<CreditLedgerEntry>())
             {
                 _creditLedger[entry.Id] = entry;
+            }
+
+            foreach (var subscription in snapshot.BillingSubscriptions ?? Array.Empty<BillingSubscription>())
+            {
+                _subscriptions[subscription.UserId] = subscription;
+            }
+
+            foreach (var billingEvent in snapshot.BillingEvents ?? Array.Empty<ProcessedBillingEvent>())
+            {
+                _billingEvents[billingEvent.EventId] = billingEvent.ProcessedAt;
             }
         }
     }

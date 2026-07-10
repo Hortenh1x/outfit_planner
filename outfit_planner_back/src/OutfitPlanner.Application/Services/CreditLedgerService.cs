@@ -91,6 +91,25 @@ public sealed class CreditLedgerService
             _clock.UtcNow));
     }
 
+    // Top-up purchases append non-expiring credits; idempotency is the caller's concern
+    // (the billing webhook event gate).
+    public void GrantTopUp(string userId, int credits)
+    {
+        if (credits is < 1 or > 10_000)
+        {
+            throw new ValidationException("Top-up credits must be between 1 and 10000.");
+        }
+
+        _ledger.AddCreditEntry(new CreditLedgerEntry(
+            Guid.NewGuid(),
+            userId,
+            credits,
+            CreditLedgerReason.TopUp,
+            null,
+            null,
+            _clock.UtcNow));
+    }
+
     public int AdminAdjust(UserAccount target, int delta)
     {
         if (delta == 0)
