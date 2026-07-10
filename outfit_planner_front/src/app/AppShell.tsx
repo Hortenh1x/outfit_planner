@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarDays, Camera, Check, LogOut, ShieldCheck, Shirt, Upload, UserRound, Wand2, X } from 'lucide-react';
 import { billingStatusQueryKey, getAuthProviders, getBillingStatus, logout, openBillingPortal, updateAccountProfile, uploadAccountAvatar, type AuthUser, type UserGender } from '../api/client';
+import { redirectToCheckout } from '../features/billing/checkoutRedirect';
 import { ThemeToggle, type ThemeMode } from '../components/ThemeToggle';
 import { authSessionQueryKey, useAuthSession } from '../features/auth/authQueries';
 import './editorialShell.css';
@@ -138,7 +139,7 @@ function AccountPanel({
   });
   const portalMutation = useMutation({
     mutationFn: openBillingPortal,
-    onSuccess: ({ url }) => window.location.assign(url)
+    onSuccess: ({ url }) => redirectToCheckout(url)
   });
 
   useEffect(() => {

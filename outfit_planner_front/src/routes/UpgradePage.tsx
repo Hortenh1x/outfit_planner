@@ -11,6 +11,7 @@ import {
   startTopUpCheckout
 } from '../api/client';
 import { authSessionQueryKey, useAuthSession } from '../features/auth/authQueries';
+import { redirectToCheckout } from '../features/billing/checkoutRedirect';
 import { PageHeader } from '../shared/ui/PageHeader';
 import '../features/billing/billing.css';
 
@@ -45,15 +46,15 @@ export function UpgradePage() {
 
   const checkoutMutation = useMutation({
     mutationFn: startSubscriptionCheckout,
-    onSuccess: ({ url }) => window.location.assign(url)
+    onSuccess: ({ url }) => redirectToCheckout(url)
   });
   const topUpMutation = useMutation({
     mutationFn: startTopUpCheckout,
-    onSuccess: ({ url }) => window.location.assign(url)
+    onSuccess: ({ url }) => redirectToCheckout(url)
   });
   const portalMutation = useMutation({
     mutationFn: openBillingPortal,
-    onSuccess: ({ url }) => window.location.assign(url)
+    onSuccess: ({ url }) => redirectToCheckout(url)
   });
 
   const role = sessionQuery.data?.user.role ?? 'Free';
