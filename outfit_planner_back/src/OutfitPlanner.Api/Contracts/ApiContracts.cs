@@ -240,7 +240,10 @@ public sealed record AdminUserResponse(
     int ActiveSessionCount,
     string? AvatarUrl,
     // Raw AI-credit ledger balance; null for accounts with unlimited credits (Admin).
-    int? CreditBalance = null);
+    int? CreditBalance = null,
+    // Read-only billing visibility; null when the account never subscribed.
+    string? SubscriptionStatus = null,
+    DateTimeOffset? SubscriptionPeriodEnd = null);
 
 public sealed record AdminUsersPageResponse(
     IReadOnlyList<AdminUserResponse> Items,
@@ -253,6 +256,25 @@ public sealed record AdminStatsResponse(
     int TotalGarments,
     int TotalOutfits,
     int TotalTryOnJobs);
+
+public sealed record BillingSubscriptionResponse(string Status, DateTimeOffset? CurrentPeriodEnd, bool PremiumActive);
+
+public sealed record BillingTopUpPackResponse(string Id, int Credits, string? DisplayPrice);
+
+// Billing surface for the account: disabled billing keeps Enabled=false and empty packs
+// so the UI degrades to the ask-the-admin notice.
+public sealed record BillingStatusResponse(
+    bool Enabled,
+    string Provider,
+    bool SubscriptionPriceConfigured,
+    string? PremiumDisplayPrice,
+    BillingSubscriptionResponse? Subscription,
+    IReadOnlyList<BillingTopUpPackResponse> TopUpPacks,
+    bool PortalAvailable);
+
+public sealed record BillingCheckoutResponse(string Url);
+
+public sealed record StartTopUpCheckoutRequest(string PackId);
 
 public sealed record AuthSessionResponse(AuthUserResponse User, DateTimeOffset ExpiresAt);
 

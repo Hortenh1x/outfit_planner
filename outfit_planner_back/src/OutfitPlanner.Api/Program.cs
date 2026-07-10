@@ -162,6 +162,12 @@ builder.Services.AddSingleton(new RolePinningPolicy(LoadRolePinningOptions(build
 builder.Services.AddSingleton(LoadPlanCatalog(builder.Configuration));
 builder.Services.AddSingleton<CreditLedgerService>();
 builder.Services.AddSingleton<EntitlementService>();
+
+// Stage-4 billing (PAYWALL_MODEL.md): Stripe when a secret key is configured, disabled
+// otherwise (Billing__Provider=Auto|Stripe|Disabled). Numbers/prices ride Stripe__*.
+builder.Services.AddSingleton(LoadBillingOptions(builder.Configuration));
+builder.Services.AddSingleton<IBillingProvider>(_ => CreateBillingProvider(builder.Configuration));
+builder.Services.AddSingleton<BillingService>();
 var authenticationBuilder = builder.Services.AddAuthentication();
 var externalAuthPublicOrigin = NormalizePublicOrigin(builder.Configuration["Authentication:PublicOrigin"]);
 var publicOrigin = NormalizePublicOrigin(builder.Configuration["PublicOrigin"]) ?? externalAuthPublicOrigin;
@@ -350,6 +356,8 @@ if (storageProvider == "Postgres")
     builder.Services.AddSingleton<IUserAccountRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
     builder.Services.AddSingleton<IAdminUserRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
     builder.Services.AddSingleton<ICreditLedgerRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
+    builder.Services.AddSingleton<ISubscriptionRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
+    builder.Services.AddSingleton<IBillingEventRepository>(provider => provider.GetRequiredService<PostgresOutfitStore>());
 }
 else
 {
@@ -363,6 +371,8 @@ else
     builder.Services.AddSingleton<IUserAccountRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
     builder.Services.AddSingleton<IAdminUserRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
     builder.Services.AddSingleton<ICreditLedgerRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
+    builder.Services.AddSingleton<ISubscriptionRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
+    builder.Services.AddSingleton<IBillingEventRepository>(provider => provider.GetRequiredService<FileBackedOutfitStore>());
 }
 builder.Services.AddSingleton<WardrobeService>();
 builder.Services.AddSingleton<PhotoUploadService>();
@@ -759,6 +769,69 @@ api.MapGet("/account/entitlements", (EntitlementService entitlements, HttpContex
         account.Limits.PriorityQueue));
 })
     .Produces<AccountEntitlementsResponse>(StatusCodes.Status200OK);
+
+api.MapGet("/billing", (BillingService billing, HttpContext context) =>
+    Results.Ok(ToBillingStatusResponse(billing.GetStatus(CurrentUser(context)))))
+    .Produces<BillingStatusResponse>(StatusCodes.Status200OK);
+
+api.MapPost("/billing/checkout", async (BillingService billing, HttpContext context, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var url = await billing.StartSubscriptionCheckoutAsync(CurrentUser(context), cancellationToken);
+        return Results.Ok(new BillingCheckoutResponse(url));
+    }
+    catch (ValidationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+})
+    .Produces<BillingCheckoutResponse>(StatusCodes.Status200OK);
+
+api.MapPost("/billing/topup", async (StartTopUpCheckoutRequest request, BillingService billing, HttpContext context, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var url = await billing.StartTopUpCheckoutAsync(CurrentUser(context), request.PackId, cancellationToken);
+        return Results.Ok(new BillingCheckoutResponse(url));
+    }
+    catch (ValidationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+})
+    .Produces<BillingCheckoutResponse>(StatusCodes.Status200OK);
+
+api.MapPost("/billing/portal", async (BillingService billing, HttpContext context, CancellationToken cancellationToken) =>
+{
+    try
+    {
+        var url = await billing.CreatePortalAsync(CurrentUser(context), cancellationToken);
+        return Results.Ok(new BillingCheckoutResponse(url));
+    }
+    catch (ValidationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+})
+    .Produces<BillingCheckoutResponse>(StatusCodes.Status200OK);
+
+// Anonymous by design (allowlisted in RequiresAuthenticatedUser): Stripe calls this
+// without cookies, and the signature check is the authentication.
+api.MapPost("/billing/webhook", async (HttpRequest request, BillingService billing, CancellationToken cancellationToken) =>
+{
+    using var reader = new StreamReader(request.Body);
+    var payload = await reader.ReadToEndAsync(cancellationToken);
+    try
+    {
+        var result = await billing.HandleWebhookAsync(payload, request.Headers["Stripe-Signature"], cancellationToken);
+        return Results.Ok(new { status = result.Status });
+    }
+    catch (ValidationException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+});
 
 api.MapPatch("/account/profile", (
     UpdateAccountProfileRequest request,
@@ -2117,7 +2190,75 @@ static AdminUserResponse ToAdminUserResponse(AdminUserRecord record, AdminServic
         record.BodyReferencePhotoCount,
         record.ActiveSessionCount,
         avatarUrl,
-        admin.RawCreditBalance(user));
+        admin.RawCreditBalance(user),
+        record.SubscriptionStatus,
+        record.SubscriptionPeriodEnd);
+}
+
+static BillingStatusResponse ToBillingStatusResponse(BillingStatus status)
+{
+    return new BillingStatusResponse(
+        status.Enabled,
+        status.Provider,
+        status.SubscriptionPriceConfigured,
+        status.PremiumDisplayPrice,
+        status.Subscription is { } subscription
+            ? new BillingSubscriptionResponse(subscription.Status, subscription.CurrentPeriodEnd, subscription.PremiumActive)
+            : null,
+        status.TopUpPacks.Select(pack => new BillingTopUpPackResponse(pack.Id, pack.Credits, pack.DisplayPrice)).ToArray(),
+        status.PortalAvailable);
+}
+
+static BillingOptions LoadBillingOptions(IConfiguration configuration)
+{
+    var origin = (configuration["Authentication:PublicOrigin"] ?? "").TrimEnd('/');
+    var packs = configuration.GetSection("Stripe:TopUpPacks").GetChildren()
+        .Select(section => new BillingTopUpPack(
+            (section["Id"] ?? "").Trim(),
+            int.TryParse(section["Credits"], out var credits) ? credits : 0,
+            (section["PriceId"] ?? "").Trim(),
+            NullIfWhiteSpace(section["DisplayPrice"])))
+        .Where(pack => pack.Id.Length > 0 && pack.Credits > 0)
+        .ToArray();
+    return new BillingOptions(
+        (configuration["Stripe:PremiumMonthlyPriceId"] ?? "").Trim(),
+        NullIfWhiteSpace(configuration["Stripe:PremiumMonthlyDisplayPrice"]),
+        packs,
+        NullIfWhiteSpace(configuration["Stripe:SuccessUrl"]) ?? $"{origin}/upgrade?checkout=success",
+        NullIfWhiteSpace(configuration["Stripe:CancelUrl"]) ?? $"{origin}/upgrade?checkout=cancelled",
+        NullIfWhiteSpace(configuration["Stripe:PortalReturnUrl"]) ?? $"{origin}/upgrade");
+
+    static string? NullIfWhiteSpace(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+}
+
+static IBillingProvider CreateBillingProvider(IConfiguration configuration)
+{
+    var configuredProvider = (configuration["Billing:Provider"] ?? "Auto").Trim().ToLowerInvariant();
+    var secretKey = (configuration["Stripe:SecretKey"] ?? "").Trim();
+    var webhookSecret = (configuration["Stripe:WebhookSecret"] ?? "").Trim();
+    return configuredProvider switch
+    {
+        "stripe" => CreateStripeProvider(),
+        "disabled" or "none" or "off" => new OutfitPlanner.Infrastructure.Billing.DisabledBillingProvider(),
+        // Auto: Stripe when credentials exist, softly disabled otherwise.
+        _ => string.IsNullOrWhiteSpace(secretKey)
+            ? new OutfitPlanner.Infrastructure.Billing.DisabledBillingProvider()
+            : CreateStripeProvider()
+    };
+
+    IBillingProvider CreateStripeProvider()
+    {
+        if (string.IsNullOrWhiteSpace(secretKey))
+        {
+            throw new InvalidOperationException("Stripe:SecretKey must be configured when Billing:Provider selects Stripe.");
+        }
+
+        return new OutfitPlanner.Infrastructure.Billing.StripeBillingProvider(
+            new OutfitPlanner.Infrastructure.Billing.StripeBillingSettings(secretKey, webhookSecret));
+    }
 }
 
 static PlanCatalog LoadPlanCatalog(IConfiguration configuration)
@@ -2199,6 +2340,8 @@ static bool RequiresAuthenticatedUser(HttpContext context)
     var path = remaining.Value ?? "";
     return !path.Equals("/health", StringComparison.OrdinalIgnoreCase)
         && !path.Equals("/system/status", StringComparison.OrdinalIgnoreCase)
+        // The billing webhook authenticates via its provider signature, not a session.
+        && !path.Equals("/billing/webhook", StringComparison.OrdinalIgnoreCase)
         && !path.StartsWith("/auth/", StringComparison.OrdinalIgnoreCase)
         && !path.StartsWith("/openapi/", StringComparison.OrdinalIgnoreCase)
         && !path.StartsWith("/storage/signed/", StringComparison.OrdinalIgnoreCase)

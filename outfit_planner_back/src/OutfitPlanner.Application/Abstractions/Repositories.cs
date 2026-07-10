@@ -85,7 +85,10 @@ public sealed record AdminUserRecord(
     int OutfitCount,
     int TryOnJobCount,
     int BodyReferencePhotoCount,
-    int ActiveSessionCount);
+    int ActiveSessionCount,
+    // Read-only billing visibility for the admin panel; null when never subscribed.
+    string? SubscriptionStatus = null,
+    DateTimeOffset? SubscriptionPeriodEnd = null);
 
 public sealed record AdminUserStats(int TotalUsers, int TotalGarments, int TotalOutfits, int TotalTryOnJobs);
 
