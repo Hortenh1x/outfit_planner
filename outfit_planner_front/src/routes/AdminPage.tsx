@@ -203,6 +203,7 @@ export function AdminPage() {
                 <th scope="col" className="admin-count-column">Try-ons</th>
                 <th scope="col" className="admin-count-column">Sessions</th>
                 <th scope="col">Credits</th>
+                <th scope="col">Subscription</th>
                 <th scope="col">Joined</th>
                 <th scope="col">Actions</th>
               </tr>
@@ -290,6 +291,16 @@ export function AdminPage() {
                         <Coins size={13} aria-hidden="true" />
                         {user.creditBalance}
                       </button>
+                    )}
+                  </td>
+                  <td>
+                    {user.subscriptionStatus ? (
+                      <span className="admin-subscription-cell" title={user.subscriptionPeriodEnd ? `Period ends ${formatDate(user.subscriptionPeriodEnd)}` : undefined}>
+                        {user.subscriptionStatus}
+                        {user.subscriptionPeriodEnd ? <small> · {formatDate(user.subscriptionPeriodEnd)}</small> : null}
+                      </span>
+                    ) : (
+                      '—'
                     )}
                   </td>
                   <td>

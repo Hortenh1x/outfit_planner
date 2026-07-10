@@ -553,7 +553,7 @@ export function BuilderPage() {
               ))}
               {pendingEstimate.requiresUpgrade ? (
                 <p className="upgrade-notice">
-                  This mode is part of the <em>Premium</em> plan. Ask the admin to upgrade your account.
+                  This mode is part of the <em>Premium</em> plan. <Link to="/upgrade">See Premium plans</Link>.
                 </p>
               ) : null}
               {insufficientCredits ? (
