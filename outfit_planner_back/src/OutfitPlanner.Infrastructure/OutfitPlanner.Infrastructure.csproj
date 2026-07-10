@@ -10,6 +10,7 @@
     <PackageReference Include="Npgsql" Version="10.0.1" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
     <PackageReference Include="StackExchange.Redis" Version="2.13.17" />
+    <PackageReference Include="Stripe.net" Version="52.1.0" />
     <ProjectReference Include="..\OutfitPlanner.Application\OutfitPlanner.Application.csproj" />
   </ItemGroup>
 </Project>
