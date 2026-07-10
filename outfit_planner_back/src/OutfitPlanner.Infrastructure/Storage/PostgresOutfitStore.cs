@@ -13,7 +13,9 @@ public sealed class PostgresOutfitStore :
     IShareLinkRepository,
     IUserAccountRepository,
     IAdminUserRepository,
-    ICreditLedgerRepository
+    ICreditLedgerRepository,
+    ISubscriptionRepository,
+    IBillingEventRepository
 {
     public static readonly IReadOnlyList<string> RequiredTables = new[]
     {
@@ -27,7 +29,9 @@ public sealed class PostgresOutfitStore :
         "scheduled_outfits",
         "try_on_jobs",
         "share_links",
-        "account_credit_ledger"
+        "account_credit_ledger",
+        "billing_subscriptions",
+        "billing_webhook_events"
     };
 
     private readonly NpgsqlDataSource _dataSource;
@@ -961,6 +965,81 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("user_id", userId);
         command.Parameters.AddWithValue("reason", reason.ToString());
         return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    public void UpsertSubscription(BillingSubscription subscription)
+    {
+        using var command = _dataSource.CreateCommand("""
+            insert into billing_subscriptions (user_id, provider, external_customer_id, external_subscription_id, status, current_period_end, updated_at)
+            values (@user_id, @provider, @external_customer_id, @external_subscription_id, @status, @current_period_end, @updated_at)
+            on conflict (user_id) do update set
+                provider = excluded.provider,
+                external_customer_id = excluded.external_customer_id,
+                external_subscription_id = excluded.external_subscription_id,
+                status = excluded.status,
+                current_period_end = excluded.current_period_end,
+                updated_at = excluded.updated_at
+            """);
+        command.Parameters.AddWithValue("user_id", subscription.UserId);
+        command.Parameters.AddWithValue("provider", subscription.Provider);
+        command.Parameters.AddWithValue("external_customer_id", subscription.ExternalCustomerId);
+        command.Parameters.AddWithValue("external_subscription_id", subscription.ExternalSubscriptionId);
+        command.Parameters.AddWithValue("status", subscription.Status);
+        command.Parameters.AddWithValue("current_period_end", DbValue(subscription.CurrentPeriodEnd));
+        command.Parameters.AddWithValue("updated_at", subscription.UpdatedAt);
+        command.ExecuteNonQuery();
+    }
+
+    public BillingSubscription? GetSubscriptionByUser(string userId)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select user_id, provider, external_customer_id, external_subscription_id, status, current_period_end, updated_at
+            from billing_subscriptions
+            where user_id = @user_id
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        return ReadSingleSubscription(command);
+    }
+
+    public BillingSubscription? GetSubscriptionByExternalSubscriptionId(string externalSubscriptionId)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select user_id, provider, external_customer_id, external_subscription_id, status, current_period_end, updated_at
+            from billing_subscriptions
+            where external_subscription_id = @external_subscription_id
+            """);
+        command.Parameters.AddWithValue("external_subscription_id", externalSubscriptionId);
+        return ReadSingleSubscription(command);
+    }
+
+    public bool TryRecordBillingEvent(string eventId, DateTimeOffset processedAt)
+    {
+        using var command = _dataSource.CreateCommand("""
+            insert into billing_webhook_events (event_id, processed_at)
+            values (@event_id, @processed_at)
+            on conflict (event_id) do nothing
+            """);
+        command.Parameters.AddWithValue("event_id", eventId);
+        command.Parameters.AddWithValue("processed_at", processedAt);
+        return command.ExecuteNonQuery() == 1;
+    }
+
+    private static BillingSubscription? ReadSingleSubscription(NpgsqlCommand command)
+    {
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return new BillingSubscription(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTimeOffset>(5),
+            reader.GetFieldValue<DateTimeOffset>(6));
     }
 
     private static IReadOnlyList<CreditLedgerEntry> ReadCreditEntries(NpgsqlCommand command)
