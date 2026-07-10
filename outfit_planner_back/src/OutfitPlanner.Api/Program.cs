@@ -137,8 +137,10 @@ builder.Services.AddRateLimiter(options =>
     options.AddPolicy("try-on-rate-limit", context =>
     {
         var sessionToken = context.Request.Cookies[SessionCookieName];
+        // Partition on a non-reversible digest of the session token, never the raw bearer
+        // secret, so the token cannot surface in rate-limiter diagnostics/metrics.
         var partitionKey = !string.IsNullOrEmpty(sessionToken)
-            ? $"session:{sessionToken}"
+            ? $"session:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sessionToken)))}"
             : $"ip:{context.Connection.RemoteIpAddress?.ToString() ?? "unknown"}";
         return RateLimitPartition.GetFixedWindowLimiter(partitionKey, _ => new FixedWindowRateLimiterOptions
         {
@@ -740,9 +742,24 @@ api.MapGet("/account/export", (
     HttpContext context) =>
 {
     var userId = CurrentUser(context);
+    var account = users.GetUserById(userId);
     return Results.Ok(new
     {
-        user = users.GetUserById(userId),
+        // Sanitized profile: the password hash, normalized email, and avatar object key are
+        // server-internal and must never leave the API, even in the owner's own export.
+        user = account is null ? null : new
+        {
+            account.Id,
+            account.Email,
+            account.DisplayName,
+            account.Gender,
+            account.Role,
+            account.CreatedAt,
+            account.UpdatedAt,
+            account.LastLoginAt,
+            account.EmailVerifiedAt,
+            account.AvatarUrl
+        },
         garments = garments.ListGarmentsByUser(userId),
         outfits = outfits.ListOutfitsByUser(userId),
         bodyReferencePhotos = bodyPhotos.ListBodyReferencePhotosByUser(userId),

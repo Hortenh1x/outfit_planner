@@ -1444,7 +1444,16 @@ public sealed class PostgresOutfitStore :
 
     private static string LikePattern(string value)
     {
-        return $"%{value}%";
+        // Escape LIKE metacharacters (same as the admin search's EscapeLikePattern) so a
+        // user's literal search term is matched literally — `%`/`_` in the query are not
+        // treated as wildcards, and a pathological pattern can't widen the (already
+        // user-scoped) scan. The value is still bound as a parameter; this is not an
+        // injection fix, just correct escaping.
+        var escaped = value
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
+        return $"%{escaped}%";
     }
 
     private Outfit? GetOutfit(string whereClause, Action<NpgsqlCommand> addParameters)

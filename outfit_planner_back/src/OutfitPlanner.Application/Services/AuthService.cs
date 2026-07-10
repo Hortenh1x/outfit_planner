@@ -20,6 +20,10 @@ public sealed class AuthService
     private readonly TimeSpan _sessionLifetime = TimeSpan.FromDays(14);
     private readonly TimeSpan _emailVerificationLifetime = TimeSpan.FromHours(24);
     private readonly TimeSpan _passwordResetLifetime = TimeSpan.FromHours(1);
+    // A real, well-formed password hash used only to equalize sign-in timing for unknown
+    // accounts, so a login attempt runs the KDF whether or not the email exists (defeats a
+    // username-enumeration timing oracle). Computed once per process.
+    private readonly Lazy<string> _decoyPasswordHash;
 
     public AuthService(
         IUserAccountRepository users,
@@ -33,6 +37,7 @@ public sealed class AuthService
         _tokens = tokens;
         _clock = clock;
         _rolePinning = rolePinning;
+        _decoyPasswordHash = new Lazy<string>(() => passwordHasher.HashPassword("timing-equalization-decoy"));
     }
 
     public AuthResult RegisterWithPassword(string email, string password, string repeatPassword)
@@ -72,7 +77,11 @@ public sealed class AuthService
     {
         var normalizedEmail = NormalizeEmail(email);
         var user = _users.GetUserByNormalizedEmail(normalizedEmail);
-        if (user?.PasswordHash is null || !_passwordHasher.VerifyPassword(user.PasswordHash, password))
+        // Always run the KDF — against a decoy hash when the account is unknown or has no
+        // password (e.g. OAuth-only) — so the response time never reveals whether the email
+        // exists. The result of the decoy verify is discarded.
+        var passwordMatches = _passwordHasher.VerifyPassword(user?.PasswordHash ?? _decoyPasswordHash.Value, password);
+        if (user?.PasswordHash is null || !passwordMatches)
         {
             throw new ValidationException("Email or password is invalid.");
         }
@@ -218,11 +227,18 @@ public sealed class AuthService
         return ToPublicUser(updated);
     }
 
-    public string CreateEmailVerificationToken(string email)
+    // Returns null when no account matches, so the caller can always respond with the same
+    // generic 200 — never revealing whether an email is registered (no enumeration oracle
+    // via status code, response body, or an unhandled 500).
+    public string? CreateEmailVerificationToken(string email)
     {
         var normalizedEmail = NormalizeEmail(email);
-        var user = _users.GetUserByNormalizedEmail(normalizedEmail)
-            ?? throw new InvalidOperationException("Account was not found.");
+        var user = _users.GetUserByNormalizedEmail(normalizedEmail);
+        if (user is null)
+        {
+            return null;
+        }
+
         var token = _tokens.CreateToken();
         var now = _clock.UtcNow;
         _users.AddEmailVerificationToken(new AuthEmailVerificationToken(
@@ -255,11 +271,18 @@ public sealed class AuthService
         return true;
     }
 
-    public string CreatePasswordResetToken(string email)
+    // Returns null when no account matches (see CreateEmailVerificationToken): the caller
+    // always responds with the same generic 200, so a missing account is indistinguishable
+    // from an existing one.
+    public string? CreatePasswordResetToken(string email)
     {
         var normalizedEmail = NormalizeEmail(email);
-        var user = _users.GetUserByNormalizedEmail(normalizedEmail)
-            ?? throw new InvalidOperationException("Account was not found.");
+        var user = _users.GetUserByNormalizedEmail(normalizedEmail);
+        if (user is null)
+        {
+            return null;
+        }
+
         var token = _tokens.CreateToken();
         var now = _clock.UtcNow;
         _users.AddPasswordResetToken(new AuthPasswordResetToken(

@@ -13,6 +13,10 @@ public sealed class ImageProcessor : IImageProcessor
     private const int MaxImageSide = 1600;
     private const int ThumbnailSide = 512;
     private const int PrivatePreviewSide = 96;
+    // Decompression-bomb guard: a small, highly compressible file can declare an enormous
+    // canvas that would explode into gigabytes of pixel buffer on decode. Reject anything
+    // above this pixel count from the header before allocating the full image.
+    private const long MaxDecodedPixels = 100_000_000; // 100 megapixels
 
     private readonly IGarmentExtractionProvider _garmentExtraction;
 
@@ -31,10 +35,25 @@ public sealed class ImageProcessor : IImageProcessor
         _garmentExtraction = garmentExtraction;
     }
 
+    // Loads user-supplied image bytes only after confirming the declared dimensions are
+    // sane (header-only Identify), so an oversized canvas is rejected before it can
+    // allocate a huge pixel buffer.
+    private static Image<Rgba32> LoadWithinLimits(byte[] bytes)
+    {
+        var info = Image.Identify(bytes);
+        if (info is not null && (long)info.Width * info.Height > MaxDecodedPixels)
+        {
+            throw new OutfitPlanner.Domain.ValidationException(
+                "Image dimensions are too large. Use an image under 100 megapixels.");
+        }
+
+        return Image.Load<Rgba32>(bytes);
+    }
+
     public ProcessedPhotoSet ProcessGarmentPhoto(IncomingPhoto photo)
     {
         var bytes = ReadAllBytes(photo.Content);
-        using var image = Image.Load<Rgba32>(bytes);
+        using var image = LoadWithinLimits(bytes);
         NormalizeMetadataAndSize(image, MaxImageSide);
 
         var extension = ExtensionFor(photo.ContentType);
@@ -96,7 +115,7 @@ public sealed class ImageProcessor : IImageProcessor
     public ProcessedPhotoSet ProcessGarmentOriginal(IncomingPhoto photo)
     {
         var bytes = ReadAllBytes(photo.Content);
-        using var image = Image.Load<Rgba32>(bytes);
+        using var image = LoadWithinLimits(bytes);
         NormalizeMetadataAndSize(image, MaxImageSide);
 
         var extension = ExtensionFor(photo.ContentType);
@@ -119,7 +138,7 @@ public sealed class ImageProcessor : IImageProcessor
     public ProcessedPhotoSet ProcessBodyReferencePhoto(IncomingPhoto photo)
     {
         var bytes = ReadAllBytes(photo.Content);
-        using var image = Image.Load<Rgba32>(bytes);
+        using var image = LoadWithinLimits(bytes);
         NormalizeMetadataAndSize(image, MaxImageSide);
 
         var extension = ExtensionFor(photo.ContentType);
@@ -146,7 +165,7 @@ public sealed class ImageProcessor : IImageProcessor
     public ProcessedPhotoSet ProcessAvatarPhoto(IncomingPhoto photo)
     {
         var bytes = ReadAllBytes(photo.Content);
-        using var image = Image.Load<Rgba32>(bytes);
+        using var image = LoadWithinLimits(bytes);
         NormalizeMetadataAndSize(image, ThumbnailSide);
         image.Mutate(operation => operation.Resize(new ResizeOptions
         {
