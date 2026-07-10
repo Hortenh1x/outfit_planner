@@ -7,6 +7,7 @@ import { AuthPage } from '../routes/AuthPage';
 import { BuilderPage } from '../routes/BuilderPage';
 import { CalendarPage } from '../routes/CalendarPage';
 import { SharePage } from '../routes/SharePage';
+import { UpgradePage } from '../routes/UpgradePage';
 import { WardrobePage } from '../routes/WardrobePage';
 
 export default function App() {
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/wardrobe" element={<WardrobePage />} />
           <Route path="/builder" element={<BuilderPage />} />
           <Route path="/calendar" element={<CalendarPage />} />
+          <Route path="/upgrade" element={<UpgradePage />} />
           <Route element={<RequireAdmin />}>
             <Route path="/admin" element={<AdminPage />} />
           </Route>

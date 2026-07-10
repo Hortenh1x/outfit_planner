@@ -639,6 +639,53 @@ export function getAccountEntitlements(): Promise<AccountEntitlements> {
   return request<AccountEntitlements>('/account/entitlements');
 }
 
+// Billing (paywall stage 4): Stripe-backed checkout/portal behind a provider-agnostic
+// status endpoint. Disabled billing keeps enabled=false so the UI degrades gracefully.
+
+export interface BillingSubscriptionInfo {
+  status: string;
+  currentPeriodEnd?: string | null;
+  premiumActive: boolean;
+}
+
+export interface BillingTopUpPack {
+  id: string;
+  credits: number;
+  displayPrice?: string | null;
+}
+
+export interface BillingStatus {
+  enabled: boolean;
+  provider: string;
+  subscriptionPriceConfigured: boolean;
+  premiumDisplayPrice?: string | null;
+  subscription?: BillingSubscriptionInfo | null;
+  topUpPacks: BillingTopUpPack[];
+  portalAvailable: boolean;
+}
+
+export const billingStatusQueryKey = ['billing-status'] as const;
+
+export function getBillingStatus(): Promise<BillingStatus> {
+  return request<BillingStatus>('/billing');
+}
+
+// The returned url is a Stripe-hosted page; callers redirect the whole window to it.
+export function startSubscriptionCheckout(): Promise<{ url: string }> {
+  return request<{ url: string }>('/billing/checkout', { method: 'POST' });
+}
+
+export function startTopUpCheckout(packId: string): Promise<{ url: string }> {
+  return request<{ url: string }>('/billing/topup', {
+    method: 'POST',
+    body: JSON.stringify({ packId })
+  });
+}
+
+export function openBillingPortal(): Promise<{ url: string }> {
+  return request<{ url: string }>('/billing/portal', { method: 'POST' });
+}
+
 // Admin panel API (requires the Admin role; non-admins receive 403).
 
 export interface AdminStats {
@@ -667,6 +714,9 @@ export interface AdminUser {
   avatarUrl?: string | null;
   // Raw AI-credit balance; null for accounts with unlimited credits (Admin).
   creditBalance?: number | null;
+  // Read-only billing visibility; null when the account never subscribed.
+  subscriptionStatus?: string | null;
+  subscriptionPeriodEnd?: string | null;
 }
 
 export interface AdminUsersPage {

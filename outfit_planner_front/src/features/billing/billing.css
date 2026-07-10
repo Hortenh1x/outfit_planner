@@ -1,0 +1,147 @@
+.upgrade-view {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-width: 860px;
+}
+
+.upgrade-checkout-notice {
+  border: 1px solid var(--editorial-hairline-strong);
+  background: var(--editorial-panel-muted);
+  padding: 12px 16px;
+  font-size: 0.92rem;
+}
+
+.upgrade-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 860px) {
+  .upgrade-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.upgrade-plan-card,
+.upgrade-topups {
+  border: 1px solid var(--editorial-hairline);
+  background: var(--editorial-panel);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.upgrade-plan-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--editorial-hairline);
+  padding-bottom: 10px;
+}
+
+.upgrade-plan-head h2 {
+  font-family: var(--editorial-display);
+  font-size: 1.6rem;
+  margin: 0;
+}
+
+.upgrade-plan-price {
+  color: var(--editorial-accent);
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.upgrade-plan-features {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upgrade-plan-features li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.94rem;
+}
+
+.upgrade-plan-features svg {
+  flex: none;
+  translate: 0 2px;
+  color: var(--editorial-accent);
+}
+
+.upgrade-current-plan {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.88rem;
+  color: var(--editorial-muted);
+}
+
+.upgrade-subscription-meta {
+  font-size: 0.9rem;
+  color: var(--editorial-muted);
+  margin: 0;
+}
+
+.upgrade-topups h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.upgrade-topups-hint {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--editorial-muted);
+}
+
+.upgrade-pack-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--editorial-hairline);
+  padding: 10px 12px;
+}
+
+.upgrade-pack-credits {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-weight: 600;
+}
+
+.upgrade-pack-price {
+  color: var(--editorial-muted);
+  font-size: 0.9rem;
+}
+
+.upgrade-disabled-note {
+  border: 1px dashed var(--editorial-hairline-strong);
+  padding: 14px 16px;
+  color: var(--editorial-muted);
+  font-size: 0.92rem;
+}
+
+/* Plan row inside the account settings dialog (AppShell). */
+.account-billing-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.account-upgrade-link {
+  color: var(--editorial-accent);
+  font-style: italic;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

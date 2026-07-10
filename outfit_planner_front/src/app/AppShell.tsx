@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarDays, Camera, Check, LogOut, ShieldCheck, Shirt, Upload, UserRound, Wand2, X } from 'lucide-react';
-import { getAuthProviders, logout, updateAccountProfile, uploadAccountAvatar, type AuthUser, type UserGender } from '../api/client';
+import { billingStatusQueryKey, getAuthProviders, getBillingStatus, logout, openBillingPortal, updateAccountProfile, uploadAccountAvatar, type AuthUser, type UserGender } from '../api/client';
 import { ThemeToggle, type ThemeMode } from '../components/ThemeToggle';
 import { authSessionQueryKey, useAuthSession } from '../features/auth/authQueries';
 import './editorialShell.css';
@@ -129,6 +129,17 @@ function AccountPanel({
       queryClient.setQueryData(authSessionQueryKey, session);
     }
   });
+  // Billing surface inside the settings dialog only — fetched when it opens.
+  const billingQuery = useQuery({
+    queryKey: billingStatusQueryKey,
+    queryFn: getBillingStatus,
+    enabled: isOpen && Boolean(user),
+    retry: 1
+  });
+  const portalMutation = useMutation({
+    mutationFn: openBillingPortal,
+    onSuccess: ({ url }) => window.location.assign(url)
+  });
 
   useEffect(() => {
     if (!user || !isOpen) {
@@ -146,6 +157,7 @@ function AccountPanel({
     const profileError = profileMutation.error instanceof Error ? profileMutation.error.message : null;
     const avatarError = avatarMutation.error instanceof Error ? avatarMutation.error.message : null;
     const logoutError = logoutMutation.error instanceof Error ? logoutMutation.error.message : null;
+    const portalError = portalMutation.error instanceof Error ? portalMutation.error.message : null;
 
     return (
       <section className="editorial-account" aria-label="Account">
@@ -220,7 +232,29 @@ function AccountPanel({
                   ))}
                 </div>
               </div>
-              {[profileError, avatarError, logoutError].filter((message): message is string => Boolean(message)).map((message) => (
+              <div className="account-field">
+                <span>Plan</span>
+                <div className="account-billing-row">
+                  <strong>{user.role ?? 'Free'}</strong>
+                  {billingQuery.data?.enabled ? (
+                    user.role === 'Free' ? (
+                      <Link to="/upgrade" className="account-upgrade-link" onClick={() => setIsOpen(false)}>
+                        See Premium
+                      </Link>
+                    ) : billingQuery.data.portalAvailable ? (
+                      <button
+                        type="button"
+                        className="secondary-action"
+                        disabled={portalMutation.isPending}
+                        onClick={() => portalMutation.mutate()}
+                      >
+                        {portalMutation.isPending ? 'Opening portal' : 'Manage subscription'}
+                      </button>
+                    ) : null
+                  ) : null}
+                </div>
+              </div>
+              {[profileError, avatarError, logoutError, portalError].filter((message): message is string => Boolean(message)).map((message) => (
                 <p className="account-error" key={message}>{message}</p>
               ))}
               <div className="account-dialog-actions">
