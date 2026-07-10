@@ -49,7 +49,7 @@ public sealed class PlanCatalog
             MaxGarments: 50,
             MaxOutfits: 20,
             MaxBodyReferencePhotos: 1,
-            TrialCredits: 6,
+            TrialCredits: 8,
             MonthlyCredits: 0,
             AllowedAiModes: FreeAiModes,
             MaxTryOnResolution: "1k",

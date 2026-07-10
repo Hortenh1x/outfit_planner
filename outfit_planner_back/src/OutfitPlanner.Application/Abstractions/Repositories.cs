@@ -72,6 +72,8 @@ public interface ICreditLedgerRepository
     IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByUser(string userId);
     int GetCreditBalance(string userId, DateTimeOffset now);
     bool HasCreditEntryWithReasonSince(string userId, CreditLedgerReason reason, DateTimeOffset since);
+    // Sum of all deltas with the given reason; backs the top-up-to-config trial grant.
+    int GetCreditSumByReason(string userId, CreditLedgerReason reason);
     IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByJob(Guid tryOnJobId);
 }
 

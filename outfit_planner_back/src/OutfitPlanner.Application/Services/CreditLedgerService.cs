@@ -116,13 +116,15 @@ public sealed class CreditLedgerService
 
     private void EnsureGrants(string userId, PlanLimits limits, DateTimeOffset now)
     {
-        if (limits.TrialCredits > 0
-            && !_ledger.HasCreditEntryWithReasonSince(userId, CreditLedgerReason.TrialGrant, DateTimeOffset.MinValue))
+        // Top-up-to-config: accounts granted under an older (smaller) trial receive the
+        // difference on their next balance read; lowering the config never claws back.
+        var trialGranted = _ledger.GetCreditSumByReason(userId, CreditLedgerReason.TrialGrant);
+        if (limits.TrialCredits > trialGranted)
         {
             _ledger.AddCreditEntry(new CreditLedgerEntry(
                 Guid.NewGuid(),
                 userId,
-                limits.TrialCredits,
+                limits.TrialCredits - trialGranted,
                 CreditLedgerReason.TrialGrant,
                 null,
                 null,
