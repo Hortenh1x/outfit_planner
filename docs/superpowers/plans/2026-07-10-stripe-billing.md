@@ -1,5 +1,9 @@
 # Trial Credits 8 + Stripe Billing Implementation Plan
 
+> **Status: executed 2026-07-10** (inline, all tasks complete). Backend 160/160, frontend
+> 178/178, builds clean, browser sanity passed (fresh Free account shows 8 credits,
+> `/upgrade` disabled state, admin Subscription column, webhook anonymous 400).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-driven-development (recommended) or executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Raise the Free trial grant to 8 credits with top-up-to-config semantics, and implement Stripe billing (checkout, top-ups, portal, webhooks, role transitions, admin visibility, upgrade UI) to "insert the API key" readiness.
