@@ -54,6 +54,7 @@ var tests = new List<(string Name, Action Test)>
     ("postgres schema contains account roles", TestPostgresSchemaContainsAccountRoles),
     ("api exposes role-gated admin endpoints", TestApiExposesAdminEndpoints),
     ("credit ledger grants debits and refunds with admin bypass", TestCreditLedgerGrantsDebitsAndRefunds),
+    ("trial grants top up existing accounts to the configured amount", TestTrialGrantTopsUpToConfiguredAmount),
     ("entitlement caps block creation at plan limits", TestEntitlementCapsBlockCreation),
     ("try-on estimate applies plan modes and resolution pricing", TestTryOnEstimateAppliesPlanModesAndResolution),
     ("try-on start debits credits and failures refund", TestStartTryOnDebitsCreditsCacheHitsAndRefunds),
@@ -988,19 +989,19 @@ static void TestCreditLedgerGrantsDebitsAndRefunds()
 
     var freeUser = store.GetUserById(auth.RegisterWithPassword("credits-free@example.com", "abc12345", "abc12345").User.Id)
         ?? throw new InvalidOperationException("Free account was not stored.");
-    AssertEqual(6, credits.GetBalance(freeUser).Balance, "free accounts should receive the one-time trial grant on first read.");
-    AssertEqual(6, credits.GetBalance(freeUser).Balance, "the trial grant must not be duplicated.");
+    AssertEqual(8, credits.GetBalance(freeUser).Balance, "free accounts should receive the one-time trial grant on first read.");
+    AssertEqual(8, credits.GetBalance(freeUser).Balance, "the trial grant must not be duplicated.");
 
     var jobId = Guid.NewGuid();
     credits.DebitForJob(freeUser, jobId, 2);
-    AssertEqual(4, credits.GetBalance(freeUser).Balance, "debits should reduce the balance.");
+    AssertEqual(6, credits.GetBalance(freeUser).Balance, "debits should reduce the balance.");
     AssertThrows<InvalidOperationException>(
         () => credits.DebitForJob(freeUser, Guid.NewGuid(), 100),
         "insufficient balance must reject the debit");
 
     credits.RefundJob(freeUser.Id, jobId);
     credits.RefundJob(freeUser.Id, jobId);
-    AssertEqual(6, credits.GetBalance(freeUser).Balance, "a failed job should be refunded exactly once.");
+    AssertEqual(8, credits.GetBalance(freeUser).Balance, "a failed job should be refunded exactly once.");
 
     var premiumUser = store.GetUserById(auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345").User.Id)
         ?? throw new InvalidOperationException("Premium account was not stored.");
@@ -1014,8 +1015,34 @@ static void TestCreditLedgerGrantsDebitsAndRefunds()
     credits.DebitForJob(adminUser, Guid.NewGuid(), 5);
     AssertEqual(0, store.ListCreditEntriesByUser(adminUser.Id).Count, "admin debits should be a no-op.");
 
-    AssertEqual(10, credits.AdminAdjust(freeUser, 4), "admin adjustments should apply to the balance.");
+    AssertEqual(12, credits.AdminAdjust(freeUser, 4), "admin adjustments should apply to the balance.");
     AssertThrows<InvalidOperationException>(() => credits.AdminAdjust(freeUser, 0), "zero adjustments must be rejected");
+}
+
+static void TestTrialGrantTopsUpToConfiguredAmount()
+{
+    var store = new InMemoryOutfitStore();
+    var pinning = TestRolePinning();
+    var clock = new SystemClock();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), clock, pinning);
+    var user = store.GetUserById(auth.RegisterWithPassword("topup-trial@example.com", "abc12345", "abc12345").User.Id)
+        ?? throw new InvalidOperationException("Account was not stored.");
+
+    // Simulate an account granted under the old 6-credit trial.
+    store.AddCreditEntry(new CreditLedgerEntry(Guid.NewGuid(), user.Id, 6, CreditLedgerReason.TrialGrant, null, null, clock.UtcNow));
+
+    var credits = new CreditLedgerService(store, PlanCatalog.Default, pinning, clock);
+    AssertEqual(8, credits.GetBalance(user).Balance, "existing trial accounts should be topped up to the configured amount.");
+    AssertEqual(8, credits.GetBalance(user).Balance, "the top-up must not repeat.");
+    AssertEqual(2, store.ListCreditEntriesByUser(user.Id).Count, "the top-up should append exactly one extra grant entry.");
+
+    // Lowering the config must never claw back already granted credits.
+    var lowered = new PlanCatalog(
+        PlanCatalog.Default.For(UserRole.Free) with { TrialCredits = 4 },
+        PlanCatalog.Default.For(UserRole.Premium),
+        PlanCatalog.Default.For(UserRole.Admin));
+    var loweredCredits = new CreditLedgerService(store, lowered, pinning, clock);
+    AssertEqual(8, loweredCredits.GetBalance(user).Balance, "a lowered trial config must not claw back granted credits.");
 }
 
 static void TestEntitlementCapsBlockCreation()
@@ -1126,19 +1153,19 @@ static void TestStartTryOnDebitsCreditsCacheHitsAndRefunds()
     var estimate = service.Estimate(free.User.Id, outfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/p.jpg", null);
     var job = service.StartAsync(free.User.Id, outfit.Id, "https://example.com/p.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, estimate.EstimatedCredits, estimate.CacheKey)
         .GetAwaiter().GetResult();
-    AssertEqual(5, credits.GetBalance(freeUser).Balance, "a paid start should debit the estimated credits before queueing.");
+    AssertEqual(7, credits.GetBalance(freeUser).Balance, "a paid start should debit the estimated credits before queueing.");
     AssertEqual(0, queue.PriorityEnqueued.Count, "free accounts should use the normal queue.");
 
     service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
     AssertEqual(TryOnStatus.Succeeded, service.GetJob(free.User.Id, job.Id)?.Status, "the queued job should succeed through the provider.");
-    AssertEqual(5, credits.GetBalance(freeUser).Balance, "successful jobs keep their debit.");
+    AssertEqual(7, credits.GetBalance(freeUser).Balance, "successful jobs keep their debit.");
 
     var cachedEstimate = service.Estimate(free.User.Id, outfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/p.jpg", null);
     AssertTrue(cachedEstimate.HasCachedResult, "the repeat estimate should see the cached result.");
     var cacheHit = service.StartAsync(free.User.Id, outfit.Id, "https://example.com/p.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, cachedEstimate.EstimatedCredits, cachedEstimate.CacheKey)
         .GetAwaiter().GetResult();
     AssertTrue(cacheHit.ServedFromCache, "the repeat start should be served from cache.");
-    AssertEqual(5, credits.GetBalance(freeUser).Balance, "cache hits must not debit credits.");
+    AssertEqual(7, credits.GetBalance(freeUser).Balance, "cache hits must not debit credits.");
 
     // A failing provider refunds the debit when the worker marks the job failed.
     var failingService = new TryOnService(store, store, store, queue, new ThrowingTryOnProvider(), new TryOnCostEstimator(), clock, entitlements: entitlements, credits: credits);
@@ -1147,10 +1174,10 @@ static void TestStartTryOnDebitsCreditsCacheHitsAndRefunds()
     var failingEstimate = failingService.Estimate(free.User.Id, failingOutfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/p.jpg", null);
     var failingJob = failingService.StartAsync(free.User.Id, failingOutfit.Id, "https://example.com/p.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, failingEstimate.EstimatedCredits, failingEstimate.CacheKey)
         .GetAwaiter().GetResult();
-    AssertEqual(4, credits.GetBalance(freeUser).Balance, "the failing job should debit on start.");
+    AssertEqual(6, credits.GetBalance(freeUser).Balance, "the failing job should debit on start.");
     failingService.ProcessQueuedJobAsync(failingJob.Id).GetAwaiter().GetResult();
     AssertEqual(TryOnStatus.Failed, failingService.GetJob(free.User.Id, failingJob.Id)?.Status, "the provider failure should fail the job.");
-    AssertEqual(5, credits.GetBalance(freeUser).Balance, "failed jobs must refund their debit.");
+    AssertEqual(7, credits.GetBalance(freeUser).Balance, "failed jobs must refund their debit.");
 
     // Premium jobs ride the priority queue.
     var premium = auth.RegisterWithPassword("olya.shaydur@gmail.com", "abc12345", "abc12345");

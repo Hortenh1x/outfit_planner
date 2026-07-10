@@ -349,6 +349,11 @@ public sealed class FileBackedOutfitStore :
         return _inner.HasCreditEntryWithReasonSince(userId, reason, since);
     }
 
+    public int GetCreditSumByReason(string userId, CreditLedgerReason reason)
+    {
+        return _inner.GetCreditSumByReason(userId, reason);
+    }
+
     public IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByJob(Guid tryOnJobId)
     {
         return _inner.ListCreditEntriesByJob(tryOnJobId);

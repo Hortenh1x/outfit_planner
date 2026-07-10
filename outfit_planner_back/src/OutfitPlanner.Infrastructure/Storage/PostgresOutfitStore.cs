@@ -951,6 +951,18 @@ public sealed class PostgresOutfitStore :
         return ReadCreditEntries(command);
     }
 
+    public int GetCreditSumByReason(string userId, CreditLedgerReason reason)
+    {
+        using var command = _dataSource.CreateCommand("""
+            select coalesce(sum(delta), 0)
+            from account_credit_ledger
+            where user_id = @user_id and reason = @reason
+            """);
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("reason", reason.ToString());
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
     private static IReadOnlyList<CreditLedgerEntry> ReadCreditEntries(NpgsqlCommand command)
     {
         using var reader = command.ExecuteReader();

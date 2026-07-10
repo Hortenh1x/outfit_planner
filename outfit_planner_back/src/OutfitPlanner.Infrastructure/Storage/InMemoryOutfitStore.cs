@@ -595,6 +595,16 @@ public sealed class InMemoryOutfitStore :
         }
     }
 
+    public int GetCreditSumByReason(string userId, CreditLedgerReason reason)
+    {
+        lock (_lock)
+        {
+            return _creditLedger.Values
+                .Where(entry => entry.UserId == userId && entry.Reason == reason)
+                .Sum(entry => entry.Delta);
+        }
+    }
+
     public IReadOnlyList<CreditLedgerEntry> ListCreditEntriesByJob(Guid tryOnJobId)
     {
         lock (_lock)
