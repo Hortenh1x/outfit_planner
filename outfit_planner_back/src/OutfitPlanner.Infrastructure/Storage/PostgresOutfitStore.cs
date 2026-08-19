@@ -1,4 +1,5 @@
 using Npgsql;
+using NpgsqlTypes;
 using OutfitPlanner.Application.Abstractions;
 using OutfitPlanner.Domain;
 
@@ -861,8 +862,11 @@ public sealed class PostgresOutfitStore :
 
     private static void AddAdminUserQueryParameters(NpgsqlCommand command, AdminUserQuery query)
     {
-        command.Parameters.AddWithValue("search_pattern", DbValue(EscapeLikePattern(query.Search)));
-        command.Parameters.AddWithValue("role", DbValue(query.Role?.ToString()));
+        // Both filters are optional, and the "@x is null or column = @x" SQL pattern
+        // requires explicitly typed parameters: an untyped null placeholder never gets
+        // a type inferred by Postgres, failing the whole query with 42P08.
+        command.Parameters.Add(new NpgsqlParameter("search_pattern", NpgsqlDbType.Text) { Value = DbValue(EscapeLikePattern(query.Search)) });
+        command.Parameters.Add(new NpgsqlParameter("role", NpgsqlDbType.Text) { Value = DbValue(query.Role?.ToString()) });
     }
 
     private static string? EscapeLikePattern(string? search)

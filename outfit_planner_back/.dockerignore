@@ -1,0 +1,13 @@
+**/bin
+**/obj
+**/storage
+**/uploads
+**/*.log
+# Never bake local dev appsettings (real OAuth/FASHN secrets) into the image.
+# Production config comes from environment variables / compose only. Mirrors the
+# repo-root .dockerignore: that one only covers builds with the repo root as
+# context (frontend image); this backend build context needs its own copy.
+**/appsettings.json
+**/appsettings.*.json
+**/.env
+**/.env.*

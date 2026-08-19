@@ -272,7 +272,7 @@ static void TestDevelopmentDockerPublishesPostgresOnNonDefaultHostPort()
     var composePath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "..", "docker-compose.dev.yml"));
     var compose = File.ReadAllText(composePath);
 
-    AssertTrue(compose.Contains("\"5433:5432\"", StringComparison.Ordinal), "development postgres should publish on host port 5433 to avoid colliding with local PostgreSQL on Windows.");
+    AssertTrue(compose.Contains("\"15433:5432\"", StringComparison.Ordinal), "development postgres should publish on host port 15433 so it collides neither with a local PostgreSQL nor with other compose projects using 5433.");
 }
 
 static void TestFrontendDockerConfigProxiesApiThroughSameOrigin()
@@ -323,8 +323,8 @@ static void TestProductionDockerTerminatesHttpsAtFrontendProxy()
     var compose = File.ReadAllText(Path.Combine(rootPath, "docker-compose.yml"));
     var nginx = File.ReadAllText(Path.Combine(rootPath, "outfit_planner_front", "nginx.conf"));
 
-    AssertTrue(compose.Contains("\"443:443\"", StringComparison.Ordinal), "production frontend should publish HTTPS on host port 443.");
-    AssertTrue(compose.Contains("\"80:80\"", StringComparison.Ordinal), "production frontend should publish HTTP only for redirect to HTTPS.");
+    AssertTrue(compose.Contains("\"${FRONTEND_HTTPS_PORT:-443}:443\"", StringComparison.Ordinal), "production frontend should publish HTTPS on host port 443 by default (overridable via FRONTEND_HTTPS_PORT).");
+    AssertTrue(compose.Contains("\"${FRONTEND_HTTP_PORT:-80}:80\"", StringComparison.Ordinal), "production frontend should publish HTTP only for redirect to HTTPS, on host port 80 by default (overridable via FRONTEND_HTTP_PORT).");
     AssertTrue(!compose.Contains("\"5000:8080\"", StringComparison.Ordinal), "production api should not publish a direct HTTP host port.");
     AssertTrue(!compose.Contains("\"5001:", StringComparison.Ordinal), "production api should stay behind the frontend TLS proxy instead of publishing a direct host port.");
     AssertTrue(compose.Contains("./.secrets/tls/fullchain.pem:/etc/nginx/certs/fullchain.pem:ro", StringComparison.Ordinal), "production nginx should mount the public TLS certificate.");

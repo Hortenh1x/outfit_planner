@@ -21,12 +21,17 @@ services:
       - ./.aspnet/https:/https:ro
       - api_dataprotection:/root/.aspnet/DataProtection-Keys
 
+    # Wait until postgres and redis are actually reachable before launching the
+    # app. dotnet watch does NOT relaunch the app after a startup crash (it just
+    # waits for a file change), so a dependency race would otherwise leave the
+    # container "Up" but the API dead. Looping here also auto-heals: once the
+    # dependencies come back (e.g. after a host-port conflict is cleared), the
+    # API starts on its own with no manual `docker compose restart api`.
     command: >
-      sh -c "dotnet watch
-      --project src/OutfitPlanner.Api/OutfitPlanner.Api.csproj
-      run
-      --no-launch-profile
-      --urls https://0.0.0.0:8081"
+      bash -c "until (exec 3<>/dev/tcp/postgres/5432) 2>/dev/null; do echo 'waiting for postgres:5432...'; sleep 1; done;
+      until (exec 3<>/dev/tcp/redis/6379) 2>/dev/null; do echo 'waiting for redis:6379...'; sleep 1; done;
+      echo 'postgres and redis reachable - starting API';
+      exec dotnet watch --project src/OutfitPlanner.Api/OutfitPlanner.Api.csproj run --no-launch-profile --urls https://0.0.0.0:8081"
 
     environment:
       Authentication__PublicOrigin: ${PUBLIC_ORIGIN}
