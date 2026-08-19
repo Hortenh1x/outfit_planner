@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Backend then frontend (strictly sequential)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          # Matches the Docker images (node:24). Do not bump past 24 blindly:
+          # Node 26 breaks vitest's jsdom localStorage on some hosts.
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: outfit_planner_front/package-lock.json
+
+      # Backend first, frontend second, all in ONE job. Never parallelize these:
+      # the frontend pretest/prebuild regenerate the OpenAPI client by building
+      # the API project, so a concurrent backend build corrupts the generation
+      # (known race, see the outfit-planner-sequential-verification skill).
+      - name: Backend tests
+        run: dotnet run --project outfit_planner_back/tests/OutfitPlanner.Api.Tests/OutfitPlanner.Api.Tests.csproj
+
+      - name: Backend build
+        run: dotnet build outfit_planner_back/src/OutfitPlanner.Api/OutfitPlanner.Api.csproj
+
+      - name: Frontend install
+        working-directory: outfit_planner_front
+        run: npm ci
+
+      - name: Frontend tests (pretest regenerates the OpenAPI client)
+        working-directory: outfit_planner_front
+        run: npm test
+
+      - name: Frontend build (prebuild regenerates the OpenAPI client)
+        working-directory: outfit_planner_front
+        run: npm run build
+
+  e2e:
+    name: Playwright e2e (optional, non-blocking)
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    # Optional per PLAN_TO_100: report failures without blocking the pipeline.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: outfit_planner_front/package-lock.json
+
+      - name: Frontend install
+        working-directory: outfit_planner_front
+        run: npm ci
+
+      - name: Install Playwright chromium
+        working-directory: outfit_planner_front
+        run: npx playwright install --with-deps chromium
+
+      - name: Start API (in-memory store, plain http)
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          ASPNETCORE_URLS: http://127.0.0.1:5001
+        run: |
+          dotnet run --project outfit_planner_back/src/OutfitPlanner.Api/OutfitPlanner.Api.csproj \
+            --no-launch-profile > api.log 2>&1 &
+          echo $! > api.pid
+          for i in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5001/api/health > /dev/null 2>&1; then
+              echo "API is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become healthy"; tail -50 api.log; exit 1
+
+      - name: Start Vite dev server (http)
+        working-directory: outfit_planner_front
+        env:
+          VITE_DEV_API_TARGET: http://127.0.0.1:5001
+        run: |
+          npm run dev:http > vite.log 2>&1 &
+          echo $! > vite.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:5173/ > /dev/null 2>&1; then
+              echo "Vite is up"; exit 0
+            fi
+            sleep 2
+          done
+          echo "Vite did not come up"; tail -50 vite.log; exit 1
+
+      - name: Run e2e
+        working-directory: outfit_planner_front
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
+        run: npm run test:e2e
+
+      - name: Server logs on failure
+        if: failure()
+        run: |
+          echo "--- api.log"; tail -100 api.log || true
+          echo "--- vite.log"; tail -100 outfit_planner_front/vite.log || true

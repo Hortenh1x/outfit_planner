@@ -6,7 +6,10 @@ services:
       POSTGRES_USER: outfit
       POSTGRES_PASSWORD: outfit
     ports:
-      - "5433:5432"
+      # Host port is intentionally non-default (15433, not 5433) so this stack
+      # never collides with other local projects publishing 5432/5433. Inside
+      # the compose network the API still reaches Postgres on postgres:5432.
+      - "15433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./outfit_planner_back/database/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
@@ -31,15 +34,41 @@ services:
   redis:
     image: redis:8-alpine
     ports:
-      - "6379:6379"
+      # Host port is intentionally non-default (16379, not 6379) to avoid
+      # colliding with other local projects. The API uses redis:6379 inside
+      # the compose network regardless of this host mapping.
+      - "16379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   api:
     image: mcr.microsoft.com/dotnet/sdk:10.0
-    command: dotnet watch --project src/OutfitPlanner.Api/OutfitPlanner.Api.csproj run --no-launch-profile --urls https://0.0.0.0:8081
+    # Wait until postgres and redis are actually reachable before launching the
+    # app. dotnet watch does NOT relaunch the app after a startup crash (it just
+    # waits for a file change), so a dependency race would otherwise leave the
+    # container "Up" but the API dead. Looping here also auto-heals once the
+    # dependencies come back, with no manual `docker compose restart api`.
+    command: >
+      bash -c "until (exec 3<>/dev/tcp/postgres/5432) 2>/dev/null; do echo 'waiting for postgres:5432...'; sleep 1; done;
+      until (exec 3<>/dev/tcp/redis/6379) 2>/dev/null; do echo 'waiting for redis:6379...'; sleep 1; done;
+      echo 'postgres and redis reachable - starting API';
+      exec dotnet watch --project src/OutfitPlanner.Api/OutfitPlanner.Api.csproj run --no-launch-profile --urls https://0.0.0.0:8081"
     working_dir: /src
     restart: unless-stopped
+    # Report real serving state in `docker compose ps` (previously the container
+    # showed "Up" while the API process had crashed). start_period covers the
+    # first restore/build.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsk https://localhost:8081/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ASPNETCORE_URLS: https://+:8081
@@ -62,7 +91,7 @@ services:
       minio:
         condition: service_started
       redis:
-        condition: service_started
+        condition: service_healthy
 
   frontend:
     image: node:24-alpine
