@@ -12,7 +12,9 @@ create table if not exists users (
     avatar_url text,
     avatar_object_key text,
     gender text check (gender is null or gender in ('Male', 'Female')),
-    role text not null default 'Free' check (role in ('Free', 'Premium', 'Admin'))
+    role text not null default 'Free' check (role in ('Free', 'Premium', 'Admin')),
+    terms_accepted_at timestamptz,
+    terms_version text
 );
 
 alter table users add column if not exists email text;
@@ -26,6 +28,8 @@ alter table users add column if not exists avatar_url text;
 alter table users add column if not exists avatar_object_key text;
 alter table users add column if not exists gender text;
 alter table users add column if not exists role text not null default 'Free';
+alter table users add column if not exists terms_accepted_at timestamptz;
+alter table users add column if not exists terms_version text;
 
 do $$
 begin

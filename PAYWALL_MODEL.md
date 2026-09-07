@@ -149,7 +149,9 @@ ledger meters consumption.
 ## Billing integration (implemented, Stripe)
 
 1. Stripe Checkout for the subscription (`POST /api/billing/checkout`, effective-Free
-   accounts only) and top-up packs (`POST /api/billing/topup`, effective-Premium only);
+   accounts only) and top-up packs (`POST /api/billing/topup`, any effective non-admin
+   plan — opened to Free on 2026-08-26; admins are rejected as their credits are
+   unlimited);
    the customer portal (`POST /api/billing/portal`) for self-service cancel/upgrade. No
    card data ever touches the API. `GET /api/billing` reports enablement, the current
    subscription, and the offered packs.
@@ -199,7 +201,10 @@ ledger meters consumption.
    /api/admin/users/{id}/credits`)*
 4. **Billing** — Stripe subscription/top-ups + webhook role transitions. *(shipped to
    key-insertion readiness: migration 013, `BillingService`, `StripeBillingProvider`,
-   `/upgrade` flow; awaiting Stripe credentials + real prices)*
+   `/upgrade` flow; config transport wired 2026-08-25 — `STRIPE_*` names in `.env.example`
+   flow into both compose stacks and the bare-run dotenv aliases, see
+   `docs/superpowers/plans/2026-08-25-stripe-payments-activation.md`; awaiting Stripe
+   credentials + real prices)*
 5. **Tighten Free caps** — the caps are enforced (garments/outfits/body photos) with the
    placeholder numbers; revisit the numbers and grandfathering before charging money.
    *(enforcement shipped, numbers provisional)*

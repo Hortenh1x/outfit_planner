@@ -1,5 +1,8 @@
-const CACHE_NAME = 'outfit-planner-shell-v1';
-const SHELL_ASSETS = ['/', '/builder', '/offline.html', '/manifest.webmanifest', '/icons/outfit-icon.svg'];
+// v2: navigations are network-first. v1 precached '/' and '/builder' and served them
+// cache-first forever, so visitors kept a frozen index.html and saw a white page
+// whenever its JS entry could no longer load. Never precache routed HTML here.
+const CACHE_NAME = 'outfit-planner-shell-v2';
+const SHELL_ASSETS = ['/offline.html', '/manifest.webmanifest', '/icons/outfit-icon.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -10,11 +13,16 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) => Promise.all(
-      keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
-    ))
+    caches.keys()
+      .then((keys) => Promise.all(
+        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+      ))
+      .then(() => self.clients.claim())
+      // One-time refresh per SW update: windows opened against the stale v1
+      // cache-first shell (possibly a white page) reload onto fresh HTML.
+      .then(() => self.clients.matchAll({ type: 'window' }))
+      .then((clients) => Promise.all(clients.map((client) => client.navigate(client.url).catch(() => null))))
   );
-  self.clients.claim();
 });
 
 self.addEventListener('fetch', (event) => {
@@ -27,13 +35,23 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(
-    caches.match(event.request).then((cached) => cached ?? fetch(event.request).catch(() => {
-      if (event.request.mode === 'navigate') {
-        return caches.match('/offline.html');
-      }
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy)).catch(() => null);
+          }
 
-      return Response.error();
-    }))
+          return response;
+        })
+        .catch(async () => (await caches.match(event.request)) ?? (await caches.match('/offline.html')) ?? Response.error())
+    );
+    return;
+  }
+
+  event.respondWith(
+    caches.match(event.request).then((cached) => cached ?? fetch(event.request).catch(() => Response.error()))
   );
 });

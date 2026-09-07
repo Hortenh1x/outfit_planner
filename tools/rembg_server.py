@@ -22,7 +22,9 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default="7000")
     parser.add_argument("--log-level", default="info")
-    parser.add_argument("--model", default="birefnet-general-lite")
+    # u2netp = lightest rembg model (~5MB weights, minimal CPU/RAM); pass
+    # --model birefnet-general-lite (or birefnet-general) when quality matters more.
+    parser.add_argument("--model", default="u2netp")
     parser.add_argument("--no-prewarm", action="store_true", help="Do not prewarm the rembg model.")
     parser.add_argument("--ui", action="store_true", help="Enable rembg's Gradio UI.")
     args, passthrough = parser.parse_known_args()

@@ -120,6 +120,13 @@ public sealed record ShareLink(
     DateTimeOffset CreatedAt,
     DateTimeOffset? RevokedAt);
 
+// Current Terms of Use / Privacy Policy version. Bump when the documents change
+// materially; acceptance stamps carry the version that was accepted.
+public static class TermsOfService
+{
+    public const string CurrentVersion = "2026-08-26";
+}
+
 public sealed record UserAccount(
     string Id,
     string? Email,
@@ -138,6 +145,9 @@ public sealed record UserAccount(
     // Stored role. Pinned accounts (see the Application role-pinning policy) may override this
     // at read time; always resolve the effective role through the policy, not this field alone.
     public UserRole Role { get; init; } = UserRole.Free;
+    // Provable consent: when (and which version of) the Terms/Privacy documents were accepted.
+    public DateTimeOffset? TermsAcceptedAt { get; init; }
+    public string? TermsVersion { get; init; }
 }
 
 public sealed record AuthEmailVerificationToken(

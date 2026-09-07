@@ -723,8 +723,8 @@ public sealed class PostgresOutfitStore :
     public void AddUser(UserAccount user)
     {
         using var command = _dataSource.CreateCommand("""
-            insert into users (id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender, role)
-            values (@id, @email, @normalized_email, @display_name, @password_hash, @created_at, @updated_at, @last_login_at, @email_verified_at, @two_factor_enabled, @avatar_url, @avatar_object_key, @gender, @role)
+            insert into users (id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender, role, terms_accepted_at, terms_version)
+            values (@id, @email, @normalized_email, @display_name, @password_hash, @created_at, @updated_at, @last_login_at, @email_verified_at, @two_factor_enabled, @avatar_url, @avatar_object_key, @gender, @role, @terms_accepted_at, @terms_version)
             """);
         AddUserParameters(command, user);
         command.ExecuteNonQuery();
@@ -745,7 +745,9 @@ public sealed class PostgresOutfitStore :
                 avatar_url = @avatar_url,
                 avatar_object_key = @avatar_object_key,
                 gender = @gender,
-                role = @role
+                role = @role,
+                terms_accepted_at = @terms_accepted_at,
+                terms_version = @terms_version
             where id = @id
             """);
         AddUserParameters(command, user);
@@ -755,7 +757,7 @@ public sealed class PostgresOutfitStore :
     public UserAccount? GetUserById(string userId)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender, role
+            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender, role, terms_accepted_at, terms_version
             from users
             where id = @id
             """);
@@ -768,7 +770,7 @@ public sealed class PostgresOutfitStore :
     public UserAccount? GetUserByNormalizedEmail(string normalizedEmail)
     {
         using var command = _dataSource.CreateCommand("""
-            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender, role
+            select id, email, normalized_email, display_name, password_hash, created_at, updated_at, last_login_at, email_verified_at, two_factor_enabled, avatar_url, avatar_object_key, gender, role, terms_accepted_at, terms_version
             from users
             where normalized_email = @normalized_email
             """);
@@ -780,7 +782,7 @@ public sealed class PostgresOutfitStore :
 
     // Per-user data counts ride along as subselects so one round-trip serves the admin list.
     private const string AdminUserRecordColumns = """
-        u.id, u.email, u.normalized_email, u.display_name, u.password_hash, u.created_at, u.updated_at, u.last_login_at, u.email_verified_at, u.two_factor_enabled, u.avatar_url, u.avatar_object_key, u.gender, u.role,
+        u.id, u.email, u.normalized_email, u.display_name, u.password_hash, u.created_at, u.updated_at, u.last_login_at, u.email_verified_at, u.two_factor_enabled, u.avatar_url, u.avatar_object_key, u.gender, u.role, u.terms_accepted_at, u.terms_version,
             (select count(*) from garment_items g where g.user_id = u.id) as garment_count,
             (select count(*) from outfits o where o.user_id = u.id) as outfit_count,
             (select count(*) from try_on_jobs t where t.user_id = u.id) as try_on_job_count,
@@ -887,13 +889,13 @@ public sealed class PostgresOutfitStore :
     {
         return new AdminUserRecord(
             ReadUser(reader),
-            Convert.ToInt32(reader.GetInt64(14)),
-            Convert.ToInt32(reader.GetInt64(15)),
             Convert.ToInt32(reader.GetInt64(16)),
             Convert.ToInt32(reader.GetInt64(17)),
             Convert.ToInt32(reader.GetInt64(18)),
-            reader.IsDBNull(19) ? null : reader.GetString(19),
-            reader.IsDBNull(20) ? null : reader.GetFieldValue<DateTimeOffset>(20));
+            Convert.ToInt32(reader.GetInt64(19)),
+            Convert.ToInt32(reader.GetInt64(20)),
+            reader.IsDBNull(21) ? null : reader.GetString(21),
+            reader.IsDBNull(22) ? null : reader.GetFieldValue<DateTimeOffset>(22));
     }
 
     public void AddCreditEntry(CreditLedgerEntry entry)
@@ -1526,6 +1528,8 @@ public sealed class PostgresOutfitStore :
         command.Parameters.AddWithValue("avatar_object_key", DbValue(user.AvatarObjectKey));
         command.Parameters.AddWithValue("gender", DbValue(user.Gender?.ToString()));
         command.Parameters.AddWithValue("role", user.Role.ToString());
+        command.Parameters.AddWithValue("terms_accepted_at", DbValue(user.TermsAcceptedAt));
+        command.Parameters.AddWithValue("terms_version", DbValue(user.TermsVersion));
     }
 
     private static void AddExternalLoginParameters(NpgsqlCommand command, ExternalAuthLogin login)
@@ -1555,7 +1559,9 @@ public sealed class PostgresOutfitStore :
             AvatarUrl = reader.IsDBNull(10) ? null : reader.GetString(10),
             AvatarObjectKey = reader.IsDBNull(11) ? null : reader.GetString(11),
             Gender = reader.IsDBNull(12) ? null : Enum.Parse<UserGender>(reader.GetString(12)),
-            Role = reader.IsDBNull(13) ? UserRole.Free : Enum.Parse<UserRole>(reader.GetString(13))
+            Role = reader.IsDBNull(13) ? UserRole.Free : Enum.Parse<UserRole>(reader.GetString(13)),
+            TermsAcceptedAt = reader.IsDBNull(14) ? null : reader.GetFieldValue<DateTimeOffset>(14),
+            TermsVersion = reader.IsDBNull(15) ? null : reader.GetString(15)
         };
     }
 

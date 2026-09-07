@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { Pencil, X } from 'lucide-react';
 import { ComposedOutfitFigure, composedPiecesFromOutfitItems } from '../outfits/ComposedOutfitFigure';
 import type { Outfit } from '../../types';
+import { AiGeneratedBadge } from '../../shared/ui/AiGeneratedBadge';
 
 interface OutfitPreviewDialogProps {
   outfit: Outfit;
@@ -47,7 +48,10 @@ export function OutfitPreviewDialog({ outfit, onClose, onOpenInBuilder }: Outfit
         </button>
         <div className="outfit-preview-stage">
           {outfit.personPreviewUrl ? (
-            <img className="outfit-preview-image" src={outfit.personPreviewUrl} alt={`${outfit.name} try-on preview`} />
+            <>
+              <img className="outfit-preview-image" src={outfit.personPreviewUrl} alt={`${outfit.name} try-on preview`} />
+              <AiGeneratedBadge />
+            </>
           ) : (
             <ComposedOutfitFigure
               gender={outfit.silhouetteGender ?? 'Female'}

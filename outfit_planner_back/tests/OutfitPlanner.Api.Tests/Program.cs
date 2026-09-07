@@ -42,6 +42,7 @@ var tests = new List<(string Name, Action Test)>
     ("postgres schema contains production auth tables and indexes", TestPostgresSchemaContainsAuthTables),
     ("postgres schema contains user account profile fields", TestPostgresSchemaContainsUserAccountProfileFields),
     ("auth service registers email users with hashed passwords and sessions", TestAuthServiceRegistersEmailUsers),
+    ("auth service requires and stamps terms acceptance", TestAuthServiceRequiresAndStampsTermsAcceptance),
     ("auth service updates username avatar and gender profile fields", TestAuthServiceUpdatesAccountProfile),
     ("auth service requires password length digit and letter only", TestAuthServicePasswordPolicy),
     ("auth service rejects duplicate email registration", TestAuthServiceRejectsDuplicateEmailRegistration),
@@ -676,12 +677,43 @@ static void TestPostgresSchemaContainsUserAccountProfileFields()
     var schemaPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "schema.sql"));
     var schema = File.ReadAllText(schemaPath);
 
-    foreach (var field in new[] { "avatar_url", "avatar_object_key", "gender" })
+    foreach (var field in new[] { "avatar_url", "avatar_object_key", "gender", "terms_accepted_at", "terms_version" })
     {
         AssertTrue(schema.Contains(field, StringComparison.OrdinalIgnoreCase), $"users table should store {field}.");
     }
 
     AssertTrue(schema.Contains("gender in ('Male', 'Female')", StringComparison.OrdinalIgnoreCase), "schema should constrain gender to male or female.");
+}
+
+static void TestAuthServiceRequiresAndStampsTermsAcceptance()
+{
+    var store = new InMemoryOutfitStore();
+    var auth = new AuthService(store, new TestPasswordHasher(), new TestAuthTokenService(), new SystemClock(), TestRolePinning());
+
+    AssertThrows<InvalidOperationException>(
+        () => auth.RegisterWithPassword("consent@example.com", "abc12345", "abc12345", termsAccepted: false),
+        "registration without accepting the terms must be rejected");
+
+    var registered = store.GetUserById(auth.RegisterWithPassword("consent@example.com", "abc12345", "abc12345", termsAccepted: true).User.Id)
+        ?? throw new InvalidOperationException("Registered account was not stored.");
+    AssertTrue(registered.TermsAcceptedAt is not null, "registration should stamp the consent time.");
+    AssertEqual(TermsOfService.CurrentVersion, registered.TermsVersion ?? "", "registration should stamp the current terms version.");
+
+    // Legacy account without a stamp accepts on its next password sign-in (the sign-in
+    // surfaces carry the "By signing in you agree…" notice).
+    var legacy = registered with
+    {
+        Id = "usr_legacy_consent",
+        Email = "legacy-consent@example.com",
+        NormalizedEmail = "legacy-consent@example.com",
+        TermsAcceptedAt = null,
+        TermsVersion = null
+    };
+    store.AddUser(legacy);
+    var signedIn = store.GetUserById(auth.SignInWithPassword("legacy-consent@example.com", "abc12345").User.Id)
+        ?? throw new InvalidOperationException("Legacy account was not stored.");
+    AssertTrue(signedIn.TermsAcceptedAt is not null && signedIn.TermsVersion == TermsOfService.CurrentVersion,
+        "password sign-in should stamp missing consent for legacy accounts.");
 }
 
 static void TestAuthServiceRegistersEmailUsers()
@@ -1106,11 +1138,13 @@ static void TestBillingServiceGatesCheckoutAndPortal()
         () => billing.StartSubscriptionCheckoutAsync(admin.Id, CancellationToken.None).GetAwaiter().GetResult(),
         "admin accounts are not sellable");
 
-    AssertThrows<InvalidOperationException>(
-        () => billing.StartTopUpCheckoutAsync(free.Id, "pack-20", CancellationToken.None).GetAwaiter().GetResult(),
-        "top-ups are a premium feature");
+    AssertEqual("https://billing.example/topup/pack-20", billing.StartTopUpCheckoutAsync(free.Id, "pack-20", CancellationToken.None).GetAwaiter().GetResult(),
+        "free accounts should get a top-up checkout url (top-ups are open to every non-admin plan).");
     AssertEqual("https://billing.example/topup/pack-20", billing.StartTopUpCheckoutAsync(premium.Id, "pack-20", CancellationToken.None).GetAwaiter().GetResult(),
         "premium accounts should get a top-up checkout url.");
+    AssertThrows<InvalidOperationException>(
+        () => billing.StartTopUpCheckoutAsync(admin.Id, "pack-20", CancellationToken.None).GetAwaiter().GetResult(),
+        "admin accounts have unlimited credits and cannot buy top-ups");
     AssertThrows<InvalidOperationException>(
         () => billing.StartTopUpCheckoutAsync(premium.Id, "missing", CancellationToken.None).GetAwaiter().GetResult(),
         "unknown packs must be rejected");

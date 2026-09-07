@@ -1,0 +1,71 @@
+# Oracle-instance override for the production stack: keeps the demo behaviour of the
+# selfhost deployment (FASHN try-on + rembg background removal) on top of the built
+# production images. Usage on the server:
+#   docker compose -f docker-compose.yml -f docker-compose.oracle.yml up -d --build
+# Secrets ride the repo-root .env exactly like the other stacks.
+services:
+  # minio/minio:latest ships no linux/arm64 manifest and the production stack uses the
+  # Local object-storage provider anyway — park the service behind an unused profile.
+  minio:
+    profiles: ["disabled-on-arm"]
+
+  rembg:
+    # danielgatis/rembg:latest has no arm64 manifest — build our own (see the Dockerfile).
+    image: outfit-planner-rembg:local
+    build:
+      context: ./tools
+      dockerfile: rembg.Dockerfile
+    command:
+      - s
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7000"
+      - --log_level
+      - info
+      - --no-ui
+    volumes:
+      - rembg_models:/root/.u2net
+    restart: unless-stopped
+
+  api:
+    environment:
+      TryOn__Provider: Fashn
+      Fashn__ApiKey: ${FASHN_API_KEY:-}
+      Fashn__BaseUrl: ${FASHN_BASE_URL:-}
+      Fashn__ModelName: ${FASHN_MODEL_NAME:-}
+      Fashn__Mode: ${FASHN_MODE:-}
+      Fashn__MaxPollingAttempts: "90"
+      Fashn__PollIntervalSeconds: "2"
+      Fashn__TimeoutSeconds: "180"
+      Fashn__NumSamples: ${FASHN_NUM_SAMPLES:-}
+      Fashn__OutputFormat: ${FASHN_OUTPUT_FORMAT:-}
+      Fashn__ReturnBase64: ${FASHN_RETURN_BASE64:-}
+      Fashn__SegmentationFree: ${FASHN_SEGMENTATION_FREE:-}
+      Fashn__GarmentPhotoType: ${FASHN_GARMENT_PHOTO_TYPE:-}
+      Fashn__Seed: ${FASHN_SEED:-}
+      Fashn__Resolution: ${FASHN_RESOLUTION:-}
+      Fashn__GenderPromptTemplate: ${FASHN_GENDER_PROMPT_TEMPLATE:-}
+
+      Authentication__Google__ClientId: ${GOOGLE_CLIENT_ID:-}
+      Authentication__Google__ClientSecret: ${GOOGLE_CLIENT_SECRET:-}
+      Authentication__Apple__ClientId: ${APPLE_CLIENT_ID:-}
+      Authentication__Apple__ClientSecret: ${APPLE_CLIENT_SECRET:-}
+
+      # u2netp: lightest rembg model (~5MB weights) — right-sized for a shared instance.
+      BackgroundRemoval__Provider: RembgServer
+      BackgroundRemoval__RembgServer__Endpoint: http://rembg:7000/api/remove
+      BackgroundRemoval__RembgServer__ImageFieldName: file
+      BackgroundRemoval__RembgServer__ModelName: u2netp
+      BackgroundRemoval__RembgServer__TimeoutSeconds: "60"
+    # !reset drops the base file's minio dependency (the service is profiled out here).
+    depends_on: !reset
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      rembg:
+        condition: service_started
+
+volumes:
+  rembg_models:

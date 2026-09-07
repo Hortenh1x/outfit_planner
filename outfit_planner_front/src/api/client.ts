@@ -232,7 +232,12 @@ export function getAuthProviders(): Promise<AuthProvider[]> {
   return request<AuthProvider[]>('/auth/providers');
 }
 
-export function register(input: { email: string; password: string; repeatPassword: string }): Promise<AuthSession> {
+export function register(input: {
+  email: string;
+  password: string;
+  repeatPassword: string;
+  termsAccepted: boolean;
+}): Promise<AuthSession> {
   return request<AuthSession>('/auth/register', {
     method: 'POST',
     body: JSON.stringify(input)

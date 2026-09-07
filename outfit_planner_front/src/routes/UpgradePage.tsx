@@ -20,7 +20,6 @@ const PREMIUM_FEATURES = [
   'All AI try-on modes, including sequential outfits',
   'Up to 4k try-on output resolution',
   '100 AI credits every month (unused credits roll over)',
-  'Credit top-up packs',
   'Priority position in the try-on queue'
 ];
 
@@ -147,7 +146,7 @@ export function UpgradePage() {
 
           <aside className="upgrade-topups" aria-label="Credit top-ups">
             <h3>Credit top-ups</h3>
-            {billing?.enabled && role === 'Premium' && billing.topUpPacks.length > 0 ? (
+            {billing?.enabled && role !== 'Admin' && billing.topUpPacks.length > 0 ? (
               billing.topUpPacks.map((pack) => (
                 <div className="upgrade-pack-row" key={pack.id}>
                   <span className="upgrade-pack-credits">
@@ -167,9 +166,9 @@ export function UpgradePage() {
               ))
             ) : (
               <p className="upgrade-topups-hint">
-                {role === 'Premium'
-                  ? 'No top-up packs are configured yet.'
-                  : 'One-off credit packs that never expire are part of the Premium plan.'}
+                {role === 'Admin'
+                  ? 'Admin accounts have unlimited AI credits.'
+                  : 'No top-up packs are configured yet.'}
               </p>
             )}
           </aside>

@@ -3,6 +3,7 @@ import { Eye } from 'lucide-react';
 import { ComposedOutfitFigure, composedPiecesFromOutfitItems } from '../outfits/ComposedOutfitFigure';
 import { OutfitPreviewDialog } from './OutfitPreviewDialog';
 import type { Outfit } from '../../types';
+import { AiGeneratedBadge } from '../../shared/ui/AiGeneratedBadge';
 
 // Saved-outfit cards show the generated try-on preview when the outfit has one, otherwise the same
 // composed figure as the Builder canvas (read-only, just smaller). Clicking a card enlarges it in a
@@ -32,6 +33,7 @@ export function OutfitList({ outfits, onPick }: { outfits: Outfit[]; onPick: (ou
               {outfit.personPreviewUrl ? (
                 <span className="saved-outfit-card-preview">
                   <img src={outfit.personPreviewUrl} alt="" />
+                  <AiGeneratedBadge />
                 </span>
               ) : (
                 <ComposedOutfitFigure

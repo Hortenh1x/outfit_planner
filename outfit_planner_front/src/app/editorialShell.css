@@ -695,3 +695,147 @@ button.editorial-nav-button:active,
     gap: 5px;
   }
 }
+
+.demo-notice {
+  align-items: center;
+  background: var(--editorial-panel);
+  border: 1px solid var(--editorial-hairline-strong);
+  border-radius: 14px;
+  box-shadow: 0 14px 34px rgba(26, 22, 20, 0.18);
+  color: var(--editorial-ink);
+  display: flex;
+  gap: 8px;
+  left: 50%;
+  max-width: min(680px, calc(100vw - 32px));
+  padding: 10px 10px 10px 16px;
+  position: fixed;
+  top: 14px;
+  transform: translateX(-50%);
+  z-index: 90;
+}
+
+.demo-notice-text {
+  font-size: 0.9rem;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.demo-notice .icon-button {
+  flex-shrink: 0;
+}
+
+.demo-notice-popover {
+  background: var(--editorial-panel);
+  border: 1px solid var(--editorial-hairline-strong);
+  border-radius: 12px;
+  box-shadow: 0 14px 34px rgba(26, 22, 20, 0.18);
+  color: var(--editorial-muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  padding: 12px 14px;
+  position: absolute;
+  right: 8px;
+  top: calc(100% + 8px);
+  width: min(380px, calc(100vw - 48px));
+  z-index: 91;
+}
+
+@media (max-width: 640px) {
+  .demo-notice {
+    top: 10px;
+  }
+}
+
+.account-legal-link {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.legal-view {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-width: 760px;
+}
+
+.legal-section {
+  background: var(--editorial-panel);
+  border: 1px solid var(--editorial-hairline);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.legal-section h2 {
+  font-family: var(--editorial-display);
+  font-size: 1.25rem;
+  font-weight: 400;
+  margin: 0 0 8px;
+}
+
+.legal-section p,
+.legal-section li {
+  color: var(--editorial-muted);
+  font-size: 0.92rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.legal-section ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.legal-section a {
+  color: var(--editorial-accent-strong);
+}
+
+.person-preview,
+.saved-outfit-card-preview,
+.outfit-preview-stage {
+  position: relative;
+}
+
+/* EU AI Act Art 50(4): visible disclosure on AI-manipulated imagery of real people. */
+.ai-generated-badge {
+  background: rgba(26, 22, 20, 0.72);
+  border-radius: 999px;
+  bottom: 8px;
+  color: #ffffff;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
+  pointer-events: none;
+  position: absolute;
+  right: 8px;
+  z-index: 5;
+}
+
+.auth-terms-checkbox {
+  align-items: flex-start;
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  font-size: 0.86rem;
+}
+
+.auth-terms-checkbox input {
+  margin-top: 2px;
+}
+
+.auth-terms-notice {
+  color: var(--editorial-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  margin: 10px 0 0;
+}
+
+.auth-terms-checkbox a,
+.auth-terms-notice a {
+  color: var(--editorial-accent-strong);
+}

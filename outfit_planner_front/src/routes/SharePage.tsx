@@ -4,6 +4,7 @@ import { ApiError, getSharedOutfit } from '../api/client';
 import { ComposedOutfitFigure, composedPiecesFromOutfitItems, defaultFigureWidth } from '../features/outfits/ComposedOutfitFigure';
 import { EmptyPreview } from '../shared/ui/EmptyPreview';
 import { PageHeader } from '../shared/ui/PageHeader';
+import { AiGeneratedBadge } from '../shared/ui/AiGeneratedBadge';
 
 export function SharePage() {
   const { token } = useParams();
@@ -71,6 +72,7 @@ export function SharePage() {
         {outfit.personPreviewUrl ? (
           <div className="person-preview">
             <img src={outfit.personPreviewUrl} alt={`${outfit.name} try-on preview`} />
+            <AiGeneratedBadge />
           </div>
         ) : null}
       </div>

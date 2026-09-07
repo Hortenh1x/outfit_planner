@@ -535,7 +535,7 @@ api.MapPost("/auth/register", (RegisterRequest request, AuthService auth, IStore
 {
     try
     {
-        var result = auth.RegisterWithPassword(request.Email, request.Password, request.RepeatPassword);
+        var result = auth.RegisterWithPassword(request.Email, request.Password, request.RepeatPassword, request.TermsAccepted);
         IssueAuthCookies(context, result, app.Environment);
         return Results.Ok(ToAuthSessionResponse(result, photoUrls, context.Request));
     }
@@ -2532,7 +2532,21 @@ static void LoadDotEnvConfigurationAliases(ConfigurationManager configuration, s
         ("FASHN_GARMENT_PHOTO_TYPE", "Fashn:GarmentPhotoType"),
         ("FASHN_SEED", "Fashn:Seed"),
         ("FASHN_RESOLUTION", "Fashn:Resolution"),
-        ("FASHN_GENDER_PROMPT_TEMPLATE", "Fashn:GenderPromptTemplate")
+        ("FASHN_GENDER_PROMPT_TEMPLATE", "Fashn:GenderPromptTemplate"),
+        // Stage-4 billing: same .env convention as FASHN so bare `dotnet run` picks the
+        // keys up without an appsettings.json. Pack indexes 0/1/2 match the
+        // pack-20/pack-50/pack-100 defaults (appsettings.example.json and compose).
+        ("BILLING_PROVIDER", "Billing:Provider"),
+        ("STRIPE_SECRET_KEY", "Stripe:SecretKey"),
+        ("STRIPE_WEBHOOK_SECRET", "Stripe:WebhookSecret"),
+        ("STRIPE_PREMIUM_MONTHLY_PRICE_ID", "Stripe:PremiumMonthlyPriceId"),
+        ("STRIPE_PREMIUM_MONTHLY_DISPLAY_PRICE", "Stripe:PremiumMonthlyDisplayPrice"),
+        ("STRIPE_TOPUP_PACK_20_PRICE_ID", "Stripe:TopUpPacks:0:PriceId"),
+        ("STRIPE_TOPUP_PACK_20_DISPLAY_PRICE", "Stripe:TopUpPacks:0:DisplayPrice"),
+        ("STRIPE_TOPUP_PACK_50_PRICE_ID", "Stripe:TopUpPacks:1:PriceId"),
+        ("STRIPE_TOPUP_PACK_50_DISPLAY_PRICE", "Stripe:TopUpPacks:1:DisplayPrice"),
+        ("STRIPE_TOPUP_PACK_100_PRICE_ID", "Stripe:TopUpPacks:2:PriceId"),
+        ("STRIPE_TOPUP_PACK_100_DISPLAY_PRICE", "Stripe:TopUpPacks:2:DisplayPrice")
     };
 
     var mappedValues = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);

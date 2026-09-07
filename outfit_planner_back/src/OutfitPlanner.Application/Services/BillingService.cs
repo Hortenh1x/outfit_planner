@@ -107,12 +107,11 @@ public sealed class BillingService
     {
         RequireEnabled();
         var user = RequireUser(userId);
-        switch (_rolePinning.EffectiveRole(user))
+        // Top-up packs are open to Free and Premium alike (2026-08-26); only Admin is
+        // excluded because admin credits are unlimited and a purchase would be meaningless.
+        if (_rolePinning.EffectiveRole(user) == UserRole.Admin)
         {
-            case UserRole.Admin:
-                throw new ValidationException("Admin accounts have unlimited credits.");
-            case UserRole.Free:
-                throw new ValidationException("Credit top-ups are part of the Premium plan. Upgrade first.");
+            throw new ValidationException("Admin accounts have unlimited credits.");
         }
 
         var pack = OfferedPacks().FirstOrDefault(candidate =>

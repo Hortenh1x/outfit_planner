@@ -19,6 +19,9 @@ export function RequireAuth() {
       <section className="auth-page" role="alert">
         <div className="auth-card">
           <p>Unable to verify your session. Try again in a moment.</p>
+          <button type="button" className="primary-action" onClick={() => void sessionQuery.refetch()}>
+            Retry
+          </button>
         </div>
       </section>
     );

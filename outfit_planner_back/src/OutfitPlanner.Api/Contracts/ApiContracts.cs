@@ -175,7 +175,7 @@ public sealed record HairstylePresetResponse(
     int SortOrder,
     string AssetUrl);
 
-public sealed record RegisterRequest(string Email, string Password, string RepeatPassword);
+public sealed record RegisterRequest(string Email, string Password, string RepeatPassword, bool TermsAccepted = false);
 
 public sealed record LoginRequest(string Email, string Password);
 

@@ -26,10 +26,10 @@ export function AuthPageContent({
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [form, setForm] = useState({ email: '', password: '', repeatPassword: '' });
+  const [form, setForm] = useState({ email: '', password: '', repeatPassword: '', termsAccepted: false });
   const authMutation = useMutation({
     mutationFn: () => mode === 'register'
-      ? register({ email: form.email, password: form.password, repeatPassword: form.repeatPassword })
+      ? register({ email: form.email, password: form.password, repeatPassword: form.repeatPassword, termsAccepted: form.termsAccepted })
       : login({ email: form.email, password: form.password }),
     onSuccess: (session) => {
       queryClient.setQueryData(authSessionQueryKey, session);
@@ -93,12 +93,34 @@ export function AuthPageContent({
               />
             </label>
           ) : null}
-          <button type="submit" className="primary-action" disabled={authMutation.isPending}>
+          {mode === 'register' ? (
+            <label className="auth-terms-checkbox">
+              <input
+                type="checkbox"
+                checked={form.termsAccepted}
+                onChange={(event) => setForm({ ...form, termsAccepted: event.target.checked })}
+                required
+              />
+              <span>
+                I agree to the <Link to="/terms">Terms of Use</Link> and <Link to="/privacy">Privacy Policy</Link>
+              </span>
+            </label>
+          ) : null}
+          <button
+            type="submit"
+            className="primary-action"
+            disabled={authMutation.isPending || (mode === 'register' && !form.termsAccepted)}
+          >
             {mode === 'register' ? <UserPlus size={16} /> : <LogIn size={16} />}
             {authMutation.isPending ? 'Working' : title}
           </button>
           {authMutation.error ? <p className="error">{authMutation.error.message}</p> : null}
         </form>
+
+        <p className="auth-terms-notice">
+          By {mode === 'register' ? 'continuing with Google or Apple' : 'signing in'} you agree to the{' '}
+          <Link to="/terms">Terms of Use</Link> and <Link to="/privacy">Privacy Policy</Link>.
+        </p>
 
         <div className="external-auth-actions">
           <button

@@ -21,6 +21,8 @@ The app is intentionally small, but it has a real backend/frontend split, signed
 - Revocable server-side sessions with HttpOnly cookies, CSRF protection, rate-limited auth endpoints, email verification/password reset token storage, and session revoke-all support.
 - Free, Premium, and Admin account roles with two email-pinned accounts whose roles can never change, and an admin panel that lists, inspects, and manages all users, their data, and their AI credits.
 - An enforced paywall over AI compute ([`PAYWALL_MODEL.md`](PAYWALL_MODEL.md)): per-tier plan catalog (free caps on garments/outfits/body photos, allowed try-on modes, output resolution), an AI-credit ledger with a one-time 8-credit free trial grant (top-up-to-config for existing accounts) and a rolling monthly Premium allowance, debit-on-confirm with automatic refunds for failed jobs, no spend on cache hits, a premium-priority try-on queue, and entitlements surfaced in the Builder (credits chip, Premium mode pills, upgrade notice).
+- First-visit demo notice on every page ("This is only a demo application: AI features available on request only") with an info popover explaining that AI features run on request; dismissal persists per browser.
+- Public `/legal` page with service, data, AI-processing, and payment/credit terms, linked from an Info button under the Plan row in account settings. Credit top-up packs are purchasable by Free and Premium accounts alike.
 - Stripe billing implemented to "insert the API key" readiness: subscription checkout, credit top-up packs, the customer portal, signature-verified idempotent webhooks that mirror subscription state and switch `Free ↔ Premium` roles automatically (pinned accounts exempt), an `/upgrade` page, and read-only admin subscription visibility. Without `Stripe__SecretKey` billing reads as disabled and roles are still switched manually via the admin panel.
 - Privacy endpoints for account export/delete, body photo deletion, and AI output purging.
 - Configurable garment background removal for uploaded item cutouts, with simple local fallback, `rembg`, and HTTP/API provider adapters.
@@ -209,7 +211,7 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `ObjectStorage__S3__Bucket` / `Minio__Bucket` | `outfit-planner-private` | Private bucket for uploaded image variants. |
 | `BackgroundRemoval__Provider` | `Auto` | Use `Auto`, `Simple`, `Rembg`, `RembgServer`, `Http`, `CloudflareImages`, `PhotoRoom`, `RemoveBg`, or `Clipdrop` for garment cutout generation. `Auto` uses `rembg` when available and falls back to `Simple`; unknown values use `Simple`. |
 | `BackgroundRemoval__Rembg__ExecutablePath` | `rembg` | Local executable used when `BackgroundRemoval__Provider=Auto` or `Rembg`. |
-| `BackgroundRemoval__Rembg__ModelName` | `birefnet-general` | Local `rembg` model. Use `birefnet-general-lite` if CPU runtime is too slow. |
+| `BackgroundRemoval__Rembg__ModelName` | `birefnet-general` | Local `rembg` model. Use `birefnet-general-lite` if CPU runtime is too slow, or `u2netp` (~5MB weights) for minimal CPU/RAM — the compose stacks and `tools/rembg_server.py` default to `u2netp` since 2026-08-25. |
 | `BackgroundRemoval__Rembg__ModelHome` | empty | Optional model cache directory passed as `U2NET_HOME` for `rembg`. |
 | `BackgroundRemoval__Rembg__TimeoutSeconds` | `180` | Local `rembg` process timeout. |
 | `BackgroundRemoval__RembgServer__Endpoint` | `http://127.0.0.1:7000/api/remove` | Long-running `rembg s` remove endpoint used when `BackgroundRemoval__Provider=RembgServer`. |
@@ -460,7 +462,7 @@ Continuous integration runs the same sequence on GitHub Actions (`.github/workfl
 
 Billing is implemented to "insert the API key" readiness; this manual pass needs your Stripe TEST-mode credentials and the [Stripe CLI](https://docs.stripe.com/stripe-cli) and has not been run yet:
 
-1. In the Stripe dashboard (test mode) create the Premium monthly price and top-up pack prices, then configure the API environment: `Stripe__SecretKey=sk_test_...`, `Stripe__PremiumMonthlyPriceId`, `Stripe__TopUpPacks__0__PriceId` (and friends). Keep values in `.env` only.
+1. In the Stripe dashboard (test mode) create the Premium monthly price and top-up pack prices, then put the values into the repo-root `.env` (names from `.env.example`): `STRIPE_SECRET_KEY=sk_test_...`, `STRIPE_PREMIUM_MONTHLY_PRICE_ID`, `STRIPE_TOPUP_PACK_20_PRICE_ID`/`_50_`/`_100_`. Both compose stacks forward them into the api container, and bare `dotnet run` reads them from `.env` via the startup aliases — restart the API either way. Keep values in `.env` only.
 2. Forward webhooks at the running API and wire the signing secret it prints: `stripe listen --forward-to localhost:5001/api/billing/webhook --skip-verify`, then set `Stripe__WebhookSecret=whsec_...` and restart the API.
 3. Subscription flow: register a fresh Free account → `/upgrade` → Checkout with test card `4242 4242 4242 4242` → verify the webhook creates a `billing_subscriptions` row and flips the stored role `Free → Premium` (session user + admin panel).
 4. Top-up flow: as that Premium account buy a top-up pack → verify a `TopUp` row appears in `account_credit_ledger` for the pack's credits and the Builder credit chip grows.
@@ -476,11 +478,12 @@ Billing is implemented to "insert the API key" readiness; this manual pass needs
 - Uploaded files default to local object storage; S3-compatible MinIO can be enabled with object storage configuration.
 - PostgreSQL schema changes are applied through DbUp migrations at startup.
 - Garment categories are Top, Bottom, Dress, Outerwear, Shoes, Bag, and Accessory. Head wear is covered by global hairstyle presets (`GET /api/hairstyles`), not garments.
-- The mock try-on provider is the default, and demos intentionally run mock-only (decision 2026-08-10). The FASHN integration is live-verified end to end up to the provider call (queueing, worker, real FASHN HTTP request, failure handling, idempotent credit refund); actual renders are pending FASHN account credits — top up at app.fashn.ai, then run `SingleGarmentTryOn`/`SequentialOutfitTryOn` at `1k` and a Premium/Admin `4k` pass, and confirm cache hits skip the provider and the output lands in app-owned storage. FASHN, composite FASHN, GeneralImageEdit, Replicate, Fal, and local VTON/CatVTON providers require explicit environment configuration.
+- The mock try-on provider is the default, and demos intentionally run mock-only (decision 2026-08-25). The FASHN integration is live-verified end to end up to the provider call (queueing, worker, real FASHN HTTP request, failure handling, idempotent credit refund); actual renders are pending FASHN account credits — top up at app.fashn.ai, then run `SingleGarmentTryOn`/`SequentialOutfitTryOn` at `1k` and a Premium/Admin `4k` pass, and confirm cache hits skip the provider and the output lands in app-owned storage. FASHN, composite FASHN, GeneralImageEdit, Replicate, Fal, and local VTON/CatVTON providers require explicit environment configuration.
 - Production images never contain `appsettings.json` (or any `.env`): both Docker build contexts exclude it (`.dockerignore` at the repo root for the frontend image and in `outfit_planner_back/` for the API image), so production configuration comes from compose environment variables only. Local `appsettings.json` stays a dev-only convenience for bare `dotnet run`.
 
 ## Troubleshooting
 
+- If `/` or `/builder` render a plain white page, the visitor still runs the pre-2026-08-25 service worker, which froze those routes with a cache-first shell. Current builds unregister it automatically on the next navigation; a hard refresh (Ctrl+Shift+R) or DevTools → Application → Service Workers → Unregister clears it immediately.
 - If the frontend shows network failures, confirm the API is available at `https://localhost:5001/api/health`.
 - If running frontend dev against a non-default API port, set `VITE_DEV_API_TARGET`.
 - If PostgreSQL connection fails from local Windows development, confirm the compose database is reachable on host port `15433`, not `5432`.

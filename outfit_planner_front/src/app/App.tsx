@@ -6,7 +6,10 @@ import { AdminPage } from '../routes/AdminPage';
 import { AuthPage } from '../routes/AuthPage';
 import { BuilderPage } from '../routes/BuilderPage';
 import { CalendarPage } from '../routes/CalendarPage';
+import { LegalPage } from '../routes/LegalPage';
+import { PrivacyPage } from '../routes/PrivacyPage';
 import { SharePage } from '../routes/SharePage';
+import { TermsPage } from '../routes/TermsPage';
 import { UpgradePage } from '../routes/UpgradePage';
 import { WardrobePage } from '../routes/WardrobePage';
 
@@ -17,6 +20,9 @@ export default function App() {
         <Route path="/signin" element={<AuthPage mode="signin" />} />
         <Route path="/register" element={<AuthPage mode="register" />} />
         <Route path="/share/:token" element={<SharePage />} />
+        <Route path="/legal" element={<LegalPage />} />
+        <Route path="/terms" element={<TermsPage />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
         <Route element={<RequireAuth />}>
           <Route index element={<Navigate to="/builder" replace />} />
           <Route path="/wardrobe" element={<WardrobePage />} />
@@ -27,6 +33,8 @@ export default function App() {
             <Route path="/admin" element={<AdminPage />} />
           </Route>
         </Route>
+        {/* Unknown URLs fall through to the index redirect chain instead of rendering nothing. */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   );

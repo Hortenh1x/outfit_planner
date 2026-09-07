@@ -2,11 +2,12 @@ import { type ChangeEvent, type PointerEvent, type RefObject, useEffect, useRef,
 import { createPortal } from 'react-dom';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarDays, Camera, Check, LogOut, ShieldCheck, Shirt, Upload, UserRound, Wand2, X } from 'lucide-react';
+import { CalendarDays, Camera, Check, Info, LogOut, ShieldCheck, Shirt, Sparkles, Upload, UserRound, Wand2, X } from 'lucide-react';
 import { billingStatusQueryKey, getAuthProviders, getBillingStatus, logout, openBillingPortal, updateAccountProfile, uploadAccountAvatar, type AuthUser, type UserGender } from '../api/client';
 import { redirectToCheckout } from '../features/billing/checkoutRedirect';
 import { ThemeToggle, type ThemeMode } from '../components/ThemeToggle';
 import { authSessionQueryKey, useAuthSession } from '../features/auth/authQueries';
+import { DemoNotice } from './DemoNotice';
 import './editorialShell.css';
 
 const themeStorageKey = 'outfit-planner-theme';
@@ -40,6 +41,7 @@ export function AppShell() {
 
   return (
     <div className="editorial-shell" data-theme={theme} ref={shellRef}>
+      <DemoNotice />
       <aside className="editorial-sidebar">
         <Link to="/builder" className="editorial-brand">
           <span className="editorial-brand-mark" aria-hidden="true">
@@ -84,6 +86,10 @@ function PrimaryNavigation({ compact = false }: { compact?: boolean }) {
       <NavLink to="/calendar" className={navButtonClass}>
         <CalendarDays size={18} />
         <span>Calendar</span>
+      </NavLink>
+      <NavLink to="/upgrade" className={navButtonClass}>
+        <Sparkles size={18} />
+        <span>Premium</span>
       </NavLink>
       {isAdmin ? (
         <NavLink to="/admin" className={navButtonClass}>
@@ -255,6 +261,10 @@ function AccountPanel({
                   ) : null}
                 </div>
               </div>
+              <Link to="/legal" className="secondary-action account-legal-link" onClick={() => setIsOpen(false)}>
+                <Info size={16} />
+                <span>Info</span>
+              </Link>
               {[profileError, avatarError, logoutError, portalError].filter((message): message is string => Boolean(message)).map((message) => (
                 <p className="account-error" key={message}>{message}</p>
               ))}

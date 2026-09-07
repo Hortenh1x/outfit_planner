@@ -33,7 +33,9 @@ services:
       BackgroundRemoval__Provider: RembgServer
       BackgroundRemoval__RembgServer__Endpoint: http://rembg:7000/api/remove
       BackgroundRemoval__RembgServer__ImageFieldName: file
-      BackgroundRemoval__RembgServer__ModelName: birefnet-general-lite
+      # u2netp is the lightest rembg model (~5MB weights): minimal CPU/RAM per upload.
+      # Trade-off: rougher edges than birefnet-general-lite; bump back if quality matters.
+      BackgroundRemoval__RembgServer__ModelName: u2netp
       BackgroundRemoval__RembgServer__TimeoutSeconds: "60"
     depends_on:
       rembg:

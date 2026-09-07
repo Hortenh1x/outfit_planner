@@ -67,8 +67,9 @@ describe('UpgradePage', () => {
     expect(await screen.findByRole('button', { name: /upgrade with stripe/i })).toBeEnabled();
     expect(screen.getByText('$9/mo')).toBeInTheDocument();
     expect(screen.getByText(/unlimited wardrobe and saved outfits/i)).toBeInTheDocument();
-    // Top-up packs are a premium feature; free accounts only see the hint.
-    expect(screen.queryByRole('button', { name: /^buy$/i })).not.toBeInTheDocument();
+    // Top-up packs are open to every non-admin plan (2026-08-26), so Free sees Buy too.
+    expect(screen.getByRole('button', { name: /^buy$/i })).toBeEnabled();
+    expect(screen.getByText(/20 credits/i)).toBeInTheDocument();
   });
 
   it('shows top-up packs with buy buttons to premium accounts', async () => {

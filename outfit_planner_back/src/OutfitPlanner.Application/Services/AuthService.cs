@@ -40,10 +40,15 @@ public sealed class AuthService
         _decoyPasswordHash = new Lazy<string>(() => passwordHasher.HashPassword("timing-equalization-decoy"));
     }
 
-    public AuthResult RegisterWithPassword(string email, string password, string repeatPassword)
+    public AuthResult RegisterWithPassword(string email, string password, string repeatPassword, bool termsAccepted = true)
     {
         var normalizedEmail = NormalizeEmail(email);
         var cleanPassword = RequirePassword(password);
+
+        if (!termsAccepted)
+        {
+            throw new ValidationException("You must accept the Terms of Use and Privacy Policy.");
+        }
 
         if (cleanPassword != repeatPassword)
         {
@@ -66,7 +71,9 @@ public sealed class AuthService
             now,
             now)
         {
-            Role = _rolePinning.PinnedRole(normalizedEmail) ?? UserRole.Free
+            Role = _rolePinning.PinnedRole(normalizedEmail) ?? UserRole.Free,
+            TermsAcceptedAt = now,
+            TermsVersion = TermsOfService.CurrentVersion
         };
 
         _users.AddUser(user);
@@ -88,10 +95,19 @@ public sealed class AuthService
 
         var now = _clock.UtcNow;
         // Fold the effective role into the login write so pinned accounts converge in every
-        // store, including the file-backed one that never runs SQL migrations.
-        var updated = user with { LastLoginAt = now, UpdatedAt = now, Role = _rolePinning.EffectiveRole(user) };
+        // store, including the file-backed one that never runs SQL migrations. Legacy accounts
+        // without a consent stamp accept the current Terms on sign-in (the sign-in surfaces
+        // carry a "By signing in you agree…" notice, so the consent is informed).
+        var updated = StampTermsIfMissing(user with { LastLoginAt = now, UpdatedAt = now, Role = _rolePinning.EffectiveRole(user) }, now);
         _users.UpdateUser(updated);
         return CreateAuthResult(updated, now);
+    }
+
+    private static UserAccount StampTermsIfMissing(UserAccount user, DateTimeOffset now)
+    {
+        return user.TermsAcceptedAt is null
+            ? user with { TermsAcceptedAt = now, TermsVersion = TermsOfService.CurrentVersion }
+            : user;
     }
 
     public AuthResult SignInWithExternalAccount(ExternalSignInCommand command)
@@ -107,7 +123,7 @@ public sealed class AuthService
             var user = _users.GetUserById(existingLogin.UserId)
                 ?? throw new ValidationException("Linked account no longer exists.");
             _users.UpdateExternalLogin(existingLogin with { Email = normalizedEmail, LastLoginAt = now });
-            var updated = user with { LastLoginAt = now, UpdatedAt = now, Role = _rolePinning.EffectiveRole(user) };
+            var updated = StampTermsIfMissing(user with { LastLoginAt = now, UpdatedAt = now, Role = _rolePinning.EffectiveRole(user) }, now);
             _users.UpdateUser(updated);
             return CreateAuthResult(updated, now);
         }
@@ -123,7 +139,9 @@ public sealed class AuthService
         }
 
         _users.AddExternalLogin(new ExternalAuthLogin(provider, providerSubject, userForLogin.Id, normalizedEmail, now, now));
-        var updatedUser = userForLogin with { LastLoginAt = now, UpdatedAt = now, Role = _rolePinning.EffectiveRole(userForLogin) };
+        // The auth page shows the Terms/Privacy notice above the provider buttons, so both
+        // auto-registered and linked external accounts accept on this sign-in.
+        var updatedUser = StampTermsIfMissing(userForLogin with { LastLoginAt = now, UpdatedAt = now, Role = _rolePinning.EffectiveRole(userForLogin) }, now);
         _users.UpdateUser(updatedUser);
         return CreateAuthResult(updatedUser, now);
     }

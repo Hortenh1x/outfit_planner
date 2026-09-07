@@ -34,6 +34,7 @@ import { EmptyPreview } from '../shared/ui/EmptyPreview';
 import { PanelTitle } from '../shared/ui/PanelTitle';
 import { PanelSkeleton } from '../shared/ui/Skeletons';
 import type { GarmentCategory, GarmentItem, Outfit, PreviewMode, TryOnCostEstimate, TryOnMode } from '../types';
+import { AiGeneratedBadge } from '../shared/ui/AiGeneratedBadge';
 
 const tryOnJobPollIntervalMs = 1000;
 
@@ -452,7 +453,10 @@ export function BuilderPage() {
           ) : (
             <div className="person-preview">
               {previewUrl ? (
-                <img src={previewUrl} alt="Generated try-on preview" />
+                <>
+                  <img src={previewUrl} alt="Generated try-on preview" />
+                  <AiGeneratedBadge />
+                </>
               ) : latestTryOnJob?.status === 'Failed' ? (
                 <div className="status" role="alert">
                   <p>Try-on failed{latestTryOnJob.error ? `: ${latestTryOnJob.error}` : '.'}</p>

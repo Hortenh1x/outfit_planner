@@ -327,7 +327,7 @@ describe('api client', () => {
         headers: { 'Content-Type': 'application/json' }
       }));
 
-    await register({ email: 'ada@example.com', password: 'correct horse battery', repeatPassword: 'correct horse battery' });
+    await register({ email: 'ada@example.com', password: 'correct horse battery', repeatPassword: 'correct horse battery', termsAccepted: true });
     await login({ email: 'ada@example.com', password: 'correct horse battery' });
     await getCurrentSession();
     await logout();

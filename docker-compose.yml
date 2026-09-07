@@ -43,6 +43,27 @@ services:
       # Public origin for OAuth redirect URIs + absolute signed URLs (from .env). Empty = OAuth off.
       Authentication__PublicOrigin: ${PUBLIC_ORIGIN:-}
       PublicOrigin: ${PUBLIC_ORIGIN:-}
+      # Stage-4 billing: Stripe activates when STRIPE_SECRET_KEY is present in .env;
+      # blank values keep billing softly disabled (the app works unchanged).
+      Billing__Provider: ${BILLING_PROVIDER:-Auto}
+      Stripe__SecretKey: ${STRIPE_SECRET_KEY:-}
+      Stripe__WebhookSecret: ${STRIPE_WEBHOOK_SECRET:-}
+      Stripe__PremiumMonthlyPriceId: ${STRIPE_PREMIUM_MONTHLY_PRICE_ID:-}
+      Stripe__PremiumMonthlyDisplayPrice: ${STRIPE_PREMIUM_MONTHLY_DISPLAY_PRICE:-}
+      # Top-up pack catalog (the image ships no appsettings.json, so packs are defined
+      # here; packs without a PriceId are not offered).
+      Stripe__TopUpPacks__0__Id: pack-20
+      Stripe__TopUpPacks__0__Credits: "20"
+      Stripe__TopUpPacks__0__PriceId: ${STRIPE_TOPUP_PACK_20_PRICE_ID:-}
+      Stripe__TopUpPacks__0__DisplayPrice: ${STRIPE_TOPUP_PACK_20_DISPLAY_PRICE:-}
+      Stripe__TopUpPacks__1__Id: pack-50
+      Stripe__TopUpPacks__1__Credits: "50"
+      Stripe__TopUpPacks__1__PriceId: ${STRIPE_TOPUP_PACK_50_PRICE_ID:-}
+      Stripe__TopUpPacks__1__DisplayPrice: ${STRIPE_TOPUP_PACK_50_DISPLAY_PRICE:-}
+      Stripe__TopUpPacks__2__Id: pack-100
+      Stripe__TopUpPacks__2__Credits: "100"
+      Stripe__TopUpPacks__2__PriceId: ${STRIPE_TOPUP_PACK_100_PRICE_ID:-}
+      Stripe__TopUpPacks__2__DisplayPrice: ${STRIPE_TOPUP_PACK_100_DISPLAY_PRICE:-}
     depends_on:
       postgres:
         condition: service_healthy
