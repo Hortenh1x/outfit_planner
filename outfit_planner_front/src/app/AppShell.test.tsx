@@ -117,6 +117,10 @@ describe('AppShell editorial frame', () => {
     await waitFor(() => {
       expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/auth/logout') && init?.method === 'POST')).toBe(true);
     });
+    // The shell must react to the cleared session right away: guest navigation replaces the
+    // account card without waiting for a refetch.
+    expect(await screen.findByRole('link', { name: /^sign in$/i })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: /account settings/i })).not.toBeInTheDocument();
   });
 });
 

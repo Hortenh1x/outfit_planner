@@ -43,7 +43,10 @@ export function AuthPageContent({
     : { to: '/register', label: 'Register' };
   // Only sign-in providers this server actually has credentials for are offered; a disabled
   // "Apple" button with no explanation is worse than no button.
-  const externalProviders = providers.filter((provider) => provider.id !== 'email' && provider.configured);
+  const externalProviders = providers.filter(
+    (provider): provider is AuthProvider & { id: 'google' | 'apple' } =>
+      (provider.id === 'google' || provider.id === 'apple') && provider.configured
+  );
   const externalProviderNames = externalProviders.map((provider) => provider.label).join(' or ');
 
   return (

@@ -122,10 +122,13 @@ function AccountPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressTriggeredRef = useRef(false);
-  // Signing out drops every cached query: the next account must not glimpse this one's wardrobe.
+  // Signing out: the session query flips to null first (mounted observers react and RequireAuth
+  // redirects), then every other cached query is dropped so the next account never glimpses
+  // this one's wardrobe. queryClient.clear() would not do: observers of cleared queries keep
+  // rendering their last data.
   const forgetSession = () => {
-    queryClient.clear();
     queryClient.setQueryData(authSessionQueryKey, null);
+    queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== authSessionQueryKey[0] });
   };
   const logoutMutation = useMutation({
     mutationFn: logout,
