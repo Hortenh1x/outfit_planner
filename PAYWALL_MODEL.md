@@ -76,7 +76,7 @@ paywall needs:
 - Monthly allowance of **100 AI credits** *(placeholder)*, expiring monthly, plus one-off
   credit top-up purchases that never expire.
 - All modes: `SingleGarmentTryOn`, `SequentialOutfitTryOn`, `ExperimentalCompositeTryOn`.
-- `4k` output resolution, priority position in the try-on queue.
+- Up to 5 body reference photos (Free: 1), priority position in the try-on queue; `4k` output resolution only where the provider honours a resolution setting (FASHN `tryon-max`).
 - First in line for future premium capabilities (multi-garment detection, premium
   background removal / auto-tagging providers).
 

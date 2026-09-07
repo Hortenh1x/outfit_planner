@@ -18,7 +18,7 @@ import '../features/billing/billing.css';
 const PREMIUM_FEATURES = [
   'Unlimited wardrobe and saved outfits',
   'All AI try-on modes, including sequential outfits',
-  'Up to 4k try-on output resolution',
+  'Up to 5 body reference photos instead of one',
   '100 AI credits every month (unused credits roll over)',
   'Priority position in the try-on queue'
 ];
