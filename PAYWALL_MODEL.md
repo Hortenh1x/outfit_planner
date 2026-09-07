@@ -83,8 +83,9 @@ paywall needs:
 ### Admin (internal)
 
 - Not sellable. Bypasses caps and allowances, sees the admin panel. Pinned to
-  `dmytro.bolibok@gmail.com`; `premium.pinned@example.test` is pinned Premium and doubles as a
-  standing test account for premium behavior without billing.
+  `dmytro.bolibok@gmail.com` (the project owner). A standing Premium test account can be
+  pinned through `Roles__PinnedPremiumEmails` (configuration only; no other person's email
+  ships in the source).
 
 ## Credit economics
 

@@ -80,6 +80,12 @@ compose.local.yml
 *.log
 *.tmp
 front-clay-*.png
+# Local design/QA screenshots, database dumps and one-off import scripts never belong in the repo.
+front-*.png
+*.generated.sql
+backup_*.sql
+*.ps1
+cloudflare/*.msi
 .DS_Store
 Thumbs.db
 
