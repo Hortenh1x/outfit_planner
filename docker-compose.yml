@@ -43,6 +43,10 @@ services:
       # Public origin for OAuth redirect URIs + absolute signed URLs (from .env). Empty = OAuth off.
       Authentication__PublicOrigin: ${PUBLIC_ORIGIN:-}
       PublicOrigin: ${PUBLIC_ORIGIN:-}
+      # Garment background removal: the production default keeps the built-in keyer; set
+      # BACKGROUND_REMOVAL_PROVIDER=Fal with FAL_KEY in .env for fal.ai BRIA RMBG 2.0.
+      BackgroundRemoval__Provider: ${BACKGROUND_REMOVAL_PROVIDER:-Auto}
+      BackgroundRemoval__Fal__ApiKey: ${FAL_KEY:-}
       # Password reset emails: SMTP activates when SMTP_HOST is present in .env (STARTTLS on 587).
       Email__Provider: ${EMAIL_PROVIDER:-Auto}
       Email__Smtp__Host: ${SMTP_HOST:-}

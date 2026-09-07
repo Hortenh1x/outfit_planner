@@ -1919,6 +1919,13 @@ static IBackgroundRemovalProvider CreateBackgroundRemovalProvider(IServiceProvid
             () => IsExecutableAvailable(BackgroundRemovalSetting(configuration, "Rembg", "ExecutablePath", "rembg"))),
         "rembg" or "rembgcommand" or "rembg-command" or "rembgexecutable" or "rembg-executable" => CreateRembgBackgroundRemovalProvider(configuration),
         "rembgserver" or "rembg-server" or "rembghttp" or "rembg-http" => CreateRembgServerBackgroundRemovalProvider(provider, configuration),
+        // fal.ai-hosted BRIA RMBG 2.0; the key rides FAL_KEY in .env (BackgroundRemoval:Fal:ApiKey).
+        "fal" or "fal-ai" or "falai" or "bria" or "bria-rmbg" or "rmbg" => new FalBackgroundRemovalProvider(
+            provider.GetRequiredService<IHttpClientFactory>().CreateClient("background-removal"),
+            new FalBackgroundRemovalSettings(
+                configuration["BackgroundRemoval:Fal:Endpoint"] ?? FalBackgroundRemovalProvider.DefaultEndpoint,
+                configuration["BackgroundRemoval:Fal:ApiKey"] ?? "",
+                TimeSpan.FromSeconds(BackgroundRemovalIntSetting(configuration, "Fal", "TimeoutSeconds", 120)))),
         "http" or "api" or "cloudflare" or "cloudflareimages" or "cloudflare-images" or "photoroom" or "removebg" or "remove-bg" or "clipdrop" => new HttpBackgroundRemovalProvider(
             provider.GetRequiredService<IHttpClientFactory>().CreateClient("background-removal"),
             new HttpBackgroundRemovalSettings(
@@ -2628,6 +2635,9 @@ static void LoadDotEnvConfigurationAliases(ConfigurationManager configuration, s
         ("FASHN_SEED", "Fashn:Seed"),
         ("FASHN_RESOLUTION", "Fashn:Resolution"),
         ("FASHN_GENDER_PROMPT_TEMPLATE", "Fashn:GenderPromptTemplate"),
+        // Background removal: fal.ai BRIA RMBG 2.0 (BACKGROUND_REMOVAL_PROVIDER=Fal + FAL_KEY).
+        ("BACKGROUND_REMOVAL_PROVIDER", "BackgroundRemoval:Provider"),
+        ("FAL_KEY", "BackgroundRemoval:Fal:ApiKey"),
         // Role pins: the owner admin pin is built in; premium pins exist only in configuration.
         ("ROLES_PINNED_ADMIN_EMAILS", "Roles:PinnedAdminEmails"),
         ("ROLES_PINNED_PREMIUM_EMAILS", "Roles:PinnedPremiumEmails"),

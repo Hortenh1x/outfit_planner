@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DemoNotice } from './DemoNotice';
 
-const storageKey = 'outfit-planner-demo-notice-dismissed';
+const storageKey = 'outfit-planner-demo-notice-dismissed-v2';
 
 describe('DemoNotice', () => {
   beforeEach(() => {
@@ -19,7 +19,7 @@ describe('DemoNotice', () => {
     render(<DemoNotice />);
 
     expect(
-      screen.getByText('This is only a demo application: AI features available on request only')
+      screen.getByText('Demo: payments run in Stripe test mode, so nothing is ever charged')
     ).toBeInTheDocument();
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
@@ -27,22 +27,22 @@ describe('DemoNotice', () => {
   it('reveals the info popover on click and keeps it open on repeat clicks', async () => {
     render(<DemoNotice />);
 
-    await userEvent.click(screen.getByRole('button', { name: /why ai features are limited/i }));
+    await userEvent.click(screen.getByRole('button', { name: /about the test payment mode/i }));
 
     expect(
       screen.getByText(
-        /Due to a lack of resources AI features cannot be supported with the power they need all the time, so if you want to see how this app really operates, feel free to contact me/
+        /Premium checkout is connected to Stripe in test mode: pay with the test card 4242 4242 4242 4242, any future expiry date and any CVC, and no real money is charged/
       )
     ).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: /why ai features are limited/i }));
+    await userEvent.click(screen.getByRole('button', { name: /about the test payment mode/i }));
 
     expect(screen.getByRole('note')).toBeInTheDocument();
   });
 
   it('closes the info popover on an outside pointer press and on Escape', async () => {
     render(<DemoNotice />);
-    const infoButton = screen.getByRole('button', { name: /why ai features are limited/i });
+    const infoButton = screen.getByRole('button', { name: /about the test payment mode/i });
 
     await userEvent.click(infoButton);
     expect(screen.getByRole('note')).toBeInTheDocument();
@@ -60,7 +60,7 @@ describe('DemoNotice', () => {
   it('reveals the info popover on hover', async () => {
     render(<DemoNotice />);
 
-    await userEvent.hover(screen.getByRole('button', { name: /why ai features are limited/i }));
+    await userEvent.hover(screen.getByRole('button', { name: /about the test payment mode/i }));
 
     expect(screen.getByRole('note')).toBeInTheDocument();
   });
@@ -71,7 +71,7 @@ describe('DemoNotice', () => {
     await userEvent.click(screen.getByRole('button', { name: /dismiss demo notice/i }));
 
     expect(
-      screen.queryByText('This is only a demo application: AI features available on request only')
+      screen.queryByText('Demo: payments run in Stripe test mode, so nothing is ever charged')
     ).not.toBeInTheDocument();
     expect(localStorage.getItem(storageKey)).toBe('1');
 
@@ -79,7 +79,7 @@ describe('DemoNotice', () => {
     render(<DemoNotice />);
 
     expect(
-      screen.queryByText('This is only a demo application: AI features available on request only')
+      screen.queryByText('Demo: payments run in Stripe test mode, so nothing is ever charged')
     ).not.toBeInTheDocument();
   });
 });

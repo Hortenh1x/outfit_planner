@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.PixelFormats;
@@ -459,6 +461,141 @@ public sealed class HttpBackgroundRemovalProvider : IBackgroundRemovalProvider
     {
         var safe = Path.GetFileName(fileName);
         return string.IsNullOrWhiteSpace(safe) ? "image.png" : safe;
+    }
+
+    private static string TrimForError(string value)
+    {
+        value = value.Trim();
+        return value.Length <= 800 ? value : value[..800];
+    }
+}
+
+public sealed record FalBackgroundRemovalSettings(string Endpoint, string ApiKey, TimeSpan Timeout);
+
+// fal.ai-hosted BRIA RMBG 2.0 (endpoint id `fal-ai/bria/background/remove`). One synchronous
+// fal.run call: the photo goes in as a base64 data URI (no public URL needed), the cutout comes
+// back as a file URL (or an inline data URI in sync mode) that is downloaded into the pipeline.
+public sealed class FalBackgroundRemovalProvider : IBackgroundRemovalProvider
+{
+    public const string DefaultEndpoint = "https://fal.run/fal-ai/bria/background/remove";
+
+    private readonly HttpClient _client;
+    private readonly FalBackgroundRemovalSettings _settings;
+
+    public FalBackgroundRemovalProvider(HttpClient client, FalBackgroundRemovalSettings settings)
+    {
+        _client = client;
+        _settings = settings;
+        if (settings.Timeout > TimeSpan.Zero)
+        {
+            _client.Timeout = settings.Timeout;
+        }
+    }
+
+    public string Name => "fal-bria-rmbg";
+
+    public BackgroundRemovalResult RemoveBackground(BackgroundRemovalRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.ApiKey))
+        {
+            throw new InvalidOperationException("BackgroundRemoval:Fal:ApiKey (FAL_KEY) must be configured for the fal.ai background removal provider.");
+        }
+
+        var endpoint = string.IsNullOrWhiteSpace(_settings.Endpoint) ? DefaultEndpoint : _settings.Endpoint;
+        var payload = JsonSerializer.Serialize(new
+        {
+            image_url = $"data:{request.ContentType};base64,{Convert.ToBase64String(request.ImageBytes)}",
+            sync_mode = true
+        });
+
+        using var message = new HttpRequestMessage(HttpMethod.Post, endpoint)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+        message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        message.Headers.Authorization = new AuthenticationHeaderValue("Key", _settings.ApiKey);
+
+        using var response = _client.Send(message);
+        var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException($"Background removal provider fal returned {(int)response.StatusCode}: {TrimForError(body)}");
+        }
+
+        var (imageUrl, declaredContentType) = ParseImage(body);
+        if (imageUrl.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            return DecodeDataUri(imageUrl, declaredContentType);
+        }
+
+        using var download = _client.Send(new HttpRequestMessage(HttpMethod.Get, imageUrl));
+        if (!download.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException($"Background removal provider fal output download failed with {(int)download.StatusCode}.");
+        }
+
+        var bytes = download.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult();
+        if (bytes.Length == 0)
+        {
+            throw new InvalidOperationException("Background removal provider fal returned an empty image.");
+        }
+
+        var contentType = download.Content.Headers.ContentType?.MediaType ?? declaredContentType ?? "image/png";
+        if (!contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Background removal provider fal returned non-image content type {contentType}.");
+        }
+
+        return new BackgroundRemovalResult(bytes, contentType, Name);
+    }
+
+    private static (string Url, string? ContentType) ParseImage(string body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.TryGetProperty("image", out var image)
+                && image.ValueKind == JsonValueKind.Object
+                && image.TryGetProperty("url", out var url)
+                && url.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(url.GetString()))
+            {
+                var contentType = image.TryGetProperty("content_type", out var type) && type.ValueKind == JsonValueKind.String
+                    ? type.GetString()
+                    : null;
+                return (url.GetString()!, contentType);
+            }
+        }
+        catch (JsonException)
+        {
+            // fall through to the descriptive error below
+        }
+
+        throw new InvalidOperationException($"Background removal provider fal returned an unexpected response: {TrimForError(body)}");
+    }
+
+    private BackgroundRemovalResult DecodeDataUri(string dataUri, string? declaredContentType)
+    {
+        var comma = dataUri.IndexOf(',');
+        if (comma < 0)
+        {
+            throw new InvalidOperationException("Background removal provider fal returned a malformed data URI.");
+        }
+
+        var header = dataUri[5..comma];
+        var contentType = header.Split(';', 2)[0];
+        if (string.IsNullOrWhiteSpace(contentType))
+        {
+            contentType = declaredContentType ?? "image/png";
+        }
+
+        var bytes = Convert.FromBase64String(dataUri[(comma + 1)..]);
+        if (bytes.Length == 0)
+        {
+            throw new InvalidOperationException("Background removal provider fal returned an empty image.");
+        }
+
+        return new BackgroundRemovalResult(bytes, contentType, Name);
     }
 
     private static string TrimForError(string value)

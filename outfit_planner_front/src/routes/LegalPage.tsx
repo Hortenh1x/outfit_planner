@@ -35,8 +35,11 @@ export function LegalPage() {
         <h2>Demo service</h2>
         <p>
           This application is a demonstration, provided as-is without uptime or support guarantees.
-          AI try-on generation depends on paid third-party compute and is enabled on request only;
-          the composed-figure preview, wardrobe cataloging, planning, and sharing always work.
+          AI try-on generation depends on paid third-party compute: every account gets a small free
+          trial of AI credits and Premium adds a monthly allowance, but generation may pause when the
+          demo's compute budget is exhausted; the composed-figure preview, wardrobe cataloging,
+          planning, and sharing always work. Payments run in Stripe test mode, so no real money is
+          ever charged.
         </p>
       </article>
 

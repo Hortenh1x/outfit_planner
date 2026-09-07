@@ -141,6 +141,9 @@ var tests = new List<(string Name, Action Test)>
     ("api defaults background removal provider to auto", TestApiDefaultsBackgroundRemovalToAuto),
     ("image processor delegates garment cutouts to background removal provider", TestImageProcessorDelegatesGarmentCutout),
     ("http background removal provider posts multipart image with api key", TestHttpBackgroundRemovalProviderPostsMultipartImageWithApiKey),
+    ("fal background removal provider sends a data uri and downloads the cutout", TestFalBackgroundRemovalProviderSendsDataUriAndDownloadsCutout),
+    ("fal background removal provider decodes inline data uri results", TestFalBackgroundRemovalProviderDecodesInlineResult),
+    ("api wires the fal background removal provider and its env aliases", TestApiWiresFalBackgroundRemoval),
     ("rembg server provider posts multipart file field", TestRembgServerProviderPostsMultipartFileField),
     ("api registers rembg server provider", TestApiRegistersRembgServerProvider),
     ("single garment extraction scaffold returns one cutout", TestSingleGarmentExtractionScaffoldReturnsOneCutout),
@@ -3029,6 +3032,67 @@ static void TestImageProcessorRendersRotatedGarmentVariants()
     AssertTrue(hasTransparent, "a diagonal rotation should fill exposed corners with transparency");
 }
 
+static void TestFalBackgroundRemovalProviderSendsDataUriAndDownloadsCutout()
+{
+    var handler = new FalRecordingHandler(
+        """{"image":{"url":"https://v3.fal.media/files/demo/cutout.png","content_type":"image/png","width":10,"height":10}}""",
+        MinimalPngBytes());
+    var provider = new FalBackgroundRemovalProvider(
+        new HttpClient(handler),
+        new FalBackgroundRemovalSettings(FalBackgroundRemovalProvider.DefaultEndpoint, "fal-test-key", TimeSpan.FromSeconds(10)));
+
+    var result = provider.RemoveBackground(new BackgroundRemovalRequest("shirt.jpg", "image/jpeg", new byte[] { 1, 2, 3 }));
+
+    AssertEqual("image/png", result.ContentType, "fal remover should return the downloaded cutout content type.");
+    AssertTrue(result.ImageBytes.Length > 0, "fal remover should return the downloaded cutout bytes.");
+    AssertEqual("fal-bria-rmbg", result.ProviderName, "fal remover should report its provider name.");
+    AssertEqual(2, handler.Requests.Count, "fal remover should call the model once and download the result once.");
+    var run = handler.Requests[0];
+    AssertEqual(HttpMethod.Post, run.Method, "the model call should be a POST.");
+    AssertEqual("/fal-ai/bria/background/remove", run.Path, "the model call should target the BRIA RMBG 2.0 endpoint.");
+    AssertEqual("Key fal-test-key", run.Authorization?.ToString(), "the model call should authenticate with the fal key scheme.");
+    AssertTrue(run.Body.Contains("\"image_url\":\"data:image/jpeg;base64,AQID\"", StringComparison.Ordinal), "the photo should be sent inline as a data URI.");
+    AssertTrue(run.Body.Contains("\"sync_mode\":true", StringComparison.Ordinal), "the call should ask for a synchronous result.");
+    AssertEqual(HttpMethod.Get, handler.Requests[1].Method, "the cutout should be downloaded from the returned URL.");
+    AssertEqual("/files/demo/cutout.png", handler.Requests[1].Path, "the download should use the URL fal returned.");
+}
+
+static void TestFalBackgroundRemovalProviderDecodesInlineResult()
+{
+    var inline = "data:image/png;base64," + Convert.ToBase64String(MinimalPngBytes());
+    var handler = new FalRecordingHandler("{\"image\":{\"url\":\"" + inline + "\",\"content_type\":\"image/png\"}}", Array.Empty<byte>());
+    var provider = new FalBackgroundRemovalProvider(
+        new HttpClient(handler),
+        new FalBackgroundRemovalSettings("", "fal-test-key", TimeSpan.FromSeconds(10)));
+
+    var result = provider.RemoveBackground(new BackgroundRemovalRequest("shirt.png", "image/png", MinimalPngBytes()));
+
+    AssertEqual("image/png", result.ContentType, "inline results should keep the data URI content type.");
+    AssertEqual(MinimalPngBytes().Length, result.ImageBytes.Length, "inline results should be decoded from base64.");
+    AssertEqual(1, handler.Requests.Count, "inline results need no download round-trip.");
+    AssertEqual("/fal-ai/bria/background/remove", handler.Requests[0].Path, "an empty endpoint setting should fall back to the default endpoint.");
+
+    AssertThrows<InvalidOperationException>(
+        () => new FalBackgroundRemovalProvider(new HttpClient(handler), new FalBackgroundRemovalSettings("", "", TimeSpan.FromSeconds(10)))
+            .RemoveBackground(new BackgroundRemovalRequest("shirt.png", "image/png", MinimalPngBytes())),
+        "a missing fal key must fail before any network call.");
+}
+
+static void TestApiWiresFalBackgroundRemoval()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var repoRoot = Path.GetFullPath(Path.Combine(rootPath, ".."));
+    var program = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Program.cs"));
+    var envExample = File.ReadAllText(Path.Combine(repoRoot, ".env.example"));
+    var compose = File.ReadAllText(Path.Combine(repoRoot, "docker-compose.yml"));
+
+    AssertTrue(program.Contains("new FalBackgroundRemovalProvider(", StringComparison.Ordinal), "the provider factory should offer the fal adapter.");
+    AssertTrue(program.Contains("(\"FAL_KEY\", \"BackgroundRemoval:Fal:ApiKey\")", StringComparison.Ordinal), "FAL_KEY should map onto the fal api key setting.");
+    AssertTrue(program.Contains("(\"BACKGROUND_REMOVAL_PROVIDER\", \"BackgroundRemoval:Provider\")", StringComparison.Ordinal), "the provider should be selectable from .env.");
+    AssertTrue(envExample.Contains("FAL_KEY=", StringComparison.Ordinal), ".env.example should document the fal key.");
+    AssertTrue(compose.Contains("BackgroundRemoval__Fal__ApiKey: ${FAL_KEY:-}", StringComparison.Ordinal), "the production compose should forward the fal key.");
+}
+
 static void TestHttpBackgroundRemovalProviderPostsMultipartImageWithApiKey()
 {
     var handler = new RecordingBackgroundRemovalHandler(MinimalPngBytes());
@@ -4693,6 +4757,44 @@ sealed class InMemoryByteObjectStorage : IObjectStorage
         => $"/api/storage/signed/{Normalize(objectKey)}?expires=1&signature=test";
 
     private static string Normalize(string objectKey) => objectKey.Trim().Replace('\\', '/').TrimStart('/');
+}
+
+// fal.ai double: the first call (the model run) answers with JSON, the second (the cutout
+// download) with raw image bytes. Records method, path, Authorization header and body.
+sealed class FalRecordingHandler : HttpMessageHandler
+{
+    private readonly string _json;
+    private readonly byte[] _imageBytes;
+
+    public FalRecordingHandler(string json, byte[] imageBytes)
+    {
+        _json = json;
+        _imageBytes = imageBytes;
+    }
+
+    public List<RecordedHttpProviderRequest> Requests { get; } = new();
+
+    protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        return SendAsync(request, cancellationToken).GetAwaiter().GetResult();
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Requests.Add(new RecordedHttpProviderRequest(
+            request.Method,
+            request.RequestUri?.AbsolutePath ?? "",
+            request.Headers.Authorization,
+            request.Content is null ? "" : await request.Content.ReadAsStringAsync(cancellationToken)));
+        if (Requests.Count == 1)
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(_json, Encoding.UTF8, "application/json") };
+        }
+
+        var content = new ByteArrayContent(_imageBytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+    }
 }
 
 sealed class RecordingHttpProviderHandler : HttpMessageHandler

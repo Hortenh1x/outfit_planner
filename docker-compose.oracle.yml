@@ -53,7 +53,9 @@ services:
       Authentication__Apple__ClientSecret: ${APPLE_CLIENT_SECRET:-}
 
       # u2netp: lightest rembg model (~5MB weights) — right-sized for a shared instance.
-      BackgroundRemoval__Provider: RembgServer
+      # RembgServer (local u2netp container) unless .env selects Fal (fal.ai BRIA RMBG 2.0, FAL_KEY).
+      BackgroundRemoval__Provider: ${BACKGROUND_REMOVAL_PROVIDER:-RembgServer}
+      BackgroundRemoval__Fal__ApiKey: ${FAL_KEY:-}
       BackgroundRemoval__RembgServer__Endpoint: http://rembg:7000/api/remove
       BackgroundRemoval__RembgServer__ImageFieldName: file
       BackgroundRemoval__RembgServer__ModelName: u2netp
