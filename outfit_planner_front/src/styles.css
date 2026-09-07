@@ -226,7 +226,7 @@ label > span,
   color: var(--muted);
 }
 
-input,
+input:not([type='checkbox']):not([type='radio']),
 select {
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -1546,6 +1546,34 @@ input[type="file"] {
   color: var(--accent-strong);
   font-weight: 900;
   overflow-wrap: anywhere;
+}
+
+.share-link-block {
+  display: grid;
+  gap: 8px;
+}
+
+.share-link-input {
+  font-size: 0.82rem;
+  width: 100%;
+}
+
+.share-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.share-link-actions .secondary-action {
+  flex: 1 1 140px;
+}
+
+/* Quiet guidance under a control (why a button is disabled, what just happened). */
+.tryon-hint {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin: -4px 0 0;
 }
 
 .upload-preview {

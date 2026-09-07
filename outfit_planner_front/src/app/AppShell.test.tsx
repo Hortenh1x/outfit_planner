@@ -107,7 +107,7 @@ describe('AppShell editorial frame', () => {
     const { fetchMock } = renderShell();
 
     await userEvent.click(await screen.findByRole('button', { name: /sienna studio/i }));
-    await userEvent.click(screen.getByRole('button', { name: /sign out/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^sign out$/i }));
 
     expect(screen.getByRole('dialog', { name: /confirm sign out/i })).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/auth/logout'))).toBe(false);

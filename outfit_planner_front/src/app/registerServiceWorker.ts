@@ -1,4 +1,9 @@
-export async function registerServiceWorker() {
+// Reloads the page once when an already-controlled page is taken over by a newer worker,
+// so visitors stuck on an old shell (the v1 cache-first index.html) get fresh HTML. First-time
+// visitors have no controller yet, so the takeover after `clients.claim()` must not reload
+// them mid-form. Doing this from the page instead of `client.navigate()` inside the worker's
+// activate handler avoids the activation deadlock that v2 had.
+export async function registerServiceWorker(reloadPage: () => void = () => window.location.reload()) {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
     return;
   }
@@ -19,6 +24,15 @@ export async function registerServiceWorker() {
 
       return;
     }
+
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener?.('controllerchange', () => {
+      if (hadController && !reloaded) {
+        reloaded = true;
+        reloadPage();
+      }
+    });
 
     await navigator.serviceWorker.register('/sw.js');
   } catch (error) {

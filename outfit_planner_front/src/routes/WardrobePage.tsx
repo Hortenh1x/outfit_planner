@@ -20,7 +20,7 @@ import {
   toGarmentFilters,
   type WardrobeFilterState
 } from '../features/wardrobe/wardrobeFilters';
-import { useWardrobeMutations, wardrobeQueryKey } from '../features/wardrobe/wardrobeMutations';
+import { UploadBatchError, useWardrobeMutations, wardrobeQueryKey } from '../features/wardrobe/wardrobeMutations';
 import { useEagerGarmentUploads } from '../features/wardrobe/useEagerGarmentUploads';
 import { useGarmentAutoTagging } from '../features/wardrobe/useGarmentAutoTagging';
 import {
@@ -164,6 +164,10 @@ export function WardrobePage() {
     setUploadQueue((current) => current.filter((item) => item.id !== itemId));
   }
 
+  function overrideDuplicate(itemId: string, addAnyway: boolean) {
+    setUploadQueue((current) => current.map((item) => (item.id === itemId ? { ...item, addDespiteDuplicate: addAnyway } : item)));
+  }
+
   function resetFilters() {
     setFilters(defaultWardrobeFilters);
   }
@@ -251,10 +255,18 @@ export function WardrobePage() {
           onChangeItem={changeQueueItem}
           onRemoveItem={removeQueueItem}
           onRetryItem={retryQueueItem}
+          onOverrideDuplicate={overrideDuplicate}
           onSubmitAll={() => mutations.uploadQueueMutation.mutate(uploadQueue, {
             onSuccess: () => {
               setUploadQueue([]);
               void queryClient.invalidateQueries({ queryKey: accountEntitlementsQueryKey });
+            },
+            // A batch that stopped part-way keeps only the rows that were not created, so a
+            // retry cannot add the successful ones a second time.
+            onError: (error) => {
+              if (error instanceof UploadBatchError && error.createdItemIds.length > 0) {
+                setUploadQueue((current) => current.filter((item) => !error.createdItemIds.includes(item.id)));
+              }
             }
           })}
         />

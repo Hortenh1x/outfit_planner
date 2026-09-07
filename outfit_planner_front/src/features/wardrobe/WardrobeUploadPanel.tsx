@@ -25,6 +25,7 @@ interface WardrobeUploadPanelProps {
   onChangeItem: (itemId: string, updates: UploadQueueItemUpdates) => void;
   onRemoveItem: (itemId: string) => void;
   onRetryItem: (itemId: string) => void;
+  onOverrideDuplicate?: (itemId: string, addAnyway: boolean) => void;
   onSubmitAll: () => void;
 }
 
@@ -36,6 +37,7 @@ export function WardrobeUploadPanel({
   onChangeItem,
   onRemoveItem,
   onRetryItem,
+  onOverrideDuplicate,
   onSubmitAll
 }: WardrobeUploadPanelProps) {
   const processing = isQueueProcessing(queue);
@@ -109,6 +111,7 @@ export function WardrobeUploadPanel({
         onChangeItem={onChangeItem}
         onRemove={onRemoveItem}
         onRetry={onRetryItem}
+        onOverrideDuplicate={onOverrideDuplicate}
       />
       <button type="button" className="wardrobe-primary-button" disabled={submitDisabled} onClick={onSubmitAll}>
         <Plus size={16} aria-hidden="true" />

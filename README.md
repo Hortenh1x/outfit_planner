@@ -13,23 +13,23 @@ The app is intentionally small, but it has a real backend/frontend split, signed
 - Private body reference photo uploads for try-on generation.
 - Outfit builder with slot compatibility rules instead of one-garment-per-category rules.
 - Composed-figure clothes-only Builder: a neutral gendered SVG silhouette wears the outfit fitted onto fixed body zones (garments anchored to the shoulder/waist/feet body lines and sized from their measured cutout so they sit on the body and layer correctly); every category is pickable from the Wardrobe pieces list, with top/bottom/shoes additionally cyclable directly on the figure (touch swipe + desktop arrows), and the composition (with the silhouette gender) is saved with the outfit so saved-outfit cards and the shared view render the exact same figure. (Hairstyle presets exist behind the scenes but are currently hidden from the product.)
-- Clothes-only and generated person preview modes.
+- Clothes-only composed-figure preview plus AI-generated person previews (single garment on the Free plan, sequential outfits on Premium).
 - Calendar planning with one outfit per user and day.
-- Share links for saved outfits.
+- Share links for saved outfits, shown in the Builder as an absolute URL with copy and revoke controls.
 - Secure account registration and sign-in with email/password.
 - Google OAuth and Apple OIDC sign-in when provider credentials are configured.
-- Revocable server-side sessions with HttpOnly cookies, CSRF protection, rate-limited auth endpoints, email verification/password reset token storage, and session revoke-all support.
+- Revocable server-side sessions with HttpOnly cookies, CSRF protection, rate-limited auth endpoints, a "Sign out everywhere" control in account settings, hourly expired-session cleanup, and password reset by email when SMTP is configured (`/forgot-password` → one-time emailed link → `/reset-password`; without SMTP the page tells users to contact the administrator). Email verification tokens are stored but do not gate anything yet.
 - Free, Premium, and Admin account roles with two email-pinned accounts whose roles can never change, and an admin panel that lists, inspects, and manages all users, their data, and their AI credits.
 - An enforced paywall over AI compute ([`PAYWALL_MODEL.md`](PAYWALL_MODEL.md)): per-tier plan catalog (free caps on garments/outfits/body photos, allowed try-on modes, output resolution), an AI-credit ledger with a one-time 8-credit free trial grant (top-up-to-config for existing accounts) and a rolling monthly Premium allowance, debit-on-confirm with automatic refunds for failed jobs, no spend on cache hits, a premium-priority try-on queue, and entitlements surfaced in the Builder (credits chip, Premium mode pills, upgrade notice).
-- First-visit demo notice on every page ("This is only a demo application: AI features available on request only") with an info popover explaining that AI features run on request; dismissal persists per browser.
+- First-visit demo notice at the top of every page ("This is only a demo application: AI features available on request only") with an info popover that explains the AI limits and links the contact email; dismissal persists per browser.
 - Public `/legal` page with service, data, AI-processing, and payment/credit terms, linked from an Info button under the Plan row in account settings. Credit top-up packs are purchasable by Free and Premium accounts alike.
 - Stripe billing implemented to "insert the API key" readiness: subscription checkout, credit top-up packs, the customer portal, signature-verified idempotent webhooks that mirror subscription state and switch `Free ↔ Premium` roles automatically (pinned accounts exempt), an `/upgrade` page, and read-only admin subscription visibility. Without `Stripe__SecretKey` billing reads as disabled and roles are still switched manually via the admin panel.
-- Privacy endpoints for account export/delete, body photo deletion, and AI output purging.
+- Self-service privacy in account settings: download the sanitized account export, delete the account (typed confirmation), sign out everywhere; body photo deletion and AI output purging remain available as endpoints. Deleting a garment detaches it from saved outfits (and drops their generated preview); deleting an outfit removes its stored renders.
 - Configurable garment background removal for uploaded item cutouts, with simple local fallback, `rembg`, and HTTP/API provider adapters.
 - Optional local garment auto-tagging that prefills category, colors, seasons, and tags on upload (FashionCLIP + k-means colors), with soft degradation when the service is off and user edits that are never overwritten.
 - Background AI try-on jobs with a Redis-backed queue in Docker and an in-memory queue fallback for local development.
-- Mock AI try-on by default, optional FASHN `tryon-max`, local VTON/CatVTON, Replicate, and Fal provider adapters.
-- Installable PWA shell with manifest metadata, static shell caching, offline fallback, and responsive mobile bottom navigation.
+- Mock AI try-on by default (a clearly labelled placeholder image stored through the same output pipeline as real renders), optional FASHN `tryon-max`, local VTON/CatVTON, Replicate, and Fal provider adapters.
+- Installable PWA shell with manifest metadata, static shell caching, offline fallback, and a responsive mobile bottom navigation that fits every entry.
 
 ## Tech Stack
 
@@ -119,7 +119,7 @@ Authentication is cookie-backed:
 - Session cookie `outfit_session` is HttpOnly, SameSite=Lax, and Secure outside development.
 - CSRF cookie `outfit_csrf` is readable by the frontend and must be echoed as `X-CSRF-Token` on mutating authenticated API requests.
 - Account settings persist `username`, optional signed avatar URL, and `gender` (`Male` or `Female`) on the backend. AI try-on modes are unavailable until the authenticated user has selected a gender; clothes-only preview remains available.
-- Every account has a role (`Free` by default, `Premium`, or `Admin`) exposed as `role` on the session user. The effective role pins `dmytro.bolibok@gmail.com` to `Admin` and `premium.pinned@example.test` to `Premium` by normalized email (configurable through `Roles__PinnedAdminEmails`/`Roles__PinnedPremiumEmails`; blank config keeps these defaults), and sign-in converges the stored role in every storage backend. Admins see the `/admin` panel; `/api/admin/*` routes return `403` for other roles, and pinned accounts can be neither re-roled nor deleted there.
+- Every account has a role (`Free` by default, `Premium`, or `Admin`) exposed as `role` on the session user. The effective role pins `dmytro.bolibok@gmail.com` (the project owner) to `Admin` by normalized email (`Roles__PinnedAdminEmails` overrides; blank keeps the built-in pin), and `Roles__PinnedPremiumEmails` can pin further accounts to `Premium` (configuration only, empty by default), and sign-in converges the stored role in every storage backend. Admins see the `/admin` panel; `/api/admin/*` routes return `403` for other roles, and pinned accounts can be neither re-roled nor deleted there.
 - Google and Apple sign-in start from backend challenge endpoints and complete through backend callbacks. If the external account is new, the API creates it automatically. If the provider returns a verified email that already exists, the external login is linked to that user.
 - All private `/api` routes require a valid session. `/api/health`, `/api/system/status`, `/api/auth/*`, `/api/storage/signed/*`, and `/api/share/{token}` remain public; signed storage access is protected by URL signature and expiry.
 
@@ -274,7 +274,15 @@ Backend configuration can be supplied through `appsettings.json`, environment va
 | `Authentication__Apple__ClientId` | empty | Enables Apple OIDC when paired with `Authentication__Apple__ClientSecret`. |
 | `Authentication__Apple__ClientSecret` | empty | Apple OIDC client secret JWT generated from Apple developer credentials. |
 | `Roles__PinnedAdminEmails` | `dmytro.bolibok@gmail.com` | Comma-separated emails whose accounts are always `Admin`. Blank keeps the default pin. |
-| `Roles__PinnedPremiumEmails` | `premium.pinned@example.test` | Comma-separated emails whose accounts are always `Premium`. Blank keeps the default pin. |
+| `Roles__PinnedPremiumEmails` | empty | Comma-separated emails whose accounts are always `Premium`. Empty means no premium pins (`ROLES_PINNED_PREMIUM_EMAILS` in `.env`). |
+| `Email__Provider` | `Auto` | `Auto` uses SMTP when `Email__Smtp__Host` is set and is otherwise disabled; `Smtp` requires the host; `Disabled` turns password reset emails off. |
+| `Email__Smtp__Host` | empty | SMTP relay host for password reset emails (`SMTP_HOST` in `.env`). |
+| `Email__Smtp__Port` | `587` | SMTP port (`SMTP_PORT`). |
+| `Email__Smtp__Username` | empty | SMTP login (`SMTP_USERNAME`); doubles as the sender address when `Email__FromAddress` is empty. |
+| `Email__Smtp__Password` | empty | SMTP password or app password (`SMTP_PASSWORD`). |
+| `Email__Smtp__UseStartTls` | `true` | STARTTLS on the SMTP connection (`SMTP_USE_STARTTLS`). |
+| `Email__FromAddress` | empty | Sender address (`EMAIL_FROM_ADDRESS`). |
+| `Email__FromName` | `Outfit Planner` | Sender display name (`EMAIL_FROM_NAME`). |
 | `Paywall__Free__MaxGarments` | `50` | Free-tier garment cap. Zero or negative means unlimited. |
 | `Paywall__Free__MaxOutfits` | `20` | Free-tier saved-outfit cap. Zero or negative means unlimited. |
 | `Paywall__Free__MaxBodyReferencePhotos` | `1` | Free-tier body reference photo cap. Zero or negative means unlimited. |
@@ -332,7 +340,7 @@ Then run the API with the default `AutoTagging__Provider=Auto`. If the service i
 
 ## Optional Try-On Providers
 
-The backend uses the mock try-on provider by default. The mock returns deterministic demo output and does not spend real provider credits. Paid, uncached provider work runs from the hosted background worker after `POST /api/outfits/{outfitId}/try-on` has returned an accepted job resource.
+The backend uses the mock try-on provider by default. The mock never calls an AI service: it returns a `mock:` URL that `TryOnOutputStorage` turns into an embedded, clearly labelled placeholder PNG stored exactly like a real provider output (private object, retention, signed URL), so the Builder, saved-outfit cards, the preview dialog and shared pages all render without spending provider credits. Paid, uncached provider work runs from the hosted background worker after `POST /api/outfits/{outfitId}/try-on` has returned an accepted job resource.
 
 The FASHN scaffold is enabled by setting `TryOn__Provider=Fashn` and `Fashn__ApiKey`; the publicly-hosted dev stack wires these plus the other `Fashn__*` options from `.env` (all keys are in the Configuration table).
 
@@ -366,7 +374,8 @@ Private routes require the `outfit_session` cookie. Mutating private routes also
 | `GET` | `/auth/me` | Read the current authenticated user session. |
 | `POST` | `/auth/email-verification/request` | Create an email verification token. |
 | `POST` | `/auth/email-verification/confirm` | Verify an email verification token. |
-| `POST` | `/auth/password-reset/request` | Create a password reset token. |
+| `GET` | `/auth/password-reset/availability` | Whether password reset emails can be sent on this server (SMTP configured). |
+| `POST` | `/auth/password-reset/request` | Create a password reset token and email the one-time link in the background (`503` outside Development when email delivery is not configured). |
 | `POST` | `/auth/password-reset/confirm` | Reset a password and revoke existing sessions. |
 | `GET` | `/auth/sessions` | List active sessions. |
 | `DELETE` | `/auth/sessions` | Revoke all sessions for the current user. |
@@ -474,7 +483,7 @@ Billing is implemented to "insert the API key" readiness; this manual pass needs
 
 - Google and Apple auth require provider credentials. Email/password auth works without external secrets.
 - The paywall (tier caps, AI-credit metering, mode/resolution gating, priority queue) is enforced and Stripe billing is implemented per [`PAYWALL_MODEL.md`](PAYWALL_MODEL.md), but no Stripe credentials ship with the repo: until `Stripe__SecretKey`/`Stripe__WebhookSecret`/price ids are configured, billing reads as disabled, `Free ↔ Premium` transitions happen manually through the admin panel, and the tier numbers/prices are provisional placeholders. A step-by-step test-mode runbook lives in the Verification section above.
-- Password registration requires at least 8 characters, at least one letter, and at least one digit.
+- Password registration requires at least 8 characters, at least one letter, and at least one digit. Password reset by email needs the `SMTP_*` settings in `.env`; without them `/forgot-password` tells users to contact the administrator, and in Development the request endpoint still returns the token so the flow can be exercised locally.
 - Uploaded files default to local object storage; S3-compatible MinIO can be enabled with object storage configuration.
 - PostgreSQL schema changes are applied through DbUp migrations at startup.
 - Garment categories are Top, Bottom, Dress, Outerwear, Shoes, Bag, and Accessory. Head wear is covered by global hairstyle presets (`GET /api/hairstyles`), not garments.
@@ -483,7 +492,7 @@ Billing is implemented to "insert the API key" readiness; this manual pass needs
 
 ## Troubleshooting
 
-- If `/` or `/builder` render a plain white page, the visitor still runs the pre-2026-08-25 service worker, which froze those routes with a cache-first shell. Current builds unregister it automatically on the next navigation; a hard refresh (Ctrl+Shift+R) or DevTools → Application → Service Workers → Unregister clears it immediately.
+- If `/` or `/builder` render a plain white page, the visitor still runs the pre-2026-08-25 service worker, which froze those routes with a cache-first shell. Current builds (worker v3) take such pages over and reload them once from the page side (`controllerchange`); a hard refresh (Ctrl+Shift+R) or DevTools → Application → Service Workers → Unregister clears it immediately. Never navigate clients from inside the worker's `activate` handler: v2 did, and Chromium deadlocked activation for five minutes before reloading the tab on its own.
 - If the frontend shows network failures, confirm the API is available at `https://localhost:5001/api/health`.
 - If running frontend dev against a non-default API port, set `VITE_DEV_API_TARGET`.
 - If PostgreSQL connection fails from local Windows development, confirm the compose database is reachable on host port `15433`, not `5432`.

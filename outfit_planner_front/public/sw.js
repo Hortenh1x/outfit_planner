@@ -1,7 +1,12 @@
-// v2: navigations are network-first. v1 precached '/' and '/builder' and served them
-// cache-first forever, so visitors kept a frozen index.html and saw a white page
-// whenever its JS entry could no longer load. Never precache routed HTML here.
-const CACHE_NAME = 'outfit-planner-shell-v2';
+// v3: navigations are network-first (v1 precached '/' and '/builder' cache-first forever and
+// froze visitors on a stale index.html). Never precache routed HTML here.
+//
+// v2 tried to "heal" v1 visitors by navigating every WindowClient from inside the activate
+// waitUntil. That deadlocks in Chromium: the navigation's fetch event waits for activation
+// to finish, activation waits for the navigation, and the tab spins for five minutes before
+// the browser gives up and reloads the page by itself. The reload-once-after-update now
+// lives in the page (registerServiceWorker.ts, on `controllerchange`), never in the worker.
+const CACHE_NAME = 'outfit-planner-shell-v3';
 const SHELL_ASSETS = ['/offline.html', '/manifest.webmanifest', '/icons/outfit-icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -18,10 +23,6 @@ self.addEventListener('activate', (event) => {
         keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
       ))
       .then(() => self.clients.claim())
-      // One-time refresh per SW update: windows opened against the stale v1
-      // cache-first shell (possibly a white page) reload onto fresh HTML.
-      .then(() => self.clients.matchAll({ type: 'window' }))
-      .then((clients) => Promise.all(clients.map((client) => client.navigate(client.url).catch(() => null))))
   );
 });
 

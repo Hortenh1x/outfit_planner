@@ -36,6 +36,7 @@ test('register upload create try-on plan and share smoke', async ({ page }) => {
   });
   await expect(page.getByText(/selected/i)).toBeVisible();
   await page.getByRole('button', { name: /generate preview/i }).click();
+  await page.getByRole('button', { name: /confirm generation/i }).click();
   await expect(page.getByText(/try-on job/i)).toBeVisible();
 
   await page.goto('/calendar');

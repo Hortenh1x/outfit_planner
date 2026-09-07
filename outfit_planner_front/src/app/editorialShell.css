@@ -458,6 +458,21 @@ button.editorial-nav-button:active,
   margin: 0;
 }
 
+.account-data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.account-data-actions .secondary-action {
+  flex: 1 1 160px;
+}
+
+.account-confirm-input {
+  margin-top: 10px;
+  width: 100%;
+}
+
 .account-dialog-actions {
   border-top: 1px solid var(--editorial-hairline);
   display: grid;
@@ -642,7 +657,9 @@ button.editorial-nav-button:active,
     box-shadow: none;
     display: grid;
     gap: 6px;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    /* One column per entry (4 for members, 5 for admins) instead of a hard-coded three,
+       which pushed the fourth entry onto a second row. */
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
     left: 12px;
     order: 3;
     padding: 8px;
@@ -652,9 +669,14 @@ button.editorial-nav-button:active,
   }
 
   .editorial-bottom-navigation .editorial-nav-button {
+    flex-direction: column;
+    font-size: 0.72rem;
+    gap: 3px;
     justify-content: center;
-    min-height: 46px;
-    padding: 0 8px;
+    line-height: 1.1;
+    min-height: 50px;
+    padding: 6px 2px;
+    text-align: center;
   }
 
   .editorial-main-panel {
@@ -696,28 +718,34 @@ button.editorial-nav-button:active,
   }
 }
 
+/* Lives in the main panel's flow (above the routed page) so it never covers headings, the
+   Builder mode toggle, or the sign-in fields; the popover is positioned against it. */
 .demo-notice {
   align-items: center;
   background: var(--editorial-panel);
   border: 1px solid var(--editorial-hairline-strong);
   border-radius: 14px;
-  box-shadow: 0 14px 34px rgba(26, 22, 20, 0.18);
+  box-shadow: 0 6px 18px rgba(26, 22, 20, 0.08);
   color: var(--editorial-ink);
   display: flex;
   gap: 8px;
-  left: 50%;
-  max-width: min(680px, calc(100vw - 32px));
+  margin: 0 auto 16px;
+  max-width: 680px;
   padding: 10px 10px 10px 16px;
-  position: fixed;
-  top: 14px;
-  transform: translateX(-50%);
-  z-index: 90;
+  position: relative;
+  z-index: 5;
 }
 
 .demo-notice-text {
+  flex: 1 1 auto;
   font-size: 0.9rem;
   line-height: 1.35;
   margin: 0;
+  min-width: 0;
+}
+
+.demo-notice-popover a {
+  color: var(--editorial-accent-strong);
 }
 
 .demo-notice .icon-button {
@@ -738,12 +766,6 @@ button.editorial-nav-button:active,
   top: calc(100% + 8px);
   width: min(380px, calc(100vw - 48px));
   z-index: 91;
-}
-
-@media (max-width: 640px) {
-  .demo-notice {
-    top: 10px;
-  }
 }
 
 .account-legal-link {
@@ -825,7 +847,11 @@ button.editorial-nav-button:active,
 }
 
 .auth-terms-checkbox input {
-  margin-top: 2px;
+  accent-color: var(--editorial-accent);
+  flex-shrink: 0;
+  height: 18px;
+  margin: 2px 0 0;
+  width: 18px;
 }
 
 .auth-terms-notice {
@@ -838,4 +864,8 @@ button.editorial-nav-button:active,
 .auth-terms-checkbox a,
 .auth-terms-notice a {
   color: var(--editorial-accent-strong);
+}
+
+.auth-forgot-link {
+  font-size: 0.86rem;
 }

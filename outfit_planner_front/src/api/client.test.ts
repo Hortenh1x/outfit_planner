@@ -204,7 +204,7 @@ describe('api client', () => {
 
     await expect(uploadBodyReferencePhoto(new File(['body'], 'body.png', { type: 'image/png' })))
       .rejects
-      .toThrow(/Network request failed while calling POST \/api\/uploads\/body-reference-photo .*Failed to fetch.*DevTools.*Network/i);
+      .toThrow('Could not reach the server. Check your connection and try again.');
     expect(consoleInfo).toHaveBeenCalledWith('[OutfitPlanner API]', expect.objectContaining({
       method: 'POST',
       path: '/uploads/body-reference-photo',
@@ -224,9 +224,15 @@ describe('api client', () => {
       })
     );
 
-    await expect(listGarments())
-      .rejects
-      .toThrow(/GET \/api\/garments failed with HTTP 503 Service Unavailable.*database unavailable.*trace-123/i);
+    // Users read the API's own message; the request line, status and trace id ride along
+    // on the typed error for logs and support instead of being pasted into the UI.
+    const failure = await listGarments().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ApiError);
+    const apiError = failure as ApiError;
+    expect(apiError.message).toBe('database unavailable');
+    expect(apiError.status).toBe(503);
+    expect(apiError.traceId).toBe('trace-123');
+    expect(apiError.requestDescription).toMatch(/GET \/api\/garments failed with HTTP 503 Service Unavailable/);
   });
 
   it('deletes wardrobe and body reference records without requiring a response body', async () => {

@@ -6,8 +6,10 @@ import { AdminPage } from '../routes/AdminPage';
 import { AuthPage } from '../routes/AuthPage';
 import { BuilderPage } from '../routes/BuilderPage';
 import { CalendarPage } from '../routes/CalendarPage';
+import { ForgotPasswordPage } from '../routes/ForgotPasswordPage';
 import { LegalPage } from '../routes/LegalPage';
 import { PrivacyPage } from '../routes/PrivacyPage';
+import { ResetPasswordPage } from '../routes/ResetPasswordPage';
 import { SharePage } from '../routes/SharePage';
 import { TermsPage } from '../routes/TermsPage';
 import { UpgradePage } from '../routes/UpgradePage';
@@ -19,6 +21,8 @@ export default function App() {
       <Route element={<AppShell />}>
         <Route path="/signin" element={<AuthPage mode="signin" />} />
         <Route path="/register" element={<AuthPage mode="register" />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/share/:token" element={<SharePage />} />
         <Route path="/legal" element={<LegalPage />} />
         <Route path="/terms" element={<TermsPage />} />

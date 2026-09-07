@@ -92,7 +92,8 @@ export function DemoNotice() {
       {isInfoOpen ? (
         <div className="demo-notice-popover" id="demo-notice-popover" role="note">
           Due to a lack of resources AI features cannot be supported with the power they need all the time, so if
-          you want to see how this app really operates, feel free to contact me
+          you want to see how this app really operates, feel free to contact me at{' '}
+          <a href="mailto:dmytro.bolibok@gmail.com">dmytro.bolibok@gmail.com</a>.
         </div>
       ) : null}
     </aside>

@@ -23,20 +23,27 @@ interface ApiErrorBody {
 }
 
 // Typed error so callers can branch on the HTTP status and surface the trace id, instead of
-// matching substrings of the message (e.g. `message.includes('HTTP 401')`).
+// matching substrings of the message (e.g. `message.includes('HTTP 401')`). `message` is the
+// human-readable detail the API sent (pages render it as-is); the request line, status and
+// trace id stay on the error for logs and support, never in the user-facing text.
 export class ApiError extends Error {
   readonly status: number;
   readonly detail: string;
   readonly traceId?: string;
+  readonly requestDescription: string;
 
-  constructor(message: string, status: number, detail: string, traceId?: string) {
-    super(message);
+  constructor(detail: string, status: number, requestDescription: string, traceId?: string) {
+    super(detail);
     this.name = 'ApiError';
     this.status = status;
     this.detail = detail;
+    this.requestDescription = requestDescription;
     this.traceId = traceId;
   }
 }
+
+// Shown when the browser could not reach the API at all (offline, blocked request, proxy down).
+export const networkErrorMessage = 'Could not reach the server. Check your connection and try again.';
 
 export interface HealthStatus {
   status: string;
@@ -251,6 +258,50 @@ export function login(input: { email: string; password: string }): Promise<AuthS
   });
 }
 
+// Every active session of the account (the current one included); revocation signs out everywhere.
+export interface AuthSessionInfo {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string | null;
+}
+
+export function listSessions(): Promise<AuthSessionInfo[]> {
+  return request<AuthSessionInfo[]>('/auth/sessions');
+}
+
+export function revokeAllSessions(): Promise<void> {
+  return request<void>('/auth/sessions', { method: 'DELETE' });
+}
+
+// Password reset by email. Availability depends on the server having SMTP configured.
+export function getPasswordResetAvailability(): Promise<{ available: boolean }> {
+  return request<{ available: boolean }>('/auth/password-reset/availability');
+}
+
+export function requestPasswordReset(email: string): Promise<{ status: string; token?: string | null }> {
+  return request<{ status: string; token?: string | null }>('/auth/password-reset/request', {
+    method: 'POST',
+    body: JSON.stringify({ email })
+  });
+}
+
+export function confirmPasswordReset(input: { token: string; password: string; repeatPassword: string }): Promise<{ status: string }> {
+  return request<{ status: string }>('/auth/password-reset/confirm', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  });
+}
+
+// Self-service privacy: the sanitized export of everything the account holds, and permanent deletion.
+export function exportAccount(): Promise<unknown> {
+  return request<unknown>('/account/export');
+}
+
+export function deleteAccount(): Promise<void> {
+  return request<void>('/account', { method: 'DELETE' });
+}
+
 export function logout(): Promise<void> {
   return request<void>('/auth/logout', {
     method: 'POST'
@@ -399,19 +450,17 @@ async function fetchWithDiagnostics(url: string, init: RequestInit, method: stri
   } catch (error) {
     const browserMessage = error instanceof Error ? error.message : String(error);
     const onlineStatus = typeof navigator === 'undefined' ? 'unknown' : String(navigator.onLine);
-    const origin = typeof window === 'undefined' ? 'test' : window.location.origin;
-    throw new Error(
-      `Network request failed while calling ${method} ${url} failed. ` +
-      `Browser error: ${browserMessage}. ` +
-      `Origin: ${origin}. Browser online: ${onlineStatus}. ` +
-      `Open DevTools > Network and check ${method} ${url}. ` +
-      `If the request is missing, the browser blocked it before it reached the API/proxy.`
-    );
+    if (import.meta.env.DEV && typeof console !== 'undefined') {
+      console.info('[OutfitPlanner API] network failure', { method, url, browserMessage, online: onlineStatus });
+    }
+
+    throw new Error(networkErrorMessage, { cause: error });
   }
 }
 
+// Request tracing for local development only; production builds stay silent in the console.
 function logApiRequest(url: string, init: RequestInit, method: string, path: string) {
-  if (typeof console === 'undefined') {
+  if (!import.meta.env.DEV || typeof console === 'undefined') {
     return;
   }
 
@@ -449,16 +498,14 @@ function readCookie(name: string): string | null {
 async function createApiError(response: Response, method: string, path: string): Promise<ApiError> {
   const body = await readErrorBody(response);
   const traceId = response.headers.get('X-Trace-Id') ?? body.traceId ?? undefined;
-  const detail = body.error ?? body.detail ?? 'No error body returned.';
+  const detail = body.error ?? body.detail ?? `The server responded with HTTP ${response.status}.`;
   const statusText = response.statusText ? ` ${response.statusText}` : '';
-  const traceSuffix = traceId ? ` Trace id: ${traceId}.` : '';
+  const requestDescription = `${method} ${apiBaseUrl}${path} failed with HTTP ${response.status}${statusText}`;
+  if (import.meta.env.DEV && typeof console !== 'undefined') {
+    console.info('[OutfitPlanner API] request failed', { requestDescription, detail, traceId });
+  }
 
-  return new ApiError(
-    `${method} ${apiBaseUrl}${path} failed with HTTP ${response.status}${statusText}: ${detail}.${traceSuffix}`,
-    response.status,
-    detail,
-    traceId
-  );
+  return new ApiError(detail, response.status, requestDescription, traceId);
 }
 
 async function readErrorBody(response: Response): Promise<ApiErrorBody> {

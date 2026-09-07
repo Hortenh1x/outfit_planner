@@ -57,11 +57,11 @@ describe('BuilderPage', () => {
     // bottom, and shoes are additionally cyclable directly on the figure.
     const addDressInput = await screen.findByLabelText(/add a dress in wardrobe/i);
     expect(addDressInput).toHaveAttribute('type', 'file');
-    expect(screen.getByLabelText(/add a outerwear in wardrobe/i)).toHaveAttribute('type', 'file');
+    expect(screen.getByLabelText(/add outerwear in wardrobe/i)).toHaveAttribute('type', 'file');
     expect(screen.getByLabelText(/add body photo/i)).toHaveAttribute('type', 'file');
     expect(screen.getByLabelText(/add a top in wardrobe/i)).toHaveAttribute('type', 'file');
     expect(screen.getByLabelText(/add a bottom in wardrobe/i)).toHaveAttribute('type', 'file');
-    expect(screen.getByLabelText(/add a shoes in wardrobe/i)).toHaveAttribute('type', 'file');
+    expect(screen.getByLabelText(/add shoes in wardrobe/i)).toHaveAttribute('type', 'file');
     expect(screen.queryByRole('button', { name: /^add$/i })).not.toBeInTheDocument();
 
     await userEvent.upload(addDressInput, new File(['dress'], 'linen dress.png', { type: 'image/png' }));
@@ -310,8 +310,8 @@ describe('BuilderPage', () => {
     });
   });
 
-  it('allows clothes-only preview without a body reference photo', async () => {
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+  it('defaults to the plan\'s single-garment mode and explains the missing body photo', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
 
       if (url.endsWith('/garments')) {
@@ -336,50 +336,25 @@ describe('BuilderPage', () => {
         ]);
       }
 
-      if (url.endsWith('/body-reference-photos')) {
-        return jsonResponse([]);
-      }
-
-      if (url.endsWith('/outfits') && init?.method === 'POST') {
+      if (url.endsWith('/account/entitlements')) {
         return jsonResponse({
-          id: 'outfit-1',
-          name: 'Today',
-          items: [
-            { garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: '/top.png' }
-          ],
-          tags: [],
-          occasion: [],
-          isFavorite: false,
-          isArchived: false,
-          createdAt: '2026-06-21T12:00:00Z'
-        }, 201);
-      }
-
-      if (url.endsWith('/outfits/outfit-1/try-on/estimate') && init?.method === 'POST') {
-        return jsonResponse({
-          mode: 'ClothesOnlyPreview',
-          provider: 'MockTryOnProvider',
-          bodyTryOnItems: [{ garmentId: 'top-1', name: 'white tee', category: 'Top', bodyZone: 'Torso', thumbnailUrl: '/top.png' }],
-          visualOnlyItems: [],
-          includedGarmentIds: [],
-          excludedGarmentIds: ['top-1'],
-          estimatedCredits: 0,
-          isAvailable: true,
-          requiresAi: false,
-          requiresPremiumConfirmation: false,
-          cacheKey: 'cache-key-free',
-          hasCachedResult: false,
-          summary: 'Clothes-only preview is free.',
-          warnings: []
+          role: 'Free',
+          maxGarments: 50,
+          maxOutfits: 20,
+          maxBodyReferencePhotos: 1,
+          garmentCount: 1,
+          outfitCount: 0,
+          bodyReferencePhotoCount: 0,
+          allowedAiModes: ['SingleGarmentTryOn'],
+          maxTryOnResolution: '1k',
+          priorityQueue: false,
+          creditBalance: 8,
+          creditsUnlimited: false
         });
       }
 
-      if (url.endsWith('/outfits/outfit-1/try-on') && init?.method === 'POST') {
-        return jsonResponse({ id: 'job-free', status: 'Succeeded' }, 202);
-      }
-
-      if (url.endsWith('/try-on-jobs/job-free')) {
-        return jsonResponse({ id: 'job-free', status: 'Succeeded' });
+      if (url.endsWith('/body-reference-photos')) {
+        return jsonResponse([]);
       }
 
       return jsonResponse([]);
@@ -387,34 +362,53 @@ describe('BuilderPage', () => {
 
     const builder = renderBuilder();
 
-    // The first top dresses the figure automatically, so generation is ready right away.
     expect(await screen.findByRole('img', { name: /white tee/i })).toBeInTheDocument();
-    const tryOnModeSelector = builder.container.querySelector('.tryon-mode-selector');
-    expect(tryOnModeSelector).not.toBeNull();
-    await userEvent.click(within(tryOnModeSelector as HTMLElement).getByRole('button', { name: /clothes only/i }));
-
-    const generateButton = screen.getByRole('button', { name: /generate preview/i });
-    await waitFor(() => expect(generateButton).toBeEnabled());
-    await userEvent.click(generateButton);
-
-    expect(await screen.findByText((_, element) => element?.textContent === 'Free')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /confirm generation/i }));
-
-    const estimateCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/outfits/outfit-1/try-on/estimate') && init?.method === 'POST');
-    expect(JSON.parse(estimateCall?.[1]?.body as string)).toMatchObject({
-      tryOnMode: 'ClothesOnlyPreview'
+    const tryOnModeSelector = builder.container.querySelector('.tryon-mode-selector') as HTMLElement;
+    // The free "clothes only" job (a Succeeded job with no image) is no longer offered; the
+    // composed figure already is the clothes-only preview.
+    expect(within(tryOnModeSelector).queryByRole('button', { name: /clothes only/i })).not.toBeInTheDocument();
+    // A Free account starts on the only AI mode its plan allows, not on the Premium-gated one.
+    await waitFor(() => {
+      expect(within(tryOnModeSelector).getByRole('button', { name: /single garment/i })).toHaveAttribute('aria-pressed', 'true');
     });
-    expect(JSON.parse(estimateCall?.[1]?.body as string)).not.toHaveProperty('bodyReferencePhotoUrl');
+    expect(within(tryOnModeSelector).getByRole('button', { name: /sequential outfit/i })).toHaveAttribute('aria-pressed', 'false');
 
-    const startCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/outfits/outfit-1/try-on') && init?.method === 'POST');
-    expect(startCall).toBeDefined();
-    expect(JSON.parse(startCall?.[1]?.body as string)).toMatchObject({
-      consentAccepted: false,
-      tryOnMode: 'ClothesOnlyPreview',
-      confirmedCredits: 0,
-      confirmedCacheKey: 'cache-key-free'
+    // Without a body photo the button is disabled and says why instead of staying silent.
+    expect(screen.getByRole('button', { name: /generate preview/i })).toBeDisabled();
+    expect(screen.getByText(/add a body photo above to generate an ai try-on preview/i)).toBeInTheDocument();
+  });
+
+  it('prefers the sequential mode when the plan allows it', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.endsWith('/account/entitlements')) {
+        return jsonResponse({
+          role: 'Premium',
+          garmentCount: 0,
+          outfitCount: 0,
+          bodyReferencePhotoCount: 0,
+          allowedAiModes: ['SingleGarmentTryOn', 'SequentialOutfitTryOn', 'ExperimentalCompositeTryOn'],
+          maxTryOnResolution: '4k',
+          priorityQueue: true,
+          creditBalance: 100,
+          creditsUnlimited: false
+        });
+      }
+
+      return jsonResponse([]);
     });
-    expect(JSON.parse(startCall?.[1]?.body as string)).not.toHaveProperty('bodyReferencePhotoUrl');
+
+    const builder = renderBuilder();
+
+    const tryOnModeSelector = await waitFor(() => builder.container.querySelector('.tryon-mode-selector') as HTMLElement);
+    await waitFor(() => {
+      expect(within(tryOnModeSelector).getByRole('button', { name: /sequential outfit/i })).toHaveAttribute('aria-pressed', 'true');
+    });
+
+    // An explicit choice sticks even though the plan default would be sequential.
+    await userEvent.click(within(tryOnModeSelector).getByRole('button', { name: /single garment/i }));
+    expect(within(tryOnModeSelector).getByRole('button', { name: /single garment/i })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('polls queued try-on jobs until the generated preview is ready', async () => {

@@ -41,8 +41,10 @@ export function AuthPageContent({
   const alternate = mode === 'register'
     ? { to: '/signin', label: 'Sign in' }
     : { to: '/register', label: 'Register' };
-  const googleProvider = providers.find((provider) => provider.id === 'google');
-  const appleProvider = providers.find((provider) => provider.id === 'apple');
+  // Only sign-in providers this server actually has credentials for are offered; a disabled
+  // "Apple" button with no explanation is worse than no button.
+  const externalProviders = providers.filter((provider) => provider.id !== 'email' && provider.configured);
+  const externalProviderNames = externalProviders.map((provider) => provider.label).join(' or ');
 
   return (
     <section className="auth-page">
@@ -117,31 +119,38 @@ export function AuthPageContent({
           {authMutation.error ? <p className="error">{authMutation.error.message}</p> : null}
         </form>
 
-        <p className="auth-terms-notice">
-          By {mode === 'register' ? 'continuing with Google or Apple' : 'signing in'} you agree to the{' '}
-          <Link to="/terms">Terms of Use</Link> and <Link to="/privacy">Privacy Policy</Link>.
-        </p>
+        {mode === 'signin' ? (
+          <Link className="auth-switch-link auth-forgot-link" to="/forgot-password">
+            Forgot your password?
+          </Link>
+        ) : null}
 
-        <div className="external-auth-actions">
-          <button
-            type="button"
-            className="oauth-button"
-            disabled={!googleProvider?.configured}
-            onClick={() => window.location.assign(buildExternalAuthUrl('google', returnUrl))}
-          >
-            <span>G</span>
-            Google
-          </button>
-          <button
-            type="button"
-            className="oauth-button"
-            disabled={!appleProvider?.configured}
-            onClick={() => window.location.assign(buildExternalAuthUrl('apple', returnUrl))}
-          >
-            <span>A</span>
-            Apple
-          </button>
-        </div>
+        {externalProviders.length > 0 ? (
+          <>
+            <p className="auth-terms-notice">
+              By {mode === 'register' ? `continuing with ${externalProviderNames}` : `signing in with ${externalProviderNames}`} you also agree to the{' '}
+              <Link to="/terms">Terms of Use</Link> and <Link to="/privacy">Privacy Policy</Link>.
+            </p>
+
+            <div className="external-auth-actions">
+              {externalProviders.map((provider) => (
+                <button
+                  key={provider.id}
+                  type="button"
+                  className="oauth-button"
+                  onClick={() => window.location.assign(buildExternalAuthUrl(provider.id, returnUrl))}
+                >
+                  <span>{provider.label.charAt(0).toUpperCase()}</span>
+                  {provider.label}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : mode === 'signin' ? (
+          <p className="auth-terms-notice">
+            By signing in you agree to the <Link to="/terms">Terms of Use</Link> and <Link to="/privacy">Privacy Policy</Link>.
+          </p>
+        ) : null}
 
         <Link className="auth-switch-link" to={alternate.to}>
           {alternate.label}

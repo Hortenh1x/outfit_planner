@@ -42,6 +42,9 @@ export interface UploadQueueItem {
   error: string | null;
   uploadedPhoto?: UploadedPhotoResponse | null;
   duplicate?: UploadDuplicateSource | null;
+  // The perceptual-hash check is a heuristic (grayscale, ignores colour): the user can insist
+  // that a flagged photo is a different garment and have it created anyway.
+  addDespiteDuplicate?: boolean;
   previewUrl?: string;
 }
 
@@ -161,9 +164,10 @@ export function hasCreatableItems(items: UploadQueueItem[]): boolean {
   return items.some(isCreatableItem);
 }
 
-// A duplicate photo (of an existing garment or an earlier batch item) must not be created.
+// A duplicate photo (of an existing garment or an earlier batch item) is not created unless the
+// user explicitly overrides the flag.
 export function isCreatableItem(item: UploadQueueItem): boolean {
-  return (item.status === 'processed' || item.status === 'failed') && !item.duplicate;
+  return (item.status === 'processed' || item.status === 'failed') && (!item.duplicate || item.addDespiteDuplicate === true);
 }
 
 /**

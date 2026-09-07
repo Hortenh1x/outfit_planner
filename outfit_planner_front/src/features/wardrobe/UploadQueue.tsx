@@ -16,9 +16,10 @@ interface UploadQueueProps {
   onChangeItem: (itemId: string, updates: UploadQueueItemUpdates) => void;
   onRemove: (itemId: string) => void;
   onRetry: (itemId: string) => void;
+  onOverrideDuplicate?: (itemId: string, addAnyway: boolean) => void;
 }
 
-export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, onRetry }: UploadQueueProps) {
+export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, onRetry, onOverrideDuplicate }: UploadQueueProps) {
   const [textDrafts, setTextDrafts] = useState<Record<string, UploadQueueTextDraft>>(() => createTextDrafts(items));
 
   useEffect(() => {
@@ -35,7 +36,7 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, o
         const textDraft = textDrafts[item.id] ?? textDraftFromItem(item);
 
         return (
-          <article className={`upload-queue-row${item.status === 'invalid' ? ' invalid' : ''}${item.duplicate ? ' duplicate' : ''}`} key={item.id}>
+          <article className={`upload-queue-row${item.status === 'invalid' ? ' invalid' : ''}${item.duplicate && !item.addDespiteDuplicate ? ' duplicate' : ''}`} key={item.id}>
             <UploadQueuePreview item={item} />
             <div className="upload-queue-heading">
               <strong>{item.file.name}</strong>
@@ -89,11 +90,25 @@ export function UploadQueue({ items, disabled = false, onChangeItem, onRemove, o
             </div>
             {item.validationError ? <p className="wardrobe-error" role="alert">{item.validationError}</p> : null}
             {item.duplicate ? (
-              <p className="wardrobe-error" role="alert">
-                {item.duplicate === 'wardrobe'
-                  ? 'This photo is already in your wardrobe, so it won’t be added.'
-                  : 'This photo is already in this upload batch, so it won’t be added.'}
-              </p>
+              <div className={item.addDespiteDuplicate ? 'wardrobe-warning upload-queue-duplicate' : 'wardrobe-error upload-queue-duplicate'} role={item.addDespiteDuplicate ? 'status' : 'alert'}>
+                <span>
+                  {item.addDespiteDuplicate
+                    ? 'Looks like a duplicate, but it will be added anyway.'
+                    : item.duplicate === 'wardrobe'
+                      ? 'This photo looks like a garment already in your wardrobe, so it won’t be added.'
+                      : 'This photo looks like an earlier photo in this batch, so it won’t be added.'}
+                </span>
+                {onOverrideDuplicate ? (
+                  <button
+                    type="button"
+                    className="upload-queue-retry"
+                    disabled={disabled}
+                    onClick={() => onOverrideDuplicate(item.id, !item.addDespiteDuplicate)}
+                  >
+                    {item.addDespiteDuplicate ? 'Skip it' : 'Add anyway'}
+                  </button>
+                ) : null}
+              </div>
             ) : null}
             {item.warnings.length > 0 ? (
               <div className="wardrobe-warning" role="status" aria-label={`Photo warnings for ${item.name}`}>

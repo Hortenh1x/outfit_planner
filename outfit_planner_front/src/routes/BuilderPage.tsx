@@ -1,9 +1,8 @@
-import { type ChangeEvent, useState } from 'react';
-import { useEffect } from 'react';
+import { type ChangeEvent, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Coins, GitBranch, Layers3, Link2, Plus, ScanFace, Sparkles, Trash2, Wand2 } from 'lucide-react';
-import { accountEntitlementsQueryKey, createBodyReferencePhoto, createGarment, createOutfit, deleteBodyReferencePhoto, deleteOutfit, deleteOutfitTryOnPreview, deleteTryOnJobOutput, estimateTryOn, getAccountEntitlements, getTryOnJob, listBodyReferencePhotos, listGarments, listOutfits, shareOutfit, startTryOn, updateOutfit, uploadBodyReferencePhoto, uploadGarmentPhoto } from '../api/client';
+import { Check, Coins, Copy, GitBranch, Layers3, Link2, Plus, ScanFace, Sparkles, Trash2, Wand2, X } from 'lucide-react';
+import { accountEntitlementsQueryKey, createBodyReferencePhoto, createGarment, createOutfit, deleteBodyReferencePhoto, deleteOutfit, deleteOutfitTryOnPreview, deleteTryOnJobOutput, estimateTryOn, getAccountEntitlements, getTryOnJob, listBodyReferencePhotos, listGarments, listOutfits, revokeShare, shareOutfit, startTryOn, updateOutfit, uploadBodyReferencePhoto, uploadGarmentPhoto } from '../api/client';
 import { ModeToggle } from '../components/ModeToggle';
 import { BodyReferenceManager } from '../features/builder/BodyReferenceManager';
 import { garmentNameFromFile } from '../features/builder/garmentName';
@@ -44,6 +43,23 @@ const tryOnJobPollIntervalMs = 1000;
 // hairstyle stays hidden from the product.
 const LIST_CATEGORIES: GarmentCategory[] = ['Top', 'Bottom', 'Dress', 'Outerwear', 'Shoes', 'Bag', 'Accessory'];
 
+// AI generation modes offered in the controls. The free "clothes only" job is not offered any
+// more: it produced a Succeeded job with no image while the composed figure already is the
+// clothes-only preview.
+const AI_TRY_ON_MODES: TryOnMode[] = ['SingleGarmentTryOn', 'SequentialOutfitTryOn', 'ExperimentalCompositeTryOn'];
+const DEFAULT_OUTFIT_NAME = 'Today';
+
+// The richest AI mode a plan allows: Sequential for Premium/Admin, Single garment for Free.
+function preferredTryOnMode(allowedAiModes: TryOnMode[] | undefined): TryOnMode | null {
+  if (!allowedAiModes) {
+    return null;
+  }
+
+  return AI_TRY_ON_MODES.slice().reverse().find((mode) => mode !== 'ExperimentalCompositeTryOn' && allowedAiModes.includes(mode))
+    ?? allowedAiModes.find((mode) => AI_TRY_ON_MODES.includes(mode))
+    ?? null;
+}
+
 export function BuilderPage() {
   const queryClient = useQueryClient();
   const location = useLocation();
@@ -60,13 +76,19 @@ export function BuilderPage() {
   const hairstyles: never[] = [];
   const [composed, setComposed] = useState<ComposedSelection>(EMPTY_COMPOSED_SELECTION);
   const [mode, setMode] = useState<PreviewMode>('clothes');
-  const [outfitName, setOutfitName] = useState('Today');
+  const [outfitName, setOutfitName] = useState(DEFAULT_OUTFIT_NAME);
   const [selectedBodyPhotoId, setSelectedBodyPhotoId] = useState('');
   const [bodyPhotoUploadError, setBodyPhotoUploadError] = useState<string | null>(null);
   const [quickAddGarmentError, setQuickAddGarmentError] = useState<string | null>(null);
-  const [tryOnMode, setTryOnMode] = useState<TryOnMode>('SequentialOutfitTryOn');
+  const [tryOnMode, setTryOnMode] = useState<TryOnMode>('SingleGarmentTryOn');
+  // Once the user picks a mode explicitly, the plan-based default stops following entitlements.
+  const [tryOnModeTouched, setTryOnModeTouched] = useState(false);
   const [pendingEstimate, setPendingEstimate] = useState<TryOnCostEstimate | null>(null);
   const [activeOutfit, setActiveOutfit] = useState<Outfit | null>(null);
+  // Name of the outfit that "Generate preview" saved on the user's behalf, so the save is visible.
+  const [autoSavedOutfitName, setAutoSavedOutfitName] = useState<string | null>(null);
+  const [shareCopied, setShareCopied] = useState(false);
+  const shareLinkInputRef = useRef<HTMLInputElement>(null);
 
   // A quick-build selection handed over from the Wardrobe tab (one garment per category). Applied
   // once, then the router state is cleared so a refresh or back-navigation does not reapply it.
@@ -178,12 +200,20 @@ export function BuilderPage() {
     onError: (error) => setQuickAddGarmentError((error as Error).message)
   });
   const shareMutation = useMutation({ mutationFn: shareOutfit });
+  const revokeShareMutation = useMutation({
+    mutationFn: revokeShare,
+    onSuccess: () => {
+      shareMutation.reset();
+      setShareCopied(false);
+    }
+  });
   const deleteOutfitMutation = useMutation({
     mutationFn: deleteOutfit,
     onSuccess: (_, deletedOutfitId) => {
       if (activeOutfit?.id === deletedOutfitId) {
         setActiveOutfit(null);
         setPendingEstimate(null);
+        setAutoSavedOutfitName(null);
         estimateMutation.reset();
         tryOnMutation.reset();
         shareMutation.reset();
@@ -246,6 +276,34 @@ export function BuilderPage() {
     }
   }, [bodyPhotos, selectedBodyPhotoId]);
 
+  // The plan decides the default mode; a Free account would otherwise start on the Premium-only
+  // sequential mode and hit the upgrade gate on its very first click.
+  const allowedAiModes = entitlementsQuery.data?.allowedAiModes;
+  useEffect(() => {
+    const preferred = preferredTryOnMode(allowedAiModes);
+    if (tryOnModeTouched || preferred === null) {
+      return;
+    }
+
+    setTryOnMode((current) => {
+      if (current === preferred) {
+        return current;
+      }
+
+      setPendingEstimate(null);
+      return preferred;
+    });
+  }, [allowedAiModes, tryOnModeTouched]);
+
+  useEffect(() => {
+    if (latestTryOnJob?.status !== 'Failed') {
+      return;
+    }
+
+    // The refund for a failed job changed the balance shown in the credits chip.
+    void queryClient.invalidateQueries({ queryKey: accountEntitlementsQueryKey });
+  }, [latestTryOnJob?.status, latestTryOnJob?.id, queryClient]);
+
   useEffect(() => {
     if (latestTryOnJob?.status !== 'Succeeded') {
       return;
@@ -266,21 +324,64 @@ export function BuilderPage() {
     }
   }, [latestTryOnJob?.status, latestTryOnJob?.outputImageUrl, queryClient]);
 
+  // Generation needs a saved outfit. An unsaved draft is saved once under the current name (and
+  // the save is announced) — but a saved outfit with exactly this garment set is reused instead
+  // of silently piling up "Today" duplicates in the saved list and the calendar.
   async function ensureOutfit() {
     if (activeOutfit && !activeOutfitHasChanges) {
       return activeOutfit;
     }
 
-    return await saveMutation.mutateAsync();
+    if (!activeOutfit) {
+      const existing = (outfitsQuery.data ?? []).find((outfit) =>
+        sameIds(selectedIds, outfit.items.map((item) => item.garmentId))
+        && (outfitName === DEFAULT_OUTFIT_NAME || outfitName === outfit.name));
+      if (existing) {
+        setActiveOutfit(existing);
+        setOutfitName(existing.name);
+        return existing;
+      }
+    }
+
+    const wasUnsaved = !activeOutfit;
+    const saved = await saveMutation.mutateAsync();
+    if (wasUnsaved) {
+      setAutoSavedOutfitName(saved.name);
+    }
+
+    return saved;
   }
 
   // Any composition change invalidates a pending estimate/preview, mirroring the old slot flow.
   function applyComposedChange(transform: (current: ComposedSelection) => ComposedSelection) {
     setComposed(transform(effectiveComposed));
     setPendingEstimate(null);
+    setAutoSavedOutfitName(null);
     estimateMutation.reset();
     tryOnMutation.reset();
     shareMutation.reset();
+    setShareCopied(false);
+  }
+
+  const shareUrl = shareMutation.data
+    ? new URL(shareMutation.data.url, window.location.origin).toString()
+    : '';
+
+  async function copyShareLink() {
+    if (!shareUrl) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareCopied(true);
+      window.setTimeout(() => setShareCopied(false), 2000);
+    } catch {
+      // Clipboard access can be refused (insecure context, permissions); leave the URL selected
+      // in the field so it can still be copied by hand.
+      shareLinkInputRef.current?.focus();
+      shareLinkInputRef.current?.select();
+    }
   }
 
   function placeGarment(selection: ComposedSelection, garment: GarmentItem): ComposedSelection {
@@ -337,8 +438,12 @@ export function BuilderPage() {
     setComposed(composedSelectionFromOutfit(outfit));
     setOutfitName(outfit.name);
     setPendingEstimate(null);
+    setAutoSavedOutfitName(null);
     estimateMutation.reset();
     tryOnMutation.reset();
+    // A share link belongs to one outfit; it must not linger under the next one.
+    shareMutation.reset();
+    setShareCopied(false);
     setMode(outfit.personPreviewUrl ? 'person' : 'clothes');
   }
 
@@ -488,12 +593,10 @@ export function BuilderPage() {
             onUpload={handleBodyPhotoFileChange}
           />
           <div className="tryon-mode-selector" role="group" aria-label="Try-on mode">
-            {(['ClothesOnlyPreview', 'SingleGarmentTryOn', 'SequentialOutfitTryOn', 'ExperimentalCompositeTryOn'] as TryOnMode[]).map((option) => {
+            {AI_TRY_ON_MODES.map((option) => {
               // Plan-gated AI modes stay clickable: the estimate explains the gate and the
               // upgrade path instead of a silently disabled button.
-              const planGated = option !== 'ClothesOnlyPreview'
-                && entitlementsQuery.data?.allowedAiModes != null
-                && !entitlementsQuery.data.allowedAiModes.includes(option);
+              const planGated = allowedAiModes != null && !allowedAiModes.includes(option);
               return (
                 <button
                   key={option}
@@ -501,6 +604,7 @@ export function BuilderPage() {
                   className={tryOnMode === option ? 'flow-toggle active' : 'flow-toggle'}
                   aria-pressed={tryOnMode === option}
                   onClick={() => {
+                    setTryOnModeTouched(true);
                     setTryOnMode(option);
                     setPendingEstimate(null);
                   }}
@@ -523,7 +627,7 @@ export function BuilderPage() {
           <button
             type="button"
             className="primary-action generate-action"
-            disabled={selectedIds.length === 0 || requiresProfileGender || (requiresBodyReference && !selectedBodyPhoto?.imageUrl) || estimateMutation.isPending}
+            disabled={selectedIds.length === 0 || requiresProfileGender || (requiresBodyReference && !selectedBodyPhoto?.imageUrl) || estimateMutation.isPending || saveMutation.isPending}
             onClick={async () => {
               const outfit = await ensureOutfit();
               const estimate = await estimateMutation.mutateAsync({
@@ -538,6 +642,14 @@ export function BuilderPage() {
             {estimateMutation.isPending ? 'Estimating' : 'Generate preview'}
           </button>
           {requiresProfileGender ? <p className="error">Set gender in account settings before using AI try-on.</p> : null}
+          {!requiresProfileGender && selectedIds.length > 0 && requiresBodyReference && !selectedBodyPhoto?.imageUrl ? (
+            <p className="tryon-hint">Add a body photo above to generate an AI try-on preview.</p>
+          ) : null}
+          {autoSavedOutfitName ? (
+            <p className="tryon-hint" role="status">
+              Saved this look as “{autoSavedOutfitName}” so the preview can be generated. Rename it below if you like.
+            </p>
+          ) : null}
           {pendingEstimate ? (
             <div className="tryon-confirmation">
               <div>
@@ -621,12 +733,42 @@ export function BuilderPage() {
             onClick={() => activeOutfit && shareMutation.mutate(activeOutfit.id)}
           >
             <Link2 size={16} />
-            Share
+            {shareMutation.isPending ? 'Creating link' : 'Share'}
           </button>
+          {!activeOutfit ? (
+            <p className="tryon-hint">Save the outfit to share it.</p>
+          ) : activeOutfitHasChanges ? (
+            <p className="tryon-hint">Save your changes to share this version.</p>
+          ) : null}
           {shareMutation.data ? (
-            <Link className="share-link" to={shareMutation.data.url}>
-              {shareMutation.data.url}
-            </Link>
+            <div className="share-link-block" role="group" aria-label="Share link">
+              <a className="share-link" href={shareUrl} target="_blank" rel="noreferrer">
+                {shareUrl}
+              </a>
+              <input
+                ref={shareLinkInputRef}
+                className="share-link-input"
+                readOnly
+                value={shareUrl}
+                aria-label="Share link URL"
+                onFocus={(event) => event.currentTarget.select()}
+              />
+              <div className="share-link-actions">
+                <button type="button" className="secondary-action" onClick={() => void copyShareLink()}>
+                  {shareCopied ? <Check size={16} /> : <Copy size={16} />}
+                  {shareCopied ? 'Copied' : 'Copy link'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action danger-action"
+                  disabled={revokeShareMutation.isPending}
+                  onClick={() => revokeShareMutation.mutate(shareMutation.data.token)}
+                >
+                  <X size={16} />
+                  {revokeShareMutation.isPending ? 'Revoking' : 'Revoke link'}
+                </button>
+              </div>
+            </div>
           ) : null}
           <div className="builder-save-block">
             <label>
@@ -636,9 +778,11 @@ export function BuilderPage() {
                 onChange={(event) => {
                   setOutfitName(event.target.value);
                   setPendingEstimate(null);
+                  setAutoSavedOutfitName(null);
                   estimateMutation.reset();
                   tryOnMutation.reset();
                   shareMutation.reset();
+                  setShareCopied(false);
                 }}
               />
             </label>
@@ -663,7 +807,7 @@ export function BuilderPage() {
               {deleteOutfitMutation.isPending ? 'Deleting outfit' : 'Delete outfit'}
             </button>
           ) : null}
-          {[quickAddGarmentError ? new Error(quickAddGarmentError) : null, bodyPhotoUploadError ? new Error(bodyPhotoUploadError) : null, saveMutation.error, estimateMutation.error, tryOnMutation.error, shareMutation.error, deleteBodyPhotoMutation.error, deleteOutfitMutation.error, deletePreviewMutation.error, tryOnJobQuery.error].filter(Boolean).map((error) => (
+          {[quickAddGarmentError ? new Error(quickAddGarmentError) : null, bodyPhotoUploadError ? new Error(bodyPhotoUploadError) : null, saveMutation.error, estimateMutation.error, tryOnMutation.error, shareMutation.error, revokeShareMutation.error, deleteBodyPhotoMutation.error, deleteOutfitMutation.error, deletePreviewMutation.error, tryOnJobQuery.error].filter(Boolean).map((error) => (
             <p className="error" key={(error as Error).message}>
               {(error as Error).message}
             </p>

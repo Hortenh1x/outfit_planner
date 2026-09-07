@@ -43,6 +43,18 @@ services:
       # Public origin for OAuth redirect URIs + absolute signed URLs (from .env). Empty = OAuth off.
       Authentication__PublicOrigin: ${PUBLIC_ORIGIN:-}
       PublicOrigin: ${PUBLIC_ORIGIN:-}
+      # Password reset emails: SMTP activates when SMTP_HOST is present in .env (STARTTLS on 587).
+      Email__Provider: ${EMAIL_PROVIDER:-Auto}
+      Email__Smtp__Host: ${SMTP_HOST:-}
+      Email__Smtp__Port: ${SMTP_PORT:-587}
+      Email__Smtp__Username: ${SMTP_USERNAME:-}
+      Email__Smtp__Password: ${SMTP_PASSWORD:-}
+      Email__Smtp__UseStartTls: ${SMTP_USE_STARTTLS:-true}
+      Email__FromAddress: ${EMAIL_FROM_ADDRESS:-}
+      Email__FromName: ${EMAIL_FROM_NAME:-Outfit Planner}
+      # Role pins: the owner admin pin is built into the API; premium pins come only from .env.
+      Roles__PinnedAdminEmails: ${ROLES_PINNED_ADMIN_EMAILS:-}
+      Roles__PinnedPremiumEmails: ${ROLES_PINNED_PREMIUM_EMAILS:-}
       # Stage-4 billing: Stripe activates when STRIPE_SECRET_KEY is present in .env;
       # blank values keep billing softly disabled (the app works unchanged).
       Billing__Provider: ${BILLING_PROVIDER:-Auto}

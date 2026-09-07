@@ -2,8 +2,8 @@ import { type ChangeEvent, type PointerEvent, type RefObject, useEffect, useRef,
 import { createPortal } from 'react-dom';
 import { Link, NavLink, Outlet } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarDays, Camera, Check, Info, LogOut, ShieldCheck, Shirt, Sparkles, Upload, UserRound, Wand2, X } from 'lucide-react';
-import { billingStatusQueryKey, getAuthProviders, getBillingStatus, logout, openBillingPortal, updateAccountProfile, uploadAccountAvatar, type AuthUser, type UserGender } from '../api/client';
+import { CalendarDays, Camera, Check, Download, Info, LogOut, ShieldCheck, Shirt, Sparkles, Trash2, Upload, UserRound, Wand2, X } from 'lucide-react';
+import { billingStatusQueryKey, deleteAccount, exportAccount, getAuthProviders, getBillingStatus, listSessions, logout, openBillingPortal, revokeAllSessions, updateAccountProfile, uploadAccountAvatar, type AuthUser, type UserGender } from '../api/client';
 import { redirectToCheckout } from '../features/billing/checkoutRedirect';
 import { ThemeToggle, type ThemeMode } from '../components/ThemeToggle';
 import { authSessionQueryKey, useAuthSession } from '../features/auth/authQueries';
@@ -41,7 +41,6 @@ export function AppShell() {
 
   return (
     <div className="editorial-shell" data-theme={theme} ref={shellRef}>
-      <DemoNotice />
       <aside className="editorial-sidebar">
         <Link to="/builder" className="editorial-brand">
           <span className="editorial-brand-mark" aria-hidden="true">
@@ -59,6 +58,7 @@ export function AppShell() {
         </div>
       </aside>
       <main className="editorial-main-panel">
+        <DemoNotice />
         <Outlet context={{ providers: authProvidersQuery.data ?? [] }} />
       </main>
       <PrimaryNavigation compact />
@@ -112,22 +112,39 @@ function AccountPanel({
   const [isOpen, setIsOpen] = useState(false);
   const [isAvatarPreviewOpen, setIsAvatarPreviewOpen] = useState(false);
   const [isSignOutConfirmOpen, setIsSignOutConfirmOpen] = useState(false);
+  const [isSignOutEverywhereConfirmOpen, setIsSignOutEverywhereConfirmOpen] = useState(false);
+  const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [username, setUsername] = useState('');
   const [gender, setGender] = useState<UserGender | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressTriggeredRef = useRef(false);
+  // Signing out drops every cached query: the next account must not glimpse this one's wardrobe.
+  const forgetSession = () => {
+    queryClient.clear();
+    queryClient.setQueryData(authSessionQueryKey, null);
+  };
   const logoutMutation = useMutation({
     mutationFn: logout,
-    onSuccess: () => {
-      queryClient.setQueryData(authSessionQueryKey, null);
-      void queryClient.invalidateQueries();
-    }
+    onSuccess: forgetSession
+  });
+  const revokeSessionsMutation = useMutation({
+    mutationFn: revokeAllSessions,
+    onSuccess: forgetSession
+  });
+  const deleteAccountMutation = useMutation({
+    mutationFn: deleteAccount,
+    onSuccess: forgetSession
   });
   const profileMutation = useMutation({
     mutationFn: updateAccountProfile,
     onSuccess: (session) => {
       queryClient.setQueryData(authSessionQueryKey, session);
+      // Closing is the confirmation: the sidebar card shows the saved name right away.
+      setIsOpen(false);
     }
   });
   const avatarMutation = useMutation({
@@ -147,6 +164,13 @@ function AccountPanel({
     mutationFn: openBillingPortal,
     onSuccess: ({ url }) => redirectToCheckout(url)
   });
+  const sessionsQuery = useQuery({
+    queryKey: ['auth-sessions'],
+    queryFn: listSessions,
+    enabled: isOpen && Boolean(user),
+    retry: 1
+  });
+  const activeSessionCount = (Array.isArray(sessionsQuery.data) ? sessionsQuery.data : []).filter((session) => !session.revokedAt).length;
 
   useEffect(() => {
     if (!user || !isOpen) {
@@ -165,6 +189,8 @@ function AccountPanel({
     const avatarError = avatarMutation.error instanceof Error ? avatarMutation.error.message : null;
     const logoutError = logoutMutation.error instanceof Error ? logoutMutation.error.message : null;
     const portalError = portalMutation.error instanceof Error ? portalMutation.error.message : null;
+    const revokeError = revokeSessionsMutation.error instanceof Error ? revokeSessionsMutation.error.message : null;
+    const deleteError = deleteAccountMutation.error instanceof Error ? deleteAccountMutation.error.message : null;
 
     return (
       <section className="editorial-account" aria-label="Account">
@@ -180,6 +206,8 @@ function AccountPanel({
             if (event.target === event.currentTarget) {
               setIsOpen(false);
               setIsSignOutConfirmOpen(false);
+              setIsSignOutEverywhereConfirmOpen(false);
+              setIsDeleteConfirmOpen(false);
               setIsAvatarPreviewOpen(false);
             }
           }}>
@@ -265,7 +293,37 @@ function AccountPanel({
                 <Info size={16} />
                 <span>Info</span>
               </Link>
-              {[profileError, avatarError, logoutError, portalError].filter((message): message is string => Boolean(message)).map((message) => (
+              <div className="account-field">
+                <span>Your data</span>
+                <div className="account-data-actions">
+                  <button type="button" className="secondary-action" disabled={isExporting} onClick={() => void exportData()}>
+                    <Download size={16} />
+                    {isExporting ? 'Preparing export' : 'Download my data'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    disabled={revokeSessionsMutation.isPending}
+                    onClick={() => setIsSignOutEverywhereConfirmOpen(true)}
+                  >
+                    <LogOut size={16} />
+                    {activeSessionCount > 1 ? `Sign out everywhere (${activeSessionCount})` : 'Sign out everywhere'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-action danger-action"
+                    disabled={deleteAccountMutation.isPending}
+                    onClick={() => {
+                      setDeleteConfirmText('');
+                      setIsDeleteConfirmOpen(true);
+                    }}
+                  >
+                    <Trash2 size={16} />
+                    Delete account
+                  </button>
+                </div>
+              </div>
+              {[profileError, avatarError, logoutError, portalError, exportError, revokeError, deleteError].filter((message): message is string => Boolean(message)).map((message) => (
                 <p className="account-error" key={message}>{message}</p>
               ))}
               <div className="account-dialog-actions">
@@ -297,6 +355,53 @@ function AccountPanel({
                   <button type="button" aria-label="Close avatar preview" onClick={() => setIsAvatarPreviewOpen(false)}>
                     {largeAvatar}
                   </button>
+                </div>
+              ) : null}
+              {isSignOutEverywhereConfirmOpen ? (
+                <div className="account-confirm" role="dialog" aria-modal="true" aria-label="Confirm sign out everywhere">
+                  <div>
+                    <strong>Sign out on every device?</strong>
+                    <p>
+                      {activeSessionCount > 1
+                        ? `All ${activeSessionCount} active sessions, including this one, will be closed.`
+                        : 'Every active session, including this one, will be closed.'}
+                    </p>
+                  </div>
+                  <div>
+                    <button type="button" className="secondary-action" onClick={() => setIsSignOutEverywhereConfirmOpen(false)}>Cancel</button>
+                    <button type="button" className="primary-action danger-solid" disabled={revokeSessionsMutation.isPending} onClick={() => revokeSessionsMutation.mutate()}>
+                      {revokeSessionsMutation.isPending ? 'Signing out' : 'Sign out everywhere'}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {isDeleteConfirmOpen ? (
+                <div className="account-confirm" role="dialog" aria-modal="true" aria-label="Confirm account deletion">
+                  <div>
+                    <strong>Delete your account?</strong>
+                    <p>
+                      This permanently removes your garments, outfits, calendar, body photos and generated previews.
+                      It cannot be undone. Type DELETE to confirm.
+                    </p>
+                    <input
+                      className="account-confirm-input"
+                      aria-label="Type DELETE to confirm"
+                      autoComplete="off"
+                      value={deleteConfirmText}
+                      onChange={(event) => setDeleteConfirmText(event.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <button type="button" className="secondary-action" onClick={() => setIsDeleteConfirmOpen(false)}>Cancel</button>
+                    <button
+                      type="button"
+                      className="primary-action danger-solid"
+                      disabled={deleteConfirmText.trim() !== 'DELETE' || deleteAccountMutation.isPending}
+                      onClick={() => deleteAccountMutation.mutate()}
+                    >
+                      {deleteAccountMutation.isPending ? 'Deleting' : 'Delete account'}
+                    </button>
+                  </div>
                 </div>
               ) : null}
               {isSignOutConfirmOpen ? (
@@ -353,6 +458,26 @@ function AccountPanel({
     if (longPressTimerRef.current !== null) {
       window.clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
+    }
+  }
+
+  // The same sanitized export the API offers at GET /api/account/export, saved as a JSON file.
+  async function exportData() {
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      const data = await exportAccount();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = 'outfit-planner-account-export.json';
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsExporting(false);
     }
   }
 

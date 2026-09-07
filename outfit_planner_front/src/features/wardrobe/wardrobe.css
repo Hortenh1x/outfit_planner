@@ -488,6 +488,7 @@
 
 .wardrobe-rail,
 .wardrobe-rail-form {
+  align-content: start;
   background: var(--editorial-panel);
   display: grid;
   gap: 14px;
@@ -520,6 +521,14 @@
   line-height: 1.45;
   margin: 0;
   padding: 12px;
+}
+
+.upload-queue-duplicate {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
 }
 
 .wardrobe-upload-defaults {

@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import { ApiError, getSharedOutfit } from '../api/client';
 import { ComposedOutfitFigure, composedPiecesFromOutfitItems, defaultFigureWidth } from '../features/outfits/ComposedOutfitFigure';
-import { EmptyPreview } from '../shared/ui/EmptyPreview';
 import { PageHeader } from '../shared/ui/PageHeader';
 import { AiGeneratedBadge } from '../shared/ui/AiGeneratedBadge';
 
@@ -67,7 +66,7 @@ export function SharePage() {
             />
           </div>
         ) : (
-          <EmptyPreview />
+          <p className="status">This outfit has no pieces yet.</p>
         )}
         {outfit.personPreviewUrl ? (
           <div className="person-preview">

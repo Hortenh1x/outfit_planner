@@ -23,6 +23,9 @@ const PREMIUM_FEATURES = [
   'Priority position in the try-on queue'
 ];
 
+const CHECKOUT_POLL_INTERVAL_MS = 5_000;
+const CHECKOUT_POLL_WINDOW_MS = 120_000;
+
 export function UpgradePage() {
   const queryClient = useQueryClient();
   const sessionQuery = useAuthSession();
@@ -32,16 +35,40 @@ export function UpgradePage() {
 
   const billingQuery = useQuery({ queryKey: billingStatusQueryKey, queryFn: getBillingStatus, retry: 1 });
 
-  // Returning from Stripe: the webhook lands within seconds, so refetch the session,
-  // entitlements, and billing state once instead of trusting the redirect alone.
+  // Returning from Stripe: the webhook usually lands within seconds, but not always before
+  // this page mounts. Refetch the session, entitlements and billing state right away and keep
+  // polling for a couple of minutes until the plan actually reads as Premium.
+  const roleAfterCheckout = sessionQuery.data?.user.role;
   useEffect(() => {
-    if (checkoutResult === 'success' && !refreshedAfterCheckoutRef.current) {
-      refreshedAfterCheckoutRef.current = true;
+    if (checkoutResult !== 'success') {
+      return;
+    }
+
+    const refresh = () => {
       void queryClient.invalidateQueries({ queryKey: authSessionQueryKey });
       void queryClient.invalidateQueries({ queryKey: accountEntitlementsQueryKey });
       void queryClient.invalidateQueries({ queryKey: billingStatusQueryKey });
+    };
+    if (!refreshedAfterCheckoutRef.current) {
+      refreshedAfterCheckoutRef.current = true;
+      refresh();
     }
-  }, [checkoutResult, queryClient]);
+
+    if (roleAfterCheckout !== 'Free') {
+      return;
+    }
+
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      if (Date.now() - startedAt > CHECKOUT_POLL_WINDOW_MS) {
+        window.clearInterval(timer);
+        return;
+      }
+
+      refresh();
+    }, CHECKOUT_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [checkoutResult, queryClient, roleAfterCheckout]);
 
   const checkoutMutation = useMutation({
     mutationFn: startSubscriptionCheckout,
@@ -71,7 +98,7 @@ export function UpgradePage() {
 
       {checkoutResult === 'success' ? (
         <p className="upgrade-checkout-notice" role="status">
-          Payment received. Your plan updates within a few seconds — this page refreshes automatically.
+          Payment received. Your plan updates as soon as Stripe confirms it — this page keeps checking for a couple of minutes.
         </p>
       ) : null}
       {checkoutResult === 'cancelled' ? (
