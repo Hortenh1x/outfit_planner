@@ -57,6 +57,25 @@ public sealed class TryOnCostEstimator
         GarmentCategory.Outerwear
     };
 
+    // Single garment mode sends exactly one body garment to AI. The Builder always dresses a top
+    // and a bottom, so an outfit usually wears several body garments; the most defining piece is
+    // chosen (a dress is the whole look, then the top) instead of refusing the only AI mode the
+    // Free plan allows. The other body garments stay as drawn on the composed figure.
+    private static readonly GarmentCategory[] SingleGarmentPriority =
+    {
+        GarmentCategory.Dress,
+        GarmentCategory.Top,
+        GarmentCategory.Outerwear,
+        GarmentCategory.Bottom
+    };
+
+    public static OutfitItem? PrimaryBodyGarment(IReadOnlyList<OutfitItem> bodyItems)
+    {
+        return SingleGarmentPriority
+            .Select(category => bodyItems.FirstOrDefault(item => item.Category == category))
+            .FirstOrDefault(item => item is not null);
+    }
+
     public TryOnCostEstimate Estimate(Outfit outfit, TryOnEstimateInput input)
     {
         var bodyItems = outfit.Items.Where(item => BodyTryOnCategories.Contains(item.Category)).ToList();
@@ -66,13 +85,23 @@ public sealed class TryOnCostEstimator
         var excluded = outfit.Items
             .Where(item => !included.Any(includedItem => includedItem.GarmentId == item.GarmentId))
             .ToList();
+        // The body garments that actually reach the provider: all of them for sequential and
+        // composite runs, only the primary one for single garment runs.
+        var aiBodyItems = input.Mode == TryOnMode.SingleGarmentTryOn
+            ? included.Where(item => BodyTryOnCategories.Contains(item.Category)).ToList()
+            : bodyItems;
         var isAvailable = true;
         var summary = "Ready to estimate try-on generation.";
 
-        if (input.Mode == TryOnMode.SingleGarmentTryOn && bodyItems.Count != 1)
+        if (input.Mode == TryOnMode.SingleGarmentTryOn && bodyItems.Count > 1 && aiBodyItems.Count == 1)
         {
-            isAvailable = false;
-            summary = "Single garment try-on requires exactly one body garment.";
+            var primary = aiBodyItems[0];
+            var others = bodyItems
+                .Where(item => item.GarmentId != primary.GarmentId)
+                .Select(item => item.Name)
+                .ToList();
+            summary = $"Single garment try-on will send {primary.Name} to AI.";
+            warnings.Add($"Single garment mode sends only {primary.Name} to AI; {string.Join(", ", others)} stay{(others.Count == 1 ? "s" : string.Empty)} as drawn on the figure. Use Sequential outfit to try on every body garment.");
         }
 
         if (input.Mode is TryOnMode.SingleGarmentTryOn or TryOnMode.SequentialOutfitTryOn && bodyItems.Count == 0)
@@ -111,7 +140,7 @@ public sealed class TryOnCostEstimator
         return new TryOnCostEstimate(
             input.Mode,
             input.ProviderName,
-            bodyItems,
+            aiBodyItems,
             visualItems,
             included.Select(item => item.GarmentId).OrderBy(id => id).ToArray(),
             excluded.Select(item => item.GarmentId).OrderBy(id => id).ToArray(),
@@ -142,7 +171,7 @@ public sealed class TryOnCostEstimator
         return mode switch
         {
             TryOnMode.ClothesOnlyPreview => Array.Empty<OutfitItem>(),
-            TryOnMode.SingleGarmentTryOn => bodyItems.Count == 1 ? bodyItems : Array.Empty<OutfitItem>(),
+            TryOnMode.SingleGarmentTryOn => PrimaryBodyGarment(bodyItems) is { } primary ? new[] { primary } : Array.Empty<OutfitItem>(),
             TryOnMode.SequentialOutfitTryOn => bodyItems,
             TryOnMode.ExperimentalCompositeTryOn => bodyItems.Concat(visualItems).ToList(),
             _ => throw new ValidationException($"Unsupported try-on mode {mode}.")

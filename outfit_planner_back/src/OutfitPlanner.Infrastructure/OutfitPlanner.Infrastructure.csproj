@@ -13,4 +13,8 @@
     <PackageReference Include="Stripe.net" Version="52.1.0" />
     <ProjectReference Include="..\OutfitPlanner.Application\OutfitPlanner.Application.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Assets/mock-try-on-preview.png" LogicalName="OutfitPlanner.Infrastructure.Assets.mock-try-on-preview.png" />
+  </ItemGroup>
+
 </Project>

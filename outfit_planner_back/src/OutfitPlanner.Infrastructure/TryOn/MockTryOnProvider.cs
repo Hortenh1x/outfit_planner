@@ -20,10 +20,16 @@ public sealed class MockTryOnProvider : ITryOnProvider
             TryOnMode.ExperimentalCompositeTryOn
         });
 
+    // The mock never calls an AI service. Its output is a `mock:` URL that TryOnOutputStorage
+    // turns into a real placeholder image in app-owned object storage, so the Builder, cards,
+    // dialog and share page render an actual picture (labelled as a mock) instead of a broken
+    // <img> pointing at a path nothing serves.
+    public const string OutputScheme = "mock";
+
     public TryOnGeneration Generate(TryOnProviderRequest request)
     {
         var providerJobId = $"mock_{Guid.NewGuid():N}";
         var encodedMode = Uri.EscapeDataString(request.Mode.ToString().ToLowerInvariant());
-        return new TryOnGeneration(providerJobId, $"/generated/try-on/{request.OutfitId:N}-{encodedMode}.png");
+        return new TryOnGeneration(providerJobId, $"{OutputScheme}://try-on/{request.OutfitId:N}-{encodedMode}.png");
     }
 }

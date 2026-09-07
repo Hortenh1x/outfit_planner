@@ -17,8 +17,9 @@ public sealed class WardrobeService
     private readonly IBackgroundRemovalJobQueue? _removalQueue;
     private readonly IBackgroundRemovalJobRepository? _removalJobs;
     private readonly EntitlementService? _entitlements;
+    private readonly IOutfitRepository? _outfits;
 
-    public WardrobeService(IBodyReferencePhotoRepository bodyPhotos, IGarmentRepository garments, IClock clock, IStoredPhotoDeletion? photoDeletion = null, IGarmentImageRotator? imageRotator = null, IBackgroundRemovalJobQueue? removalQueue = null, IBackgroundRemovalJobRepository? removalJobs = null, EntitlementService? entitlements = null)
+    public WardrobeService(IBodyReferencePhotoRepository bodyPhotos, IGarmentRepository garments, IClock clock, IStoredPhotoDeletion? photoDeletion = null, IGarmentImageRotator? imageRotator = null, IBackgroundRemovalJobQueue? removalQueue = null, IBackgroundRemovalJobRepository? removalJobs = null, EntitlementService? entitlements = null, IOutfitRepository? outfits = null)
     {
         _bodyPhotos = bodyPhotos;
         _garments = garments;
@@ -28,6 +29,7 @@ public sealed class WardrobeService
         _removalQueue = removalQueue;
         _removalJobs = removalJobs;
         _entitlements = entitlements;
+        _outfits = outfits;
     }
 
     public BodyReferencePhoto CreateBodyReferencePhoto(string userId, string imageUrl)
@@ -223,7 +225,13 @@ public sealed class WardrobeService
     {
         var normalizedUserId = InputGuard.NormalizeUserId(userId);
         var garment = _garments.GetGarmentByUser(normalizedUserId, garmentId);
-        if (garment is null || !_garments.DeleteGarmentByUser(normalizedUserId, garmentId))
+        if (garment is null)
+        {
+            return false;
+        }
+
+        DetachGarmentFromOutfits(normalizedUserId, garmentId);
+        if (!_garments.DeleteGarmentByUser(normalizedUserId, garmentId))
         {
             return false;
         }
@@ -235,6 +243,32 @@ public sealed class WardrobeService
         }
 
         return true;
+    }
+
+    // Saved outfits that wore the garment lose that piece explicitly and drop their generated
+    // try-on preview, which showed a garment set that no longer exists. Postgres would cascade
+    // the item row on its own while the in-memory/file stores kept a dangling reference (a card
+    // with a broken thumbnail); doing it here keeps every store consistent and the preview honest.
+    private void DetachGarmentFromOutfits(string userId, Guid garmentId)
+    {
+        if (_outfits is null)
+        {
+            return;
+        }
+
+        foreach (var outfit in _outfits.ListOutfitsByUser(userId))
+        {
+            if (outfit.Items.All(item => item.GarmentId != garmentId))
+            {
+                continue;
+            }
+
+            _outfits.UpdateOutfit(outfit with
+            {
+                Items = outfit.Items.Where(item => item.GarmentId != garmentId).ToList(),
+                PersonPreviewUrl = null
+            });
+        }
     }
 
     // Deletes every stored garment and body-reference object (all variants) for a user. Used by

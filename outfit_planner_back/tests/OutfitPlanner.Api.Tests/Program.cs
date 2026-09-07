@@ -178,7 +178,17 @@ var tests = new List<(string Name, Action Test)>
     ("fashn provider omits prompt when no template configured", TestFashnProviderOmitsPromptWhenNoTemplateConfigured),
     ("fashn provider submits try-on request and polls status", TestFashnProviderSubmitsRequestAndPollsStatus),
     ("fashn provider rejects multi-garment outfits when sequential flow is off", TestFashnProviderRejectsMultiGarmentOutfitsWhenSequentialOff),
-    ("fashn provider runs multi-garment outfits sequentially when enabled", TestFashnProviderRunsSequentialMultiGarmentOutfits)
+    ("fashn provider runs multi-garment outfits sequentially when enabled", TestFashnProviderRunsSequentialMultiGarmentOutfits),
+    ("single garment try-on picks the primary body garment instead of failing", TestSingleGarmentTryOnPicksThePrimaryBodyGarment),
+    ("single garment priority prefers dress then top then outerwear then bottom", TestSingleGarmentPriorityOrder),
+    ("provider failures are stored as a neutral user message with detail for the log", TestProviderFailuresAreSanitizedForUsers),
+    ("deleting a garment detaches it from saved outfits and clears their preview", TestDeletingGarmentDetachesItFromSavedOutfits),
+    ("deleting an outfit removes its generated renders from storage", TestDeletingOutfitRemovesGeneratedRenders),
+    ("mock try-on output becomes a stored placeholder image", TestMockTryOnOutputBecomesAStoredPlaceholderImage),
+    ("api runs the expired session cleanup worker", TestApiRunsExpiredSessionCleanupWorker),
+    ("password reset email carries a single-use link and the expiry", TestPasswordResetEmailContent),
+    ("email senders report whether delivery is configured", TestEmailSendersReportConfiguration),
+    ("api wires password reset email delivery and its availability endpoint", TestApiWiresPasswordResetEmail)
 };
 
 var failures = 0;
@@ -851,7 +861,7 @@ static void TestAuthServiceSessionHardening()
 
 static RolePinningPolicy TestRolePinning()
 {
-    // Mirrors the production defaults: the two accounts whose roles are pinned by email.
+    // Mirrors production: the owner pin is built in, premium pins come from configuration.
     return new RolePinningPolicy(new RolePinningOptions(
         new[] { "dmytro.bolibok@gmail.com" },
         new[] { "premium.pinned@example.test" }));
@@ -992,7 +1002,7 @@ static void TestPostgresSchemaContainsAccountRoles()
     var migrationPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "database", "migrations", "011_account_roles.sql"));
     var migration = File.ReadAllText(migrationPath);
     AssertTrue(migration.Contains("dmytro.bolibok@gmail.com", StringComparison.OrdinalIgnoreCase), "migration should backfill the pinned admin account role.");
-    AssertTrue(migration.Contains("premium.pinned@example.test", StringComparison.OrdinalIgnoreCase), "migration should backfill the pinned premium account role.");
+    AssertTrue(!migration.Contains("role = 'Premium'", StringComparison.OrdinalIgnoreCase), "premium pins are configuration-only and must not be hardcoded in the migration.");
 }
 
 static void TestApiExposesAdminEndpoints()
@@ -2061,13 +2071,17 @@ static void TestTryOnCostEstimatorMarksUnavailableModes()
         "settings-a",
         hasCachedResult: false));
 
-    AssertTrue(!single.IsAvailable, "single mode should reject multiple body try-on items.");
-    AssertTrue(single.Summary.Contains("one body garment", StringComparison.OrdinalIgnoreCase), "single mode should explain the shape issue.");
-    AssertEqual(0, single.IncludedGarmentIds.Count, "invalid single mode should not include multiple body try-on items.");
+    // Several body garments no longer make single mode unavailable: the primary piece (the
+    // top here) is sent and the rest is reported as excluded, so the cache key covers only it.
+    AssertTrue(single.IsAvailable, "single mode should stay available with several body try-on items.");
+    AssertTrue(single.Summary.Contains("white tee", StringComparison.OrdinalIgnoreCase), "single mode should name the garment it sends.");
+    AssertEqual(1, single.IncludedGarmentIds.Count, "single mode should include exactly the primary body garment.");
+    AssertEqual(outfit.Items[0].GarmentId, single.IncludedGarmentIds[0], "the top should be the primary body garment.");
+    AssertEqual(2, single.ExcludedGarmentIds.Count, "the bottom and the bag should be excluded from the single run.");
     AssertEqual(
-        TryOnCostEstimator.BuildCacheKey("body:body-1", Array.Empty<Guid>(), "FashnTryOnProvider", TryOnMode.SingleGarmentTryOn, "settings-a"),
+        TryOnCostEstimator.BuildCacheKey("body:body-1", new[] { outfit.Items[0].GarmentId }, "FashnTryOnProvider", TryOnMode.SingleGarmentTryOn, "settings-a"),
         single.CacheKey,
-        "invalid single mode cache key should not be based on multiple garments.");
+        "single mode cache key should be based on the primary garment only.");
     AssertTrue(!visualOnlySingle.IsAvailable, "single paid mode should reject visual-only outfits.");
     AssertEqual(0, visualOnlySingle.IncludedGarmentIds.Count, "visual-only single mode should not include garments.");
     AssertTrue(visualOnlySingle.Warnings.Any(warning => warning.Contains("ClothesOnlyPreview", StringComparison.Ordinal)), "visual-only single estimate should recommend clothes-only mode.");
@@ -3928,6 +3942,195 @@ static void TestFashnProviderRunsSequentialMultiGarmentOutfits()
     AssertEqual("https://app.test/jeans.png", secondRun.RootElement.GetProperty("inputs").GetProperty("garment_image").GetString(), "second run should use the bottom garment");
 }
 
+static void TestSingleGarmentTryOnPicksThePrimaryBodyGarment()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-single";
+    var top = store.CreateGarment(CreateGarment(userId, "linen shirt", GarmentCategory.Top));
+    var bottom = store.CreateGarment(CreateGarment(userId, "jeans", GarmentCategory.Bottom));
+    var shoes = store.CreateGarment(CreateGarment(userId, "loafers", GarmentCategory.Shoes));
+    var outfit = new OutfitService(store, store, new SystemClock()).CreateOutfit(userId, "everyday", new[] { top.Id, bottom.Id, shoes.Id });
+    var provider = new CountingTryOnProvider();
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), provider, new TryOnCostEstimator(), new SystemClock());
+
+    // The Builder always dresses a top and a bottom, so the only AI mode the Free plan allows
+    // must keep working with several body garments instead of demanding "exactly one".
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/person.jpg", null);
+    AssertTrue(estimate.IsAvailable, "single garment try-on should stay available when the outfit wears a top and a bottom.");
+    AssertEqual(1, estimate.BodyTryOnItems.Count, "single garment mode should send exactly one body garment to AI.");
+    AssertEqual(top.Id, estimate.BodyTryOnItems[0].GarmentId, "the top should be preferred over the bottom.");
+    AssertEqual(1, estimate.IncludedGarmentIds.Count, "only the primary garment should be included in the run.");
+    AssertTrue(estimate.ExcludedGarmentIds.Contains(bottom.Id), "the bottom should be reported as excluded from the run.");
+    AssertTrue(estimate.Warnings.Any(warning => warning.Contains("linen shirt") && warning.Contains("jeans")), "the estimate should say which garment goes to AI and which stays as drawn.");
+    AssertTrue(estimate.Summary.Contains("linen shirt"), "the summary should name the garment sent to AI.");
+
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, estimate.EstimatedCredits, estimate.CacheKey)
+        .GetAwaiter().GetResult();
+    service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
+    AssertEqual(TryOnStatus.Succeeded, service.GetJob(userId, job.Id)?.Status, "the single garment job should complete.");
+    AssertEqual(1, provider.LastRequest?.BodyTryOnItems.Count, "the provider should receive only the primary garment.");
+    AssertEqual(top.Id, provider.LastRequest?.BodyTryOnItems[0].GarmentId, "the provider should receive the top, not the bottom.");
+
+    // With a single body garment nothing changes: no warning about excluded pieces.
+    var plainOutfit = new OutfitService(store, store, new SystemClock()).CreateOutfit(userId, "plain", new[] { bottom.Id, shoes.Id });
+    var plainEstimate = service.Estimate(userId, plainOutfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/person.jpg", null);
+    AssertTrue(plainEstimate.IsAvailable, "a single body garment should still be available.");
+    AssertEqual(bottom.Id, plainEstimate.BodyTryOnItems[0].GarmentId, "the only body garment should be sent.");
+    AssertTrue(!plainEstimate.Warnings.Any(warning => warning.Contains("stay")), "no exclusion warning should appear for a single body garment.");
+}
+
+static void TestSingleGarmentPriorityOrder()
+{
+    static OutfitItem Item(GarmentCategory category, string name)
+        => new(Guid.NewGuid(), name, category, GarmentRules.GetBodyZone(category), "https://cdn.test/thumb.png");
+
+    AssertEqual("dress", TryOnCostEstimator.PrimaryBodyGarment(new[] { Item(GarmentCategory.Top, "top"), Item(GarmentCategory.Dress, "dress") })?.Name, "a dress is the whole look and wins over a top.");
+    AssertEqual("top", TryOnCostEstimator.PrimaryBodyGarment(new[] { Item(GarmentCategory.Bottom, "bottom"), Item(GarmentCategory.Outerwear, "coat"), Item(GarmentCategory.Top, "top") })?.Name, "a top wins over outerwear and bottoms.");
+    AssertEqual("coat", TryOnCostEstimator.PrimaryBodyGarment(new[] { Item(GarmentCategory.Bottom, "bottom"), Item(GarmentCategory.Outerwear, "coat") })?.Name, "outerwear wins over a bottom.");
+    AssertTrue(TryOnCostEstimator.PrimaryBodyGarment(Array.Empty<OutfitItem>()) is null, "no body garment means nothing to send.");
+}
+
+static void TestProviderFailuresAreSanitizedForUsers()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-fail";
+    var top = store.CreateGarment(CreateGarment(userId, "tee", GarmentCategory.Top));
+    var outfit = new OutfitService(store, store, new SystemClock()).CreateOutfit(userId, "casual", new[] { top.Id });
+    var service = new TryOnService(store, store, store, new RecordingTryOnJobQueue(), new ThrowingTryOnProvider(), new TryOnCostEstimator(), new SystemClock());
+    var estimate = service.Estimate(userId, outfit.Id, TryOnMode.SingleGarmentTryOn, "https://example.com/person.jpg", null);
+    var job = service.StartAsync(userId, outfit.Id, "https://example.com/person.jpg", consentAccepted: true, TryOnMode.SingleGarmentTryOn, estimate.EstimatedCredits, estimate.CacheKey)
+        .GetAwaiter().GetResult();
+
+    var result = service.ProcessQueuedJobAsync(job.Id).GetAwaiter().GetResult();
+    var failed = service.GetJob(userId, job.Id);
+
+    AssertEqual(TryOnStatus.Failed, failed?.Status, "a throwing provider should fail the job.");
+    AssertEqual(TryOnService.ProviderFailureMessage, failed?.Error, "users must see a neutral failure message, never the raw provider error.");
+    AssertEqual(TryOnStatus.Failed, result.Status, "the processing result should report the failure to the worker.");
+    AssertTrue(result.FailureDetail is not null && result.FailureDetail.Contains("provider down"), "the technical detail should go back to the worker for logging.");
+    AssertTrue(!(failed?.Error ?? string.Empty).Contains("provider down"), "the raw provider text must not be stored on the job.");
+}
+
+static void TestDeletingGarmentDetachesItFromSavedOutfits()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-detach";
+    var top = store.CreateGarment(CreateGarment(userId, "tee", GarmentCategory.Top));
+    var shoes = store.CreateGarment(CreateGarment(userId, "sneakers", GarmentCategory.Shoes));
+    var outfitService = new OutfitService(store, store, new SystemClock());
+    var outfit = outfitService.CreateOutfit(userId, "weekend", new[] { top.Id, shoes.Id });
+    var untouched = outfitService.CreateOutfit(userId, "shoes only", new[] { shoes.Id });
+    store.UpdateOutfit(outfit with { PersonPreviewUrl = "https://cdn.test/api/storage/signed/try-on-output/render.png" });
+    store.UpdateOutfit(untouched with { PersonPreviewUrl = "https://cdn.test/api/storage/signed/try-on-output/other.png" });
+
+    var wardrobe = new WardrobeService(store, store, new SystemClock(), outfits: store);
+    AssertTrue(wardrobe.DeleteGarment(userId, top.Id), "deleting an existing garment should succeed.");
+
+    var updated = store.GetOutfitByUser(userId, outfit.Id) ?? throw new InvalidOperationException("The outfit should survive its garment.");
+    AssertEqual(1, updated.Items.Count, "the deleted garment should be removed from the saved outfit.");
+    AssertEqual(shoes.Id, updated.Items[0].GarmentId, "the remaining pieces should stay.");
+    AssertTrue(updated.PersonPreviewUrl is null, "the generated preview showed a garment set that no longer exists and must be cleared.");
+
+    var other = store.GetOutfitByUser(userId, untouched.Id) ?? throw new InvalidOperationException("The unrelated outfit should survive.");
+    AssertEqual(1, other.Items.Count, "outfits that never wore the garment must not change.");
+    AssertTrue(other.PersonPreviewUrl is not null, "previews of unrelated outfits must be kept.");
+}
+
+static void TestDeletingOutfitRemovesGeneratedRenders()
+{
+    var store = new InMemoryOutfitStore();
+    var userId = "user-orphan";
+    var top = store.CreateGarment(CreateGarment(userId, "tee", GarmentCategory.Top));
+    var outputs = new RecordingTryOnOutputStorage("unused");
+    var outfitService = new OutfitService(store, store, new SystemClock(), tryOnJobs: store, tryOnOutputs: outputs);
+    var outfit = outfitService.CreateOutfit(userId, "casual", new[] { top.Id });
+    var other = outfitService.CreateOutfit(userId, "other", new[] { top.Id });
+    var now = DateTimeOffset.UtcNow;
+    store.AddTryOnJob(new TryOnJob(Guid.NewGuid(), userId, outfit.Id, "https://example.com/person.jpg", false, TryOnStatus.Succeeded, "p-1", "https://cdn.test/api/storage/signed/try-on-output/a.png", null, now, now));
+    store.AddTryOnJob(new TryOnJob(Guid.NewGuid(), userId, outfit.Id, "https://example.com/person.jpg", false, TryOnStatus.Failed, null, null, "failed", now, now));
+    store.AddTryOnJob(new TryOnJob(Guid.NewGuid(), userId, other.Id, "https://example.com/person.jpg", false, TryOnStatus.Succeeded, "p-2", "https://cdn.test/api/storage/signed/try-on-output/b.png", null, now, now));
+
+    AssertTrue(outfitService.DeleteOutfit(userId, outfit.Id), "deleting an existing outfit should succeed.");
+
+    AssertEqual(1, outputs.Deleted.Count, "only renders that belong to the deleted outfit should be removed.");
+    AssertTrue(outputs.Deleted[0].EndsWith("/a.png", StringComparison.Ordinal), "the deleted outfit's render should be removed from storage.");
+    AssertTrue(store.GetOutfitByUser(userId, other.Id) is not null, "unrelated outfits must survive.");
+}
+
+static void TestMockTryOnOutputBecomesAStoredPlaceholderImage()
+{
+    var objects = new InMemoryByteObjectStorage();
+    var storage = new TryOnOutputStorage(objects, new HttpClient());
+    var generation = new MockTryOnProvider().Generate(CreateProviderRequest(CreateSingleGarmentOutfit(), TryOnMode.SingleGarmentTryOn));
+    AssertTrue(generation.OutputImageUrl.StartsWith("mock://", StringComparison.Ordinal), "the mock provider should hand out a mock: url, not a path nothing serves.");
+
+    var jobId = Guid.NewGuid();
+    var url = storage.StoreAsync(jobId, generation.OutputImageUrl, DateTimeOffset.UtcNow.AddDays(1)).GetAwaiter().GetResult();
+    AssertTrue(url.Contains($"try-on-output/{jobId:N}.png", StringComparison.Ordinal), "the placeholder should be stored like a real provider output.");
+
+    using var stream = objects.OpenReadObject($"try-on-output/{jobId:N}.png") ?? throw new InvalidOperationException("The placeholder object was not stored.");
+    var header = new byte[8];
+    var read = stream.Read(header, 0, header.Length);
+    AssertEqual(8, read, "the stored placeholder should have content.");
+    AssertTrue(header[1] == (byte)'P' && header[2] == (byte)'N' && header[3] == (byte)'G', "the stored placeholder should be a PNG image.");
+    AssertTrue(storage.DeleteOutput(url), "the placeholder should be deletable like any other output.");
+}
+
+static void TestApiRunsExpiredSessionCleanupWorker()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var program = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Program.cs"));
+    var worker = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "ExpiredSessionCleanupWorker.cs"));
+
+    AssertTrue(program.Contains("AddHostedService<ExpiredSessionCleanupWorker>()", StringComparison.Ordinal), "api startup should schedule the expired session cleanup worker.");
+    AssertTrue(worker.Contains("CleanupExpiredSessions()", StringComparison.Ordinal), "the worker should call the auth service cleanup.");
+}
+
+static void TestPasswordResetEmailContent()
+{
+    var url = PasswordResetEmail.BuildResetUrl("https://outfitplanner.example/", "tok en+1");
+    AssertEqual("https://outfitplanner.example/reset-password?token=tok%20en%2B1", url, "the reset link should target the SPA route with an escaped token.");
+
+    var message = PasswordResetEmail.Build("ada@example.com", url, TimeSpan.FromHours(1));
+    AssertEqual("ada@example.com", message.ToEmail, "the email should go to the account address.");
+    AssertTrue(message.Subject.Contains("Outfit Planner", StringComparison.Ordinal), "the subject should name the app.");
+    AssertTrue(message.TextBody.Contains(url, StringComparison.Ordinal), "the body should carry the reset link.");
+    AssertTrue(message.TextBody.Contains("60 minutes", StringComparison.Ordinal), "the body should state the expiry.");
+    AssertTrue(message.TextBody.Contains("ignore this email", StringComparison.OrdinalIgnoreCase), "the body should reassure recipients who did not ask for a reset.");
+}
+
+static void TestEmailSendersReportConfiguration()
+{
+    var disabled = new OutfitPlanner.Infrastructure.Email.DisabledEmailSender();
+    AssertTrue(!disabled.IsConfigured, "the disabled sender should report that delivery is unavailable.");
+    AssertThrows<InvalidOperationException>(
+        () => disabled.SendAsync(new EmailMessage("ada@example.com", "s", "b")).GetAwaiter().GetResult(),
+        "the disabled sender should refuse to send.");
+
+    var smtp = new OutfitPlanner.Infrastructure.Email.SmtpEmailSender(new OutfitPlanner.Infrastructure.Email.SmtpEmailOptions(
+        "smtp.example.com", 587, "mailer@example.com", "secret", true, "mailer@example.com", "Outfit Planner"));
+    AssertTrue(smtp.IsConfigured, "an SMTP sender with a host should report delivery as available.");
+    AssertThrows<ArgumentException>(
+        () => new OutfitPlanner.Infrastructure.Email.SmtpEmailSender(new OutfitPlanner.Infrastructure.Email.SmtpEmailOptions("", 587, null, null, true, "mailer@example.com", null)),
+        "an SMTP sender without a host must not be constructed.");
+}
+
+static void TestApiWiresPasswordResetEmail()
+{
+    var rootPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+    var repoRoot = Path.GetFullPath(Path.Combine(rootPath, ".."));
+    var program = File.ReadAllText(Path.Combine(rootPath, "src", "OutfitPlanner.Api", "Program.cs"));
+    var envExample = File.ReadAllText(Path.Combine(repoRoot, ".env.example"));
+    var compose = File.ReadAllText(Path.Combine(repoRoot, "docker-compose.yml"));
+
+    AssertTrue(program.Contains("AddSingleton<IEmailSender>", StringComparison.Ordinal), "api should register an email sender.");
+    AssertTrue(program.Contains("MapGet(\"/auth/password-reset/availability\"", StringComparison.Ordinal), "api should tell the SPA whether password reset emails are available.");
+    AssertTrue(program.Contains("(\"SMTP_HOST\", \"Email:Smtp:Host\")", StringComparison.Ordinal), "dotenv aliases should cover the SMTP host.");
+    AssertTrue(program.Contains("PasswordResetEmail.Build(", StringComparison.Ordinal), "the reset request should send the Application-built email.");
+    AssertTrue(envExample.Contains("SMTP_HOST=", StringComparison.Ordinal), ".env.example should document the SMTP settings.");
+    AssertTrue(compose.Contains("Email__Smtp__Host: ${SMTP_HOST:-}", StringComparison.Ordinal), "the production compose should forward the SMTP host.");
+}
+
 static CreateGarmentCommand CreateGarment(string userId, string name, GarmentCategory category)
 {
     return new CreateGarmentCommand(
@@ -4668,8 +4871,11 @@ sealed class RecordingTryOnOutputStorage : ITryOnOutputStorage
         return Task.FromResult(StoredUrl);
     }
 
+    public List<string> Deleted { get; } = new();
+
     public bool DeleteOutput(string outputImageUrl)
     {
+        Deleted.Add(outputImageUrl);
         return true;
     }
 }

@@ -169,6 +169,7 @@ builder.Services.AddSingleton<EntitlementService>();
 // otherwise (Billing__Provider=Auto|Stripe|Disabled). Numbers/prices ride Stripe__*.
 builder.Services.AddSingleton(LoadBillingOptions(builder.Configuration));
 builder.Services.AddSingleton<IBillingProvider>(_ => CreateBillingProvider(builder.Configuration));
+builder.Services.AddSingleton<IEmailSender>(_ => CreateEmailSender(builder.Configuration));
 builder.Services.AddSingleton<BillingService>();
 var authenticationBuilder = builder.Services.AddAuthentication();
 var externalAuthPublicOrigin = NormalizePublicOrigin(builder.Configuration["Authentication:PublicOrigin"]);
@@ -390,6 +391,7 @@ builder.Services.AddHostedService<TryOnBackgroundWorker>();
 builder.Services.AddHostedService<GarmentPerceptualHashBackfillWorker>();
 builder.Services.AddHostedService<GarmentCutoutMeasurementBackfillWorker>();
 builder.Services.AddHostedService<BackgroundRemovalWorker>();
+builder.Services.AddHostedService<ExpiredSessionCleanupWorker>();
 
 var app = builder.Build();
 
@@ -590,17 +592,64 @@ api.MapPost("/auth/email-verification/confirm", (TokenRequest request, AuthServi
         ? Results.Ok(new { status = "email-verified" })
         : Results.BadRequest(new { error = "Verification token is invalid or expired." }));
 
-api.MapPost("/auth/password-reset/request", (PasswordResetRequest request, AuthService auth) =>
+// Tells the sign-in page whether "Forgot password" can actually deliver an email here.
+api.MapGet("/auth/password-reset/availability", (IEmailSender email) =>
+    Results.Ok(new { available = email.IsConfigured }));
+
+api.MapPost("/auth/password-reset/request", (PasswordResetRequest request, AuthService auth, IEmailSender email, ILogger<Program> logger, HttpContext context) =>
 {
+    // Always the same generic response for existing and unknown accounts. The email itself is
+    // sent in the background so the response time cannot reveal whether the address exists.
+    var generic = new { status = "password-reset-requested" };
+    if (!email.IsConfigured)
+    {
+        // Honest failure instead of a form whose emails never arrive. Development keeps
+        // returning the token so the flow can be exercised without an SMTP server.
+        if (!app.Environment.IsDevelopment())
+        {
+            return Results.Json(
+                new { error = "Password reset by email is not enabled on this server. Contact the administrator to reset your password." },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        try
+        {
+            return Results.Ok(new { status = "password-reset-requested", token = auth.CreatePasswordResetToken(request.Email), emailDelivery = false });
+        }
+        catch (ValidationException)
+        {
+            return Results.Ok(generic);
+        }
+    }
+
+    string? resetToken;
     try
     {
-        var token = auth.CreatePasswordResetToken(request.Email);
-        return Results.Ok(new { status = "password-reset-requested", token = app.Environment.IsDevelopment() ? token : null });
+        resetToken = auth.CreatePasswordResetToken(request.Email);
     }
     catch (ValidationException)
     {
-        return Results.Ok(new { status = "password-reset-requested" });
+        return Results.Ok(generic);
     }
+
+    if (resetToken is not null)
+    {
+        var origin = publicOrigin ?? $"{context.Request.Scheme}://{context.Request.Host}";
+        var message = PasswordResetEmail.Build(request.Email.Trim(), PasswordResetEmail.BuildResetUrl(origin, resetToken), auth.PasswordResetLifetime);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await email.SendAsync(message, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Password reset email could not be sent.");
+            }
+        });
+    }
+
+    return Results.Ok(generic);
 }).RequireRateLimiting("login-rate-limit");
 
 api.MapPost("/auth/password-reset/confirm", (PasswordResetConfirmRequest request, AuthService auth) =>
@@ -2125,10 +2174,11 @@ static RolePinningOptions LoadRolePinningOptions(IConfiguration configuration)
 {
     return new RolePinningOptions(
         SplitPinnedEmails(configuration["Roles:PinnedAdminEmails"], "dmytro.bolibok@gmail.com"),
-        SplitPinnedEmails(configuration["Roles:PinnedPremiumEmails"], "premium.pinned@example.test"));
+        SplitPinnedEmails(configuration["Roles:PinnedPremiumEmails"], fallback: ""));
 
-    // Unset/blank config keeps the built-in pins, so the "always admin/premium" accounts
-    // cannot be silently unpinned by an empty environment variable.
+    // Unset/blank admin config keeps the built-in owner pin, so the "always admin" account
+    // cannot be silently unpinned by an empty environment variable. Premium pins are
+    // configuration-only (no personal emails of other people ship in the source).
     static IReadOnlyList<string> SplitPinnedEmails(string? configured, string fallback)
     {
         var source = string.IsNullOrWhiteSpace(configured) ? fallback : configured;
@@ -2248,6 +2298,51 @@ static BillingOptions LoadBillingOptions(IConfiguration configuration)
     static string? NullIfWhiteSpace(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+}
+
+// Email:Provider = Auto (SMTP when Email:Smtp:Host is set, otherwise disabled) | Smtp | Disabled.
+static IEmailSender CreateEmailSender(IConfiguration configuration)
+{
+    var configuredProvider = (configuration["Email:Provider"] ?? "Auto").Trim().ToLowerInvariant();
+    var host = (configuration["Email:Smtp:Host"] ?? "").Trim();
+    return configuredProvider switch
+    {
+        "smtp" => CreateSmtpSender(),
+        "disabled" or "none" or "off" => new OutfitPlanner.Infrastructure.Email.DisabledEmailSender(),
+        _ => string.IsNullOrWhiteSpace(host)
+            ? new OutfitPlanner.Infrastructure.Email.DisabledEmailSender()
+            : CreateSmtpSender()
+    };
+
+    IEmailSender CreateSmtpSender()
+    {
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            throw new InvalidOperationException("Email:Smtp:Host must be configured when Email:Provider selects Smtp.");
+        }
+
+        var username = configuration["Email:Smtp:Username"];
+        var fromAddress = (configuration["Email:FromAddress"] ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(fromAddress))
+        {
+            // Most SMTP relays authenticate with the sending mailbox; use it unless told otherwise.
+            fromAddress = username is not null && username.Contains('@') ? username.Trim() : "";
+        }
+
+        if (string.IsNullOrWhiteSpace(fromAddress))
+        {
+            throw new InvalidOperationException("Email:FromAddress must be configured for SMTP delivery.");
+        }
+
+        return new OutfitPlanner.Infrastructure.Email.SmtpEmailSender(new OutfitPlanner.Infrastructure.Email.SmtpEmailOptions(
+            host,
+            int.TryParse(configuration["Email:Smtp:Port"], out var port) && port > 0 ? port : 587,
+            username,
+            configuration["Email:Smtp:Password"],
+            !bool.TryParse(configuration["Email:Smtp:UseStartTls"], out var startTls) || startTls,
+            fromAddress,
+            configuration["Email:FromName"]));
     }
 }
 
@@ -2533,6 +2628,18 @@ static void LoadDotEnvConfigurationAliases(ConfigurationManager configuration, s
         ("FASHN_SEED", "Fashn:Seed"),
         ("FASHN_RESOLUTION", "Fashn:Resolution"),
         ("FASHN_GENDER_PROMPT_TEMPLATE", "Fashn:GenderPromptTemplate"),
+        // Role pins: the owner admin pin is built in; premium pins exist only in configuration.
+        ("ROLES_PINNED_ADMIN_EMAILS", "Roles:PinnedAdminEmails"),
+        ("ROLES_PINNED_PREMIUM_EMAILS", "Roles:PinnedPremiumEmails"),
+        // Transactional email (password reset links): plain SMTP, STARTTLS on 587 by default.
+        ("EMAIL_PROVIDER", "Email:Provider"),
+        ("SMTP_HOST", "Email:Smtp:Host"),
+        ("SMTP_PORT", "Email:Smtp:Port"),
+        ("SMTP_USERNAME", "Email:Smtp:Username"),
+        ("SMTP_PASSWORD", "Email:Smtp:Password"),
+        ("SMTP_USE_STARTTLS", "Email:Smtp:UseStartTls"),
+        ("EMAIL_FROM_ADDRESS", "Email:FromAddress"),
+        ("EMAIL_FROM_NAME", "Email:FromName"),
         // Stage-4 billing: same .env convention as FASHN so bare `dotnet run` picks the
         // keys up without an appsettings.json. Pack indexes 0/1/2 match the
         // pack-20/pack-50/pack-100 defaults (appsettings.example.json and compose).

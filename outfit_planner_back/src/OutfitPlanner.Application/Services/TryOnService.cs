@@ -4,8 +4,18 @@ using OutfitPlanner.Domain;
 
 namespace OutfitPlanner.Application.Services;
 
+// Outcome of one queued job run. FailureDetail carries the technical provider/exception text
+// for the worker's log; the job row itself only ever stores the user-facing message.
+public sealed record TryOnProcessingResult(Guid JobId, TryOnStatus? Status, string? FailureDetail);
+
 public sealed class TryOnService
 {
+    // Shown to the user when the provider (or the download of its output) fails. Provider
+    // responses such as "429 You are out of credits" are operator information, not something
+    // a visitor should read verbatim.
+    public const string ProviderFailureMessage =
+        "The AI provider could not generate this preview. The credits for this run were refunded; please try again later.";
+
     private readonly IBodyReferencePhotoRepository _bodyPhotos;
     private readonly IOutfitRepository _outfits;
     private readonly ITryOnJobRepository _jobs;
@@ -200,12 +210,12 @@ public sealed class TryOnService
         return started;
     }
 
-    public async Task ProcessQueuedJobAsync(Guid jobId, CancellationToken cancellationToken = default)
+    public async Task<TryOnProcessingResult> ProcessQueuedJobAsync(Guid jobId, CancellationToken cancellationToken = default)
     {
         var queued = _jobs.GetTryOnJobById(jobId);
         if (queued is null || queued.Status != TryOnStatus.Queued)
         {
-            return;
+            return new TryOnProcessingResult(jobId, queued?.Status, null);
         }
 
         var outfit = _outfits.GetOutfitByUser(queued.UserId, queued.OutfitId);
@@ -218,7 +228,7 @@ public sealed class TryOnService
                 UpdatedAt = _clock.UtcNow
             });
             _credits?.RefundJob(queued.UserId, queued.Id);
-            return;
+            return new TryOnProcessingResult(jobId, TryOnStatus.Failed, "Outfit was not found.");
         }
 
         outfit = RefreshOutfitPhotoUrls(outfit);
@@ -284,6 +294,7 @@ public sealed class TryOnService
 
             _jobs.UpdateTryOnJob(completed);
             _outfits.UpdateOutfit(outfit with { PersonPreviewUrl = outputImageUrl });
+            return new TryOnProcessingResult(jobId, TryOnStatus.Succeeded, null);
         }
         catch (Exception ex)
         {
@@ -292,17 +303,18 @@ public sealed class TryOnService
                 throw;
             }
 
+            // Our own validation messages are written for users; anything else (provider HTTP
+            // errors, output download failures) is logged by the worker and replaced here.
             var failed = processing with
             {
                 Status = TryOnStatus.Failed,
-                Error = ex.Message,
+                Error = ex is ValidationException ? ex.Message : ProviderFailureMessage,
                 UpdatedAt = _clock.UtcNow
             };
             _jobs.UpdateTryOnJob(failed);
             _credits?.RefundJob(queued.UserId, queued.Id);
+            return new TryOnProcessingResult(jobId, TryOnStatus.Failed, $"{ex.GetType().Name}: {ex.Message}");
         }
-
-        return;
     }
 
     private Task<string> StoreTryOnOutputAsync(TryOnJob job, string outputImageUrl, CancellationToken cancellationToken)

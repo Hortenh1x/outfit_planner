@@ -17,8 +17,16 @@ public sealed class TryOnOutputStorage : ITryOnOutputStorage
         _http = http;
     }
 
+    private const string MockPlaceholderResource = "OutfitPlanner.Infrastructure.Assets.mock-try-on-preview.png";
+
     public async Task<string> StoreAsync(Guid jobId, string sourceImageUrl, DateTimeOffset retentionUntil, CancellationToken cancellationToken = default)
     {
+        if (Uri.TryCreate(sourceImageUrl, UriKind.Absolute, out var mockUri)
+            && string.Equals(mockUri.Scheme, TryOn.MockTryOnProvider.OutputScheme, StringComparison.OrdinalIgnoreCase))
+        {
+            return StoreMockPlaceholder(jobId, retentionUntil);
+        }
+
         if (!Uri.TryCreate(sourceImageUrl, UriKind.Absolute, out var sourceUri)
             || sourceUri.Scheme is not ("http" or "https"))
         {
@@ -48,6 +56,24 @@ public sealed class TryOnOutputStorage : ITryOnOutputStorage
     {
         var objectKey = TryReadTryOnOutputObjectKey(outputImageUrl);
         return objectKey is not null && _objects.DeleteObject(objectKey);
+    }
+
+    // The mock provider's "render": an embedded, clearly labelled placeholder stored exactly like
+    // a real provider output (private object, retention, signed URL) so every surface that shows
+    // generated previews works end to end without an AI provider.
+    private string StoreMockPlaceholder(Guid jobId, DateTimeOffset retentionUntil)
+    {
+        using var stream = typeof(TryOnOutputStorage).Assembly.GetManifestResourceStream(MockPlaceholderResource)
+            ?? throw new InvalidOperationException($"Embedded resource {MockPlaceholderResource} is missing.");
+        var objectKey = $"{ObjectPrefix}/{jobId:N}.png";
+        var stored = _objects.PutObject(new ObjectStoragePutRequest(
+            objectKey,
+            "image/png",
+            stream,
+            Private: true,
+            RetentionUntil: retentionUntil));
+
+        return _objects.CreateSignedReadUrl(stored.ObjectKey, SignedUrlLifetime(retentionUntil));
     }
 
     private static TimeSpan SignedUrlLifetime(DateTimeOffset retentionUntil)
@@ -94,7 +120,11 @@ public sealed class TryOnOutputStorage : ITryOnOutputStorage
             return null;
         }
 
+        // Only http(s) URLs are absolute here: on Linux, Uri.TryCreate parses a root-relative
+        // signed URL ("/api/storage/signed/...?expires=...") as a file: URI whose path keeps the
+        // query string, which used to make deletion of locally signed outputs a silent no-op.
         var path = Uri.TryCreate(outputImageUrl, UriKind.Absolute, out var absoluteUri)
+            && absoluteUri.Scheme is "http" or "https"
             ? absoluteUri.AbsolutePath
             : outputImageUrl.Split('?', 2)[0];
 

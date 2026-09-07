@@ -23,7 +23,12 @@ public sealed class TryOnBackgroundWorker : BackgroundService
             try
             {
                 var jobId = await _queue.DequeueAsync(stoppingToken);
-                await _tryOn.ProcessQueuedJobAsync(jobId, stoppingToken);
+                var result = await _tryOn.ProcessQueuedJobAsync(jobId, stoppingToken);
+                if (result.Status == Domain.TryOnStatus.Failed)
+                {
+                    // The job row only carries the user-facing text; the provider detail lives here.
+                    _logger.LogWarning("Try-on job {JobId} failed: {Detail}", jobId, result.FailureDetail ?? "no detail");
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

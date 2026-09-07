@@ -20,6 +20,8 @@ public sealed class AuthService
     private readonly TimeSpan _sessionLifetime = TimeSpan.FromDays(14);
     private readonly TimeSpan _emailVerificationLifetime = TimeSpan.FromHours(24);
     private readonly TimeSpan _passwordResetLifetime = TimeSpan.FromHours(1);
+
+    public TimeSpan PasswordResetLifetime => _passwordResetLifetime;
     // A real, well-formed password hash used only to equalize sign-in timing for unknown
     // accounts, so a login attempt runs the KDF whether or not the email exists (defeats a
     // username-enumeration timing oracle). Computed once per process.

@@ -13,14 +13,18 @@ public sealed class OutfitService
     private readonly IClock _clock;
     private readonly IHairstylePresetCatalog? _hairstyles;
     private readonly EntitlementService? _entitlements;
+    private readonly ITryOnJobRepository? _tryOnJobs;
+    private readonly ITryOnOutputStorage? _tryOnOutputs;
 
-    public OutfitService(IGarmentRepository garments, IOutfitRepository outfits, IClock clock, IHairstylePresetCatalog? hairstyles = null, EntitlementService? entitlements = null)
+    public OutfitService(IGarmentRepository garments, IOutfitRepository outfits, IClock clock, IHairstylePresetCatalog? hairstyles = null, EntitlementService? entitlements = null, ITryOnJobRepository? tryOnJobs = null, ITryOnOutputStorage? tryOnOutputs = null)
     {
         _garments = garments;
         _outfits = outfits;
         _clock = clock;
         _hairstyles = hairstyles;
         _entitlements = entitlements;
+        _tryOnJobs = tryOnJobs;
+        _tryOnOutputs = tryOnOutputs;
     }
 
     public Outfit CreateOutfit(
@@ -152,7 +156,22 @@ public sealed class OutfitService
 
     public bool DeleteOutfit(string userId, Guid outfitId)
     {
-        return _outfits.DeleteOutfitByUser(InputGuard.NormalizeUserId(userId), outfitId);
+        var normalizedUserId = InputGuard.NormalizeUserId(userId);
+        // Generated try-on renders of this outfit are the user's body imagery. Delete the stored
+        // objects before the job rows go (Postgres cascades them with the outfit), otherwise the
+        // files would be orphaned and invisible to the privacy purge.
+        if (_tryOnJobs is not null && _tryOnOutputs is not null)
+        {
+            foreach (var job in _tryOnJobs.ListTryOnJobsByUser(normalizedUserId))
+            {
+                if (job.OutfitId == outfitId && !string.IsNullOrWhiteSpace(job.OutputImageUrl))
+                {
+                    _tryOnOutputs.DeleteOutput(job.OutputImageUrl);
+                }
+            }
+        }
+
+        return _outfits.DeleteOutfitByUser(normalizedUserId, outfitId);
     }
 
     private static string BuildClothesOnlyPreview(IReadOnlyList<OutfitItem> outfitItems)
